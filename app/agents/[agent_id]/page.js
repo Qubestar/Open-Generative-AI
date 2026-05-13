@@ -11,7 +11,7 @@ import AgentChatClient from "./AgentChatClient";
 export async function generateMetadata({ params }) {
   const { agent_id } = await params;
   return {
-    title: `Agent Chat — Open Generative AI`,
+    title: `Agent Chat — Vidmyo`,
   };
 }
 

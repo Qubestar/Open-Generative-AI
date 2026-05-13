@@ -1,4 +1,5 @@
 import { getModelById, getVideoModelById, getI2IModelById, getI2VModelById, getV2VModelById, getLipSyncModelById } from './models.js';
+import { getActiveProviderId, getProviderById, getSavedProviderKey, buildProviderHeaders, appendProviderAuthToUrl } from './providers.js';
 
 export class MuapiClient {
     constructor() {
@@ -6,10 +7,63 @@ export class MuapiClient {
         this.baseUrl = import.meta.env.DEV ? '' : 'https://api.muapi.ai';
     }
 
+    getActiveProvider() {
+        const id = getActiveProviderId();
+        return getProviderById(id);
+    }
+
     getKey() {
-        const key = window.__MUAPI_KEY__ || localStorage.getItem('muapi_key');
-        if (!key) throw new Error('API Key missing. Please set it in Settings.');
+        const provider = this.getActiveProvider();
+
+        // Backward-compat: keep muapi_key localStorage as fallback when provider is muapi
+        if (provider.id === 'muapi') {
+            const key = window.__MUAPI_KEY__ || localStorage.getItem('muapi_key') || getSavedProviderKey('muapi');
+            if (!key) throw new Error('MuAPI key missing. Please set it in Settings.');
+            return key;
+        }
+
+        // Direct provider: return saved key for that provider
+        const key = getSavedProviderKey(provider.id);
+        if (!key) throw new Error(`${provider.name} API key missing. Please set it in Settings.`);
         return key;
+    }
+
+    /**
+     * Simple passthrough/fetch wrapper for direct providers (openai, anthropic, xai, google, heygen).
+     * Builds the correct URL + headers/key for the active provider.
+     * Future endpoints can be added here.
+     */
+    async requestDirect(endpoint, payload = {}, options = {}) {
+        const provider = this.getActiveProvider();
+        if (provider.id === 'muapi') {
+            throw new Error('requestDirect is only for direct providers, not muapi.');
+        }
+
+        const key = this.getKey();
+        let url = `${provider.baseUrl.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
+        url = appendProviderAuthToUrl(provider, url, key);
+
+        const headers = buildProviderHeaders(provider, key);
+        // Remove any header that was appended via query string (e.g., Google's ?key=)
+        if (provider.authInQuery && provider.authHeader === 'key') {
+            delete headers['key'];
+        }
+
+        const method = options.method || 'POST';
+        const fetchOpts = {
+            method,
+            headers,
+            ...(method !== 'GET' && method !== 'HEAD' ? { body: JSON.stringify(payload) } : {}),
+        };
+
+        console.log(`[${provider.id}] Direct request:`, url);
+        const response = await fetch(url, fetchOpts);
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error(`[${provider.id}] Direct API Error:`, errText);
+            throw new Error(`API Request Failed: ${response.status} ${response.statusText} — ${errText.slice(0, 200)}`);
+        }
+        return response.json();
     }
 
     /**

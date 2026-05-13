@@ -7,8 +7,8 @@ const inter = Inter({
 });
 
 export const metadata = {
-  title: 'Open Generative AI — Free AI Image & Video Studio',
-  description: 'Generate AI images and videos using 200+ models — Flux, Midjourney, Kling, Veo, Seedance and more.',
+  title: 'Vidmyo — Free AI Image & Video Studio',
+  description: 'Generate AI images and videos using 200+ models — Vidmyo, formerly Open Generative AI. — Flux, Midjourney, Kling, Veo, Seedance and more.',
 };
 
 export default function RootLayout({ children }) {

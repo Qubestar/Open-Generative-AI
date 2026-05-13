@@ -1,7 +1,7 @@
 {
-  "name": "open-generative-ai",
-  "description": "Open-source alternative to HF AI — AI image, video, cinema and lip sync studio",
-  "homepage": "https://github.com/Anil-matcha/Open-Generative-AI",
+  "name": "vidmyo",
+  "description": "Open-source AI image, video, cinema and lip sync studio",
+  "homepage": "https://github.com/Anil-matcha/Vidmyo",
   "private": true,
   "version": "1.0.11",
   "workspaces": [
@@ -28,9 +28,9 @@
     "electron:build:all": "vite build && electron-builder --mac --win --linux"
   },
   "build": {
-    "appId": "ai.generative.open",
-    "productName": "Open Generative AI",
-    "copyright": "Copyright © 2025",
+    "appId": "com.vidmyo.app",
+    "productName": "Vidmyo",
+    "copyright": "Copyright © 2025 Vidmyo",
     "directories": {
       "output": "release"
     },
@@ -72,7 +72,7 @@
     "linux": {
       "icon": "public/banner.png",
       "category": "Utility",
-      "maintainer": "Open Generative AI Team",
+      "maintainer": "Vidmyo Team",
       "extraFiles": [
         {
           "from": "build/linux/apparmor.profile",

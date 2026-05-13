@@ -15,7 +15,7 @@ export function McpCliStudio() {
         </div>
         <h1 class="text-4xl md:text-5xl font-bold tracking-tight">MCP &amp; CLI</h1>
         <p class="text-secondary text-base md:text-lg max-w-2xl">
-            Use Open Generative AI from your terminal, your IDE, or any MCP-compatible
+            Use Vidmyo from your terminal, your IDE, or any MCP-compatible
             assistant. Generate cinematic images, videos, and audio across 100+ models —
             without leaving your workflow.
         </p>

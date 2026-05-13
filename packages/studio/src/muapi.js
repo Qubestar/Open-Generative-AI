@@ -1,4 +1,5 @@
 import { getModelById, getVideoModelById, getI2IModelById, getI2VModelById, getV2VModelById, getLipSyncModelById } from './models.js';
+import { getActiveProviderId, getProviderById, getSavedProviderKey, buildProviderHeaders, appendProviderAuthToUrl } from './providers.js';
 
 // In an http(s) browser we route through the host app's proxy (Next.js routes
 // under /api/* re-issue the call server-side) so api.muapi.ai CORS is bypassed.
@@ -8,13 +9,53 @@ const BASE_URL = (typeof window !== 'undefined' && window.location?.protocol?.st
     : 'https://api.muapi.ai';
 const PROXY_WF_BASE = '/api/workflow';
 
+function getMuapiKey(apiKey) {
+  const provider = getProviderById(getActiveProviderId());
+  if (provider.id === 'muapi') {
+    return apiKey || getSavedProviderKey('muapi');
+  }
+  return apiKey;
+}
+
+/**
+ * Simple passthrough/fetch wrapper for direct providers (openai, anthropic, xai, google, heygen).
+ */
+export async function requestDirect(endpoint, payload = {}, options = {}) {
+    const provider = getProviderById(getActiveProviderId());
+    if (provider.id === 'muapi') {
+        throw new Error('requestDirect is only for direct providers, not muapi.');
+    }
+    const key = getSavedProviderKey(provider.id);
+    if (!key) throw new Error(`${provider.name} API key missing. Please set it in Settings.`);
+    let url = `${provider.baseUrl.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
+    url = appendProviderAuthToUrl(provider, url, key);
+    const headers = buildProviderHeaders(provider, key);
+    if (provider.authInQuery && provider.authHeader === 'key') {
+        delete headers['key'];
+    }
+    const method = options.method || 'POST';
+    const fetchOpts = {
+        method,
+        headers,
+        ...(method !== 'GET' && method !== 'HEAD' ? { body: JSON.stringify(payload) } : {}),
+    };
+    console.log(`[${provider.id}] Direct request:`, url);
+    const response = await fetch(url, fetchOpts);
+    if (!response.ok) {
+        const errText = await response.text();
+        console.error(`[${provider.id}] Direct API Error:`, errText);
+        throw new Error(`API Request Failed: ${response.status} ${response.statusText} — ${errText.slice(0, 200)}`);
+    }
+    return response.json();
+}
+
 async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000) {
     const pollUrl = `${BASE_URL}/api/v1/predictions/${requestId}/result`;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         await new Promise(resolve => setTimeout(resolve, interval));
         try {
             const response = await fetch(pollUrl, {
-                headers: { 'Content-Type': 'application/json', 'x-api-key': key }
+                headers: { 'Content-Type': 'application/json', 'x-api-key': getMuapiKey(key) }
             });
             if (!response.ok) {
                 const errText = await response.text();
@@ -32,11 +73,12 @@ async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000)
     throw new Error('Generation timed out after polling.');
 }
 
-async function submitAndPoll(endpoint, payload, key, onRequestId, maxAttempts = 60) {
+async function submitAndPoll(endpoint, payload, apiKey, onRequestId, maxAttempts = 60) {
     const url = `${BASE_URL}/api/v1/${endpoint}`;
+    const wrappedKey = getMuapiKey(apiKey);
     const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        headers: { 'Content-Type': 'application/json', 'x-api-key': wrappedKey },
         body: JSON.stringify(payload)
     });
     if (!response.ok) {
@@ -47,7 +89,7 @@ async function submitAndPoll(endpoint, payload, key, onRequestId, maxAttempts = 
     const requestId = submitData.request_id || submitData.id;
     if (!requestId) return submitData;
     if (onRequestId) onRequestId(requestId);
-    const result = await pollForResult(requestId, key, maxAttempts);
+    const result = await pollForResult(requestId, wrappedKey, maxAttempts);
     const outputUrl = result.outputs?.[0] || result.url || result.output?.url;
     return { ...result, url: outputUrl };
 }
@@ -222,7 +264,7 @@ export async function getUserBalance(apiKey) {
     const response = await fetch(`${BASE_URL}/api/v1/account/balance`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -236,7 +278,7 @@ export async function getTemplateWorkflows(apiKey) {
     const response = await fetch(`${BASE_URL}/workflow/get-template-workflows`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -250,7 +292,7 @@ export async function getUserWorkflows(apiKey) {
     const response = await fetch(`${BASE_URL}/workflow/get-workflow-defs`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -264,7 +306,7 @@ export async function getPublishedWorkflows(apiKey) {
     const response = await fetch(`${BASE_URL}/workflow/get-published-workflows`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -279,7 +321,7 @@ export async function getTemplateAgents(apiKey) {
     const response = await fetch(`${BASE_URL}/agents/templates/agents`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -294,7 +336,7 @@ export async function getUserAgents(apiKey) {
     const response = await fetch(`${BASE_URL}/agents/user/agents`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -310,7 +352,7 @@ export async function getPublishedAgents(apiKey) {
     const response = await fetch(`${BASE_URL}/agents/featured/agents`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -326,7 +368,7 @@ export async function getUserConversations(apiKey) {
     const response = await fetch(`${BASE_URL}/agents/user/conversations`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -342,7 +384,7 @@ export async function createWorkflow(apiKey, payload) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         },
         body: JSON.stringify(payload)
     });
@@ -358,7 +400,7 @@ export async function updateWorkflowName(apiKey, workflowId, name) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         },
         body: JSON.stringify({ name })
     });
@@ -374,7 +416,7 @@ export async function deleteWorkflow(apiKey, workflowId) {
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -388,7 +430,7 @@ export async function getWorkflowInputs(apiKey, workflowId) {
     const response = await fetch(`${BASE_URL}/workflow/${workflowId}/api-inputs`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -403,7 +445,7 @@ export async function executeWorkflow(apiKey, workflowId, inputs) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         },
         body: JSON.stringify({ inputs })
     });
@@ -425,7 +467,7 @@ async function pollWorkflowResult(runId, apiKey, maxAttempts = 900, interval = 2
         await new Promise(resolve => setTimeout(resolve, interval));
         try {
             const response = await fetch(pollUrl, {
-                headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
+                headers: { 'Content-Type': 'application/json', 'x-api-key': getMuapiKey(apiKey) }
             });
             if (!response.ok) {
                 if (response.status >= 500) continue;
@@ -446,7 +488,7 @@ export async function getAllNodeSchemas(apiKey, workflowId) {
     const response = await fetch(`${BASE_URL}/workflow/${workflowId}/node-schemas`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -460,7 +502,7 @@ export async function getWorkflowData(apiKey, workflowId) {
     const response = await fetch(`${BASE_URL}/workflow/get-workflow-def/${workflowId}`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -474,7 +516,7 @@ export async function getNodeSchemas(apiKey, workflowId) {
     const response = await fetch(`${BASE_URL}/workflow/${workflowId}/api-node-schemas`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -489,7 +531,7 @@ export async function runSingleNode(apiKey, workflowId, nodeId, payload) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         },
         body: JSON.stringify(payload)
     });
@@ -505,7 +547,7 @@ export async function deleteNodeRun(apiKey, nodeRunId) {
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -519,7 +561,7 @@ export async function getNodeStatus(apiKey, runId) {
     const response = await fetch(`${BASE_URL}/workflow/run/${runId}/status`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {
@@ -604,7 +646,7 @@ export async function calculateDynamicCost(apiKey, taskName, payload) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         },
         body: JSON.stringify({ task_name: taskName, payload })
     });
@@ -620,7 +662,7 @@ export async function registerAppInterest(apiKey, appName) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         },
         body: JSON.stringify({ app_name: appName })
     });
@@ -635,7 +677,7 @@ export async function getAppInterests(apiKey) {
     const response = await fetch(`${BASE_URL}/app/interests`, {
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey
+            'x-api-key': getMuapiKey(apiKey)
         }
     });
     if (!response.ok) {

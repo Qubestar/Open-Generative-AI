@@ -14,7 +14,7 @@ body {
 }
 
 :root {
-  --color-primary: #22d3ee;
+  --color-primary: #7c3aed;
   --bg-app: #030303;
   --bg-panel: #0a0a0a;
   --bg-card: #111111;
@@ -22,6 +22,8 @@ body {
   --border-radius-xl: 0.75rem;
   --glass-bg: rgba(255, 255, 255, 0.03);
   --glass-border: rgba(255, 255, 255, 0.08);
+  --color-accent: #f43f5e;
+  --color-success: #2dd4bf;
 }
 
 .glass-panel {

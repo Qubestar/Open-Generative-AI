@@ -1,10 +1,10 @@
-# Open Generative AI: Technical Documentation & Context
+# Vidmyo: Technical Documentation & Context
 
-This document serves as a comprehensive knowledge base for the Open Generative AI project. It details the architecture, key components, API integration patterns, and state management strategies used in the application.
+This document serves as a comprehensive knowledge base for the Vidmyo project. It details the architecture, key components, API integration patterns, and state management strategies used in the application.
 
 ## 1. Project Vision & Overview
 
-**Open Generative AI** is an ambitious open-source project for AI image and video generation.
+**Vidmyo** is an ambitious open-source project for AI image and video generation.
 
 - **Core Goal:** To build a feature-complete, self-hosted generative AI studio, starting with **Image Generation** (Nano) and expanding into **Video Generation** (Cinema) and other creative tools.
 - **Current State:** The Image Studio ("Nano Banana Pro" interface) is fully operational, featuring a premium dark-mode UI, history management, and multi-model support via the [Muapi.ai](https://muapi.ai) engine.
@@ -73,7 +73,7 @@ Contains the `t2iModels` array.
 ## 4. UI & Styling (Tailwind v4)
 
 - **Theme:** Dark mode by default (`bg-app-bg` = `#050505`).
-- **Accent:** Electric Cyan (`#22d3ee`) used for primary actions and glows.
+- **Accent:** Electric Cyan (`#7c3aed`) used for primary actions and glows.
 - **Glassmorphism:** Extensive use of `backdrop-blur` and `bg-white/5` or `bg-black/60` for panels, headers, and modals.
 - **Responsiveness:**
     - **Mobile:** Stacked layout, simplified controls, hidden sidebar.
