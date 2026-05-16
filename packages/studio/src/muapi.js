@@ -49,6 +49,74 @@ export async function requestDirect(endpoint, payload = {}, options = {}) {
     return response.json();
 }
 
+
+// ── Parameter mapping for direct providers ─────────────────────────────────
+
+function aspectRatioToOpenAISize(ar) {
+  const map = {"1:1":"1024x1024","4:3":"1024x768","3:4":"768x1024","16:9":"1792x1024","9:16":"1024x1792","21:9":"1792x1024"};
+  return map[ar] || "1024x1024";
+}
+
+function mapOpenAIImageParams(params) {
+  return {
+    model: "dall-e-3",
+    prompt: params.prompt,
+    n: 1,
+    size: aspectRatioToOpenAISize(params.aspect_ratio),
+    response_format: "url",
+    ...(params.quality ? { quality: params.quality } : {}),
+    ...(params.style ? { style: params.style } : {}),
+  };
+}
+
+function mapXAIImageParams(params) {
+  return {
+    prompt: params.prompt,
+    n: 1,
+    size: aspectRatioToOpenAISize(params.aspect_ratio),
+    response_format: "url",
+  };
+}
+
+function mapGoogleImagenParams(params) {
+  return {
+    instances: [{ prompt: params.prompt }],
+    parameters: {
+      aspectRatio: params.aspect_ratio || "1:1",
+      sampleCount: 1,
+    },
+  };
+}
+
+function normalizeOpenAIImage(data) {
+  const url = data.data?.[0]?.url || data.output?.[0];
+  return { outputs: [url], url, raw: data, revised_prompt: data.data?.[0]?.revised_prompt };
+}
+
+function normalizeGoogleImagen(data) {
+  const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+  if (!b64) throw new Error('Google Imagen: no image returned.');
+  const buf = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+  const blob = new Blob([buf], { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  return { outputs: [url], url, raw: data };
+}
+
+function normalizeXAIImage(data) {
+  const url = data.data?.[0]?.url || data.output?.[0];
+  return { outputs: [url], url, raw: data };
+}
+
+function normalizeHeyGen(data) {
+  const url = data.video_url || data.data?.video_url;
+  return { outputs: [url], url, raw: data };
+}
+
+function shouldUseDirect() {
+  const prov = getProviderById(getActiveProviderId());
+  return prov.id !== 'muapi' && prov.endpoints;
+}
+
 async function pollForResult(requestId, key, maxAttempts = 900, interval = 2000) {
     const pollUrl = `${BASE_URL}/api/v1/predictions/${requestId}/result`;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -95,6 +163,35 @@ async function submitAndPoll(endpoint, payload, apiKey, onRequestId, maxAttempts
 }
 
 export async function generateImage(apiKey, params) {
+
+    /* Provider-aware routing */
+    const activeProv = getProviderById(getActiveProviderId());
+    if (activeProv.id !== 'muapi' && activeProv.endpoints) {
+        try {
+            const key = getSavedProviderKey(activeProv.id);
+        if (!key) throw new Error(activeProv.name + ' API key missing.');
+        let endpoint, rpayload;
+        if (activeProv.id === 'openai') {
+            endpoint = activeProv.endpoints.image;
+            rpayload = mapOpenAIImageParams(params);
+        } else if (activeProv.id === 'xai') {
+            endpoint = activeProv.endpoints.image;
+            rpayload = mapXAIImageParams(params);
+        } else if (activeProv.id === 'google') {
+            endpoint = activeProv.endpoints.image;
+            rpayload = mapGoogleImagenParams(params);
+        } else {
+            throw new Error(activeProv.name + ' does not support image generation.');
+        }
+        const data = await requestDirect(endpoint, rpayload);
+        if (activeProv.id === 'openai') return normalizeOpenAIImage(data);
+        if (activeProv.id === 'google') return await normalizeGoogleImagen(data);
+        return normalizeXAIImage(data);
+        } catch (err) {
+            if (!err.message?.includes('not support')) throw err;
+            // fallback to muapi
+        }
+    }
     const modelInfo = getModelById(params.model);
     const endpoint = modelInfo?.endpoint || params.model;
     const payload = { prompt: params.prompt };
@@ -114,6 +211,17 @@ export async function generateImage(apiKey, params) {
 }
 
 export async function generateI2I(apiKey, params) {
+
+    /* Provider-aware routing */
+    const activeProv = getProviderById(getActiveProviderId());
+    if (activeProv.id !== 'muapi' && activeProv.endpoints) {
+        try {
+            throw new Error(activeProv.name + ' image-to-image not yet supported natively. Select a Muapi model instead.');
+        } catch (err) {
+            if (!err.message?.includes('not support')) throw err;
+            // fallback to muapi
+        }
+    }
     const modelInfo = getI2IModelById(params.model);
     const endpoint = modelInfo?.endpoint || params.model;
     const payload = {};
@@ -134,6 +242,17 @@ export async function generateI2I(apiKey, params) {
 }
 
 export async function generateVideo(apiKey, params) {
+
+    /* Provider-aware routing */
+    const activeProv = getProviderById(getActiveProviderId());
+    if (activeProv.id !== 'muapi' && activeProv.endpoints) {
+        try {
+            throw new Error(activeProv.name + ' video generation requires async polling. Use a Muapi model for now.');
+        } catch (err) {
+            if (!err.message?.includes('not support')) throw err;
+            // fallback to muapi
+        }
+    }
     const modelInfo = getVideoModelById(params.model);
     const endpoint = modelInfo?.endpoint || params.model;
     const payload = {};
@@ -148,6 +267,17 @@ export async function generateVideo(apiKey, params) {
 }
 
 export async function generateI2V(apiKey, params) {
+
+    /* Provider-aware routing */
+    const activeProv = getProviderById(getActiveProviderId());
+    if (activeProv.id !== 'muapi' && activeProv.endpoints) {
+        try {
+            throw new Error(activeProv.name + ' image-to-video not yet supported natively. Select a Muapi model instead.');
+        } catch (err) {
+            if (!err.message?.includes('not support')) throw err;
+            // fallback to muapi
+        }
+    }
     const modelInfo = getI2VModelById(params.model);
     const endpoint = modelInfo?.endpoint || params.model;
     const payload = {};
@@ -185,6 +315,17 @@ export async function generateMarketingStudioAd(apiKey, params) {
 }
 
 export async function processV2V(apiKey, params) {
+
+    /* Provider-aware routing */
+    const activeProv = getProviderById(getActiveProviderId());
+    if (activeProv.id !== 'muapi' && activeProv.endpoints) {
+        try {
+            throw new Error(activeProv.name + ' video-to-video not yet supported natively. Select a Muapi model instead.');
+        } catch (err) {
+            if (!err.message?.includes('not support')) throw err;
+            // fallback to muapi
+        }
+    }
     const modelInfo = getV2VModelById(params.model);
     const endpoint = modelInfo?.endpoint || params.model;
     const videoField = modelInfo?.videoField || 'video_url';
@@ -199,6 +340,17 @@ export async function processV2V(apiKey, params) {
 }
 
 export async function processLipSync(apiKey, params) {
+
+    /* Provider-aware routing */
+    const activeProv = getProviderById(getActiveProviderId());
+    if (activeProv.id !== 'muapi' && activeProv.endpoints) {
+        try {
+            throw new Error(activeProv.name + ' lip sync not yet supported natively. Select a Muapi model instead.');
+        } catch (err) {
+            if (!err.message?.includes('not support')) throw err;
+            // fallback to muapi
+        }
+    }
     const modelInfo = getLipSyncModelById(params.model);
     const endpoint = modelInfo?.endpoint || params.model;
     const payload = {};

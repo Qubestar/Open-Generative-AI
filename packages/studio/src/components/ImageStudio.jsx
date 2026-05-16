@@ -5,6 +5,7 @@ import { generateImage, generateI2I, uploadFile } from "../muapi.js";
 import {
   t2iModels,
   i2iModels,
+  nativeImageModels,
   getAspectRatiosForModel,
   getResolutionsForModel,
   getQualityFieldForModel,
@@ -15,7 +16,21 @@ import {
   getEffectsForI2IModel,
   getDefaultEffectForI2IModel,
 } from "../models.js";
-import { getActiveProviderId, getProviderById, inferProviderForModel } from "../providers.js";
+import { getActiveProviderId, getProviderById, inferProviderForModel, getProvidersForStudio } from "../providers.js";
+
+// Returns the active model list for the image studio.
+function getImageModels(imageMode) {
+  const active = getActiveProviderId();
+  if (active === 'muapi') return imageMode ? i2iModels : t2iModels;
+  // If active provider supports images, return only native models for it
+  const providers = getProvidersForStudio('image');
+  const prov = getProviderById(active);
+  if (prov.studios?.includes('image')) {
+    return nativeImageModels.filter(m => m.family === active);
+  }
+  // Fallback: provider not in image studio list, still show all native models
+  return nativeImageModels;
+}
 
 function ProviderBadge({ model }) {
   // If we have a native family, map it or derive provider info
@@ -771,13 +786,14 @@ export default function ImageStudio({
 
   // ── Model / mode state ──────────────────────────────────────────────────
   const [imageMode, setImageMode] = useState(false); // false=t2i, true=i2i
-  const [selectedModelId, setSelectedModelId] = useState(t2iModels[0].id);
-  const [selectedModelName, setSelectedModelName] = useState(t2iModels[0].name);
+  const [selectedModelId, setSelectedModelId] = useState(getImageModels(false)[0]?.id || t2iModels[0].id);
+  const [selectedModelName, setSelectedModelName] = useState(getImageModels(false)[0]?.name || t2iModels[0].name);
   const [selectedAr, setSelectedAr] = useState(
-    t2iModels[0].inputs?.aspect_ratio?.default || "1:1",
+    getImageModels(false)[0]?.inputs?.aspect_ratio?.default || t2iModels[0].inputs?.aspect_ratio?.default || "1:1",
   );
   const [selectedQuality, setSelectedQuality] = useState(() => {
-    const resolutions = getResolutionsForModel(t2iModels[0].id);
+    const firstModel = getImageModels(false)[0] || t2iModels[0];
+    const resolutions = getResolutionsForModel(firstModel.id);
     return resolutions[0] || null;
   });
   const [selectedEffect, setSelectedEffect] = useState("");
@@ -826,8 +842,11 @@ export default function ImageStudio({
       if (stored) {
         const data = JSON.parse(stored);
         if (data.imageMode !== undefined) setImageMode(data.imageMode);
-        if (data.selectedModelId) setSelectedModelId(data.selectedModelId);
-        if (data.selectedModelName) setSelectedModelName(data.selectedModelName);
+        if (data.selectedModelId) {
+        const nm = getImageModels(false).find(m => m.id === data.selectedModelId);
+        setSelectedModelId(nm ? data.selectedModelId : getImageModels(false)[0]?.id || t2iModels[0].id);
+      }
+  
         if (data.selectedAr) setSelectedAr(data.selectedAr);
         if (data.selectedQuality) setSelectedQuality(data.selectedQuality);
         if (data.selectedEffect) setSelectedEffect(data.selectedEffect);
@@ -936,7 +955,7 @@ export default function ImageStudio({
   }, [droppedFiles, onFilesHandled, processDroppedImages]);
 
   // ── Derived: current model lists & helpers ───────────────────────────────
-  const currentModels = imageMode ? i2iModels : t2iModels;
+  const currentModels = getImageModels(imageMode);
   const currentAspectRatios = imageMode
     ? getAspectRatiosForI2IModel(selectedModelId)
     : getAspectRatiosForModel(selectedModelId);
@@ -985,7 +1004,7 @@ export default function ImageStudio({
   const handleUploadClear = useCallback(() => {
     setUploadedImageUrls([]);
     setImageMode(false);
-    const firstT2I = t2iModels[0];
+    const firstT2I = getImageModels(false)[0] || t2iModels[0];
     const ars = getAspectRatiosForModel(firstT2I.id);
     const resolutions = getResolutionsForModel(firstT2I.id);
     setSelectedModelId(firstT2I.id);
@@ -998,20 +1017,32 @@ export default function ImageStudio({
 
   // ── Model selection ──────────────────────────────────────────────────────
   const handleModelSelect = (m) => {
-    const ars = imageMode
-      ? getAspectRatiosForI2IModel(m.id)
-      : getAspectRatiosForModel(m.id);
-    const resolutions = imageMode
-      ? getResolutionsForI2IModel(m.id)
-      : getResolutionsForModel(m.id);
+    const isNative = !!m.family;
+    let ars, resolutions;
+    if (isNative) {
+      ars = m.inputs?.aspect_ratio?.enum || ["1:1"];
+      resolutions = m.inputs?.resolution?.enum || [];
+    } else {
+      ars = imageMode
+        ? getAspectRatiosForI2IModel(m.id)
+        : getAspectRatiosForModel(m.id);
+      resolutions = imageMode
+        ? getResolutionsForI2IModel(m.id)
+        : getResolutionsForModel(m.id);
+    }
     setSelectedModelId(m.id);
     setSelectedModelName(m.name);
     setSelectedAr(ars[0] || "1:1");
     setSelectedQuality(resolutions[0] || null);
     if (imageMode) {
-      setMaxImages(getMaxImagesForI2IModel(m.id));
-      const effects = getEffectsForI2IModel(m.id);
-      setSelectedEffect(effects.length > 0 ? (getDefaultEffectForI2IModel(m.id) || effects[0]) : "");
+      if (isNative) {
+        setMaxImages(1);
+        setSelectedEffect("");
+      } else {
+        setMaxImages(getMaxImagesForI2IModel(m.id));
+        const effects = getEffectsForI2IModel(m.id);
+        setSelectedEffect(effects.length > 0 ? (getDefaultEffectForI2IModel(m.id) || effects[0]) : "");
+      }
     } else {
       setSelectedEffect("");
     }
@@ -1036,7 +1067,7 @@ export default function ImageStudio({
     setPrompt("");
     setUploadedImageUrls([]);
     setImageMode(false);
-    const firstT2I = t2iModels[0];
+    const firstT2I = getImageModels(false)[0] || t2iModels[0];
     const ars = getAspectRatiosForModel(firstT2I.id);
     const resolutions = getResolutionsForModel(firstT2I.id);
     setSelectedModelId(firstT2I.id);

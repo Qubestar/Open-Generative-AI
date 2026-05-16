@@ -8085,3 +8085,222 @@ export const imageLipSyncModels = lipsyncModels.filter(m => m.category === 'imag
 export const videoLipSyncModels = lipsyncModels.filter(m => m.category === 'video');
 
 export const getV2VModelById = (id) => v2vModels.find(m => m.id === id);
+
+// ── Direct-provider native model stubs ─────────────────────────────────────
+// These models appear in studios when their native provider is active.
+
+export const nativeImageModels = [
+  {
+    id: "openai-dall-e-3",
+    name: "DALL·E 3",
+    family: "openai",
+    endpoint: "images/generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt", description: "Text prompt describing the image." },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], default: "1:1" },
+      quality: { type: "string", title: "Quality", name: "quality", enum: ["standard", "hd"], default: "standard" },
+      style: { type: "string", title: "Style", name: "style", enum: ["vivid", "natural"], default: "vivid" },
+    },
+  },
+  {
+    id: "openai-dall-e-2",
+    name: "DALL·E 2",
+    family: "openai",
+    endpoint: "images/generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], default: "1:1" },
+    },
+  },
+  {
+    id: "google-imagen-3",
+    name: "Imagen 3",
+    family: "google",
+    endpoint: "models/imagen-3.0-generate-002:predict",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt", description: "Text prompt describing the image." },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], default: "1:1" },
+    },
+  },
+  {
+    id: "xai-grok-imagine",
+    name: "Grok Imagine",
+    family: "xai",
+    endpoint: "images/generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], default: "1:1" },
+    },
+  },
+  {
+    id: "recraft-v3",
+    name: "Recraft V3",
+    family: "recraft",
+    endpoint: "images/generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], default: "1:1" },
+      style: { type: "string", title: "Style", name: "style", enum: ["digital_illustration", "photo", "vector", "line_art", "clay", "3d"], default: "digital_illustration" },
+    },
+  },
+];
+
+export const nativeVideoModels = [
+  {
+    id: "runway-gen3",
+    name: "Runway Gen-3 Alpha",
+    family: "runway",
+    endpoint: "generate",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt", description: "Text prompt for the video." },
+      image_url: { type: "string", title: "Reference Image", name: "image_url", description: "Optional starting image." },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["16:9", "9:16", "1:1"], default: "16:9" },
+      duration: { type: "string", title: "Duration", name: "duration", enum: ["5s", "10s"], default: "5s" },
+    },
+  },
+  {
+    id: "luma-dream-machine",
+    name: "Luma Dream Machine",
+    family: "luma",
+    endpoint: "generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      image_url: { type: "string", title: "Reference Image", name: "image_url" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["16:9", "9:16", "1:1"], default: "16:9" },
+    },
+  },
+  {
+    id: "kling-2-master",
+    name: "Kling 2.0 Master",
+    family: "kling",
+    endpoint: "generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      image_url: { type: "string", title: "Reference Image", name: "image_url" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["16:9", "9:16", "1:1"], default: "16:9" },
+      duration: { type: "int", title: "Duration (s)", name: "duration", default: 5 },
+    },
+  },
+  {
+    id: "pika-2",
+    name: "Pika 2.0",
+    family: "pika",
+    endpoint: "generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      image_url: { type: "string", title: "Reference Image", name: "image_url" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["16:9", "9:16", "1:1"], default: "16:9" },
+      duration: { type: "int", title: "Duration (s)", name: "duration", default: 3 },
+    },
+  },
+];
+
+export const nativeLipSyncModels = [
+  {
+    id: "heygen-lipsync",
+    name: "HeyGen Lip Sync",
+    family: "heygen",
+    endpoint: "video/generate",
+    inputs: {
+      video_url: { type: "string", title: "Video", name: "video_url" },
+      audio_url: { type: "string", title: "Audio", name: "audio_url" },
+    },
+  },
+  {
+    id: "kling-lipsync",
+    name: "Kling Lip Sync",
+    family: "kling",
+    endpoint: " lip_sync",
+    inputs: {
+      video_url: { type: "string", title: "Video", name: "video_url" },
+      audio_url: { type: "string", title: "Audio", name: "audio_url" },
+    },
+  },
+];
+
+export const nativeChatModels = [
+  {
+    id: "openai-gpt-4o",
+    name: "GPT-4o",
+    family: "openai",
+    endpoint: "chat/completions",
+    inputs: {
+      prompt: { type: "string", title: "Message", name: "messages" },
+    },
+  },
+  {
+    id: "anthropic-claude-3-5-sonnet",
+    name: "Claude 3.5 Sonnet",
+    family: "anthropic",
+    endpoint: "messages",
+    inputs: {
+      prompt: { type: "string", title: "Message", name: "messages" },
+    },
+  },
+  {
+    id: "xai-grok-2",
+    name: "Grok 2",
+    family: "xai",
+    endpoint: "chat/completions",
+    inputs: {
+      prompt: { type: "string", title: "Message", name: "messages" },
+    },
+  },
+  {
+    id: "google-gemini-2-5-pro",
+    name: "Gemini 2.5 Pro",
+    family: "google",
+    endpoint: "models/gemini-2.5-pro-preview-03-25:generateContent",
+    inputs: {
+      prompt: { type: "string", title: "Message", name: "contents" },
+    },
+  },
+  {
+    id: "deepseek-v3",
+    name: "DeepSeek V3",
+    family: "deepseek",
+    endpoint: "chat/completions",
+    inputs: { prompt: { type: "string", title: "Message", name: "messages" } },
+  },
+  {
+    id: "moonshot-v1-8k",
+    name: "Moonshot v1 8K",
+    family: "moonshot",
+    endpoint: "chat/completions",
+    inputs: { prompt: { type: "string", title: "Message", name: "messages" } },
+  },
+  {
+    id: "qwen-max",
+    name: "Qwen Max",
+    family: "qwen",
+    endpoint: "chat/completions",
+    inputs: { prompt: { type: "string", title: "Message", name: "messages" } },
+  },
+  {
+    id: "groq-llama-3-70b",
+    name: "Groq Llama 3 70B",
+    family: "groq",
+    endpoint: "chat/completions",
+    inputs: { prompt: { type: "string", title: "Message", name: "messages" } },
+  },
+  {
+    id: "siliconflow-sd-xl",
+    name: "SiliconFlow SDXL",
+    family: "siliconflow",
+    endpoint: "images/generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], default: "1:1" },
+    },
+  },
+  {
+    id: "together-flux",
+    name: "Together FLUX",
+    family: "together",
+    endpoint: "images/generations",
+    inputs: {
+      prompt: { type: "string", title: "Prompt", name: "prompt" },
+      aspect_ratio: { type: "string", title: "Aspect Ratio", name: "aspect_ratio", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], default: "1:1" },
+    },
+  },
+];
