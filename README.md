@@ -30,12 +30,12 @@ One-click installers — no Node.js or terminal required.
 
 | Platform | Download |
 |---|---|
-| macOS Apple Silicon (M1/M2/M3/M4) | [Vidmyo-1.0.9-arm64.dmg](https://github.com/Anil-matcha/Vidmyo/releases/download/v1.0.9/Open.Generative.AI-1.0.9-arm64.dmg) |
-| macOS Intel (x64) | [Vidmyo-1.0.9.dmg](https://github.com/Anil-matcha/Vidmyo/releases/download/v1.0.9/Open.Generative.AI-1.0.9.dmg) |
-| Windows (x64) | [Vidmyo Setup 1.0.9.exe](https://github.com/Anil-matcha/Vidmyo/releases/download/v1.0.9/Open.Generative.AI.Setup.1.0.9.exe) |
-| Linux (Ubuntu x64) | [v1.0.9 release](https://github.com/Anil-matcha/Vidmyo/releases/tag/v1.0.9) (`.AppImage` / `.deb`), or build locally with `npm run electron:build:linux`. |
+| macOS Apple Silicon (M1/M2/M3/M4) | [Vidmyo-1.0.9-arm64.dmg](https://github.com/Qubestar/Vidmyo/releases/download/v1.0.9/Open.Generative.AI-1.0.9-arm64.dmg) |
+| macOS Intel (x64) | [Vidmyo-1.0.9.dmg](https://github.com/Qubestar/Vidmyo/releases/download/v1.0.9/Open.Generative.AI-1.0.9.dmg) |
+| Windows (x64) | [Vidmyo Setup 1.0.9.exe](https://github.com/Qubestar/Vidmyo/releases/download/v1.0.9/Open.Generative.AI.Setup.1.0.9.exe) |
+| Linux (Ubuntu x64) | [v1.0.9 release](https://github.com/Qubestar/Vidmyo/releases/tag/v1.0.9) (`.AppImage` / `.deb`), or build locally with `npm run electron:build:linux`. |
 
-All releases: [github.com/Anil-matcha/Vidmyo/releases](https://github.com/Anil-matcha/Vidmyo/releases)
+All releases: [github.com/Qubestar/Vidmyo/releases](https://github.com/Qubestar/Vidmyo/releases)
 
 ### macOS Installation Guide
 
@@ -394,7 +394,7 @@ Pick the entry point that matches your goal:
 
 ```bash
 # Clone the repository (with submodules — required for the workflow + agent packages)
-git clone --recurse-submodules https://github.com/Anil-matcha/Vidmyo.git
+git clone --recurse-submodules https://github.com/Qubestar/Vidmyo.git
 cd Vidmyo
 
 # If you already cloned without --recurse-submodules, run this once:
@@ -439,7 +439,7 @@ npm run electron:build:linux
 npm run electron:build:all
 ```
 
-Installers are output to the `release/` folder. Pre-built binaries are also available on the [Releases page](https://github.com/Anil-matcha/Vidmyo/releases).
+Installers are output to the `release/` folder. Pre-built binaries are also available on the [Releases page](https://github.com/Qubestar/Vidmyo/releases).
 
 ## 🏗️ Architecture
 

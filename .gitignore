@@ -36,3 +36,6 @@ out/
 .env
 .env.*
 !.env.example
+
+# Graphify output
+graphify-out/
