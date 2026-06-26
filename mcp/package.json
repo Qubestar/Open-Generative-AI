@@ -1,0 +1,15 @@
+{
+  "name": "vidmyo-mcp",
+  "version": "0.1.0",
+  "description": "Vidmyo's local MCP server — gives agents (Claude Code, Codex, etc.) a unified video-creation interface. Milestone 1 exposes the Video Delta local engine.",
+  "private": true,
+  "type": "module",
+  "bin": { "vidmyo-mcp": "server.js" },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8"
+  }
+}
