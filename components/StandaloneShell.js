@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ImageStudio, VideoStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, getUserBalance } from 'studio';
 import axios from 'axios';
-import ApiKeyModal from './ApiKeyModal';
 
 const TABS = [
   { id: 'image',   label: 'Image Studio' },
@@ -49,7 +48,7 @@ export default function StandaloneShell() {
     if (slug.includes('apps')) return 'apps';
     const firstSegment = slug[0];
     if (firstSegment && TABS.find(t => t.id === firstSegment)) return firstSegment;
-    return 'image';
+    return 'videodelta';  // open on the free, local engine — no API key required
   };
   
   const [apiKey, setApiKey] = useState(null);
@@ -214,9 +213,8 @@ export default function StandaloneShell() {
     </div>
   );
 
-  if (!apiKey) {
-    return <ApiKeyModal onSave={handleKeySave} />;
-  }
+  // No API-key gate: the app opens keyless straight to Video Delta (free, local).
+  // A Muapi/cloud key is OPTIONAL and only needed by the cloud tabs.
 
   return (
     <div 
@@ -330,7 +328,7 @@ export default function StandaloneShell() {
                    Active API Key
                 </label>
                 <div className="text-[13px] font-mono text-white/80">
-                  {apiKey.slice(0, 8)}••••••••••••••••
+                  {apiKey ? `${apiKey.slice(0, 8)}••••••••••••••••` : 'none — using the free local engine'}
                 </div>
               </div>
             </div>
