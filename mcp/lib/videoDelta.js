@@ -45,6 +45,10 @@ const videoDelta = {
   direct(body) { return _json('/direct', { method: 'POST', body: JSON.stringify(body) }); },
   reframe(body) { return _json('/reframe', { method: 'POST', body: JSON.stringify(body) }); },
 
+  // Social autopilot: post a finished clip; check which platforms are wired up.
+  publish(body) { return _json('/publish', { method: 'POST', body: JSON.stringify(body) }); },
+  publishStatus() { return _json('/publish/status'); },
+
   // { id, kind, status: queued|running|done|error, out: <mp4 path|null>, error }
   job(id) { return _json(`/jobs/${id}`); },
 };

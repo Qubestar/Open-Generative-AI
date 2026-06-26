@@ -133,7 +133,7 @@ export default function VideoDeltaStudio() {
               LTX · quality (~7 min)
             </div>
             <div style={seg(motion === 'composite')} onClick={() => setMotion('composite')}>
-              Composite · fast preview
+              Composite · faster (~3–5 min)
             </div>
           </div>
 

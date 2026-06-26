@@ -30,8 +30,9 @@ server.tool(
 server.tool(
   'create_video',
   'Create ONE short video clip from a text prompt, locally. motion="ltx" (default) = '
-  + 'photoreal generative motion (~7 min); motion="composite" = fast sprite preview '
-  + '(seconds, good for smoke tests). Returns a job_id — poll get_job until done.',
+  + 'photoreal generative motion (~7 min); motion="composite" = sprite-compositing tier '
+  + '(~3-5 min — faster than LTX, but not instant; still renders a hero frame first). '
+  + 'Returns a job_id — poll get_job until done.',
   {
     prompt: z.string().describe('what happens in the clip, e.g. "a red fox trots through snow"'),
     motion: z.enum(['ltx', 'composite']).default('ltx'),
@@ -80,6 +81,37 @@ server.tool(
   },
   async (args) => {
     try { return ok(await videoDelta.reframe(args)); } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'publish_video',
+  'Social autopilot: post a finished clip to YouTube/TikTok/Instagram. YouTube is fully '
+  + 'wired (needs OAuth creds); TikTok/Instagram need approved developer apps. Set dry_run '
+  + 'to validate the file + credentials WITHOUT posting. privacy defaults to "private" so '
+  + 'autopilot never publishes publicly by accident — set "public"/"unlisted" deliberately. '
+  + 'Use list_publish_status first to see which platforms are ready.',
+  {
+    video: z.string().describe('absolute path to the finished MP4 (from get_job "out")'),
+    platform: z.enum(['youtube', 'tiktok', 'instagram']).default('youtube'),
+    caption: z.string().default('').describe('description / caption text'),
+    title: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    privacy: z.enum(['private', 'unlisted', 'public']).default('private'),
+    dry_run: z.boolean().default(false).describe('true = validate only, do not post'),
+  },
+  async (args) => {
+    try { return ok(await videoDelta.publish(args)); } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'list_publish_status',
+  'Which social platforms are wired up and ready to post (credentials present + API '
+  + 'implemented). Call before publish_video to know what will actually go out.',
+  {},
+  async () => {
+    try { return ok(await videoDelta.publishStatus()); } catch (e) { return fail(e); }
   },
 );
 
