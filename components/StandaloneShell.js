@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ImageStudio, VideoStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, getUserBalance } from 'studio';
+import { ImageStudio, VideoStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio } from 'studio';
 import axios from 'axios';
 
 const TABS = [
@@ -104,14 +104,7 @@ export default function StandaloneShell() {
     }
   }, [activeTab]);
 
-  const fetchBalance = useCallback(async (key) => {
-    try {
-      const data = await getUserBalance(key);
-      setBalance(data.balance);
-    } catch (err) {
-      console.error('Balance fetch failed:', err);
-    }
-  }, []);
+  const fetchBalance = useCallback(async () => {}, []);  // no cloud balance display
 
   useEffect(() => {
     setHasMounted(true);
@@ -214,7 +207,7 @@ export default function StandaloneShell() {
   );
 
   // No API-key gate: the app opens keyless straight to Video Delta (free, local).
-  // A Muapi/cloud key is OPTIONAL and only needed by the cloud tabs.
+  // A cloud key is OPTIONAL and only needed by the cloud tabs.
 
   return (
     <div 
@@ -276,18 +269,9 @@ export default function StandaloneShell() {
 
           {/* Right: Actions */}
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3 bg-white/5 px-3 py-1.5 rounded-full border border-white/5 transition-colors">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-white/90">
-                  ${balance !== null ? `${balance}` : '---'}
-                </span>
-              </div>
-            </div>
-
             <button
               onClick={() => setShowSettings(true)}
-              title="Settings — API key, local models, preferences"
+              title="Settings"
               className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-white/10 bg-white/5 text-[13px] font-bold text-white/80 hover:text-white hover:bg-white/10 hover:border-white/20 transition-colors"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
