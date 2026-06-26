@@ -167,14 +167,16 @@ export default function VideoDeltaStudio() {
           )}
         </div>
 
-        {/* Result */}
-        <div style={{ flex: '1 1 360px', minWidth: 320 }}>
-          <div style={{ aspectRatio: '1 / 1', width: '100%', background: C.card,
+        {/* Result — height-bounded so the video + its controls always fit on screen */}
+        <div style={{ flex: '1 1 380px', minWidth: 300, maxWidth: 620 }}>
+          <div style={{ width: '100%', height: 'min(62vh, 560px)', background: C.card,
                         border: `1px solid ${C.line}`, borderRadius: 14, display: 'flex',
-                        alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                        padding: 8, boxSizing: 'border-box' }}>
             {resultUrl ? (
-              <video src={resultUrl} controls autoPlay loop
-                     style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              <video key={resultUrl} src={resultUrl} controls autoPlay loop playsInline
+                     style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
+                              borderRadius: 8 }} />
             ) : (
               <div style={{ color: C.dim, fontSize: 13, textAlign: 'center', padding: 24 }}>
                 {job?.status === 'error'
