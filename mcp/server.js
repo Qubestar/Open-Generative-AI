@@ -39,6 +39,8 @@ server.tool(
     fps: z.number().default(24.0),
     size: z.number().int().default(512).describe('generation resolution before upscale'),
     upscale: z.number().int().default(2).describe('super-resolution factor (1 = off)'),
+    aspect: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9')
+      .describe('output shape: 16:9 YouTube, 9:16 TikTok/Reels/Shorts, 1:1 / 4:5 Instagram'),
   },
   async (args) => {
     try { return ok(await videoDelta.createVideo(args)); } catch (e) { return fail(e); }
@@ -59,9 +61,25 @@ server.tool(
     title: z.string().optional().describe('title card text (omit for no finishing stage)'),
     subtitle: z.string().optional(),
     narrate: z.string().optional().describe('narration script -> TTS voice + synced captions'),
+    aspect: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9')
+      .describe('output shape: 16:9 YouTube, 9:16 TikTok/Reels/Shorts, 1:1 / 4:5 Instagram'),
   },
   async (args) => {
     try { return ok(await videoDelta.createFilm(args)); } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'reframe',
+  'Reframe an existing video file to a social aspect ratio (crop-to-fill, keeps audio). '
+  + 'Use to repurpose one clip for TikTok/Reels (9:16), Instagram (1:1, 4:5), or YouTube (16:9).',
+  {
+    video: z.string().describe('absolute path to the video to reframe'),
+    aspect: z.enum(['16:9', '9:16', '1:1', '4:5']).default('9:16'),
+    mode: z.enum(['crop', 'pad']).default('crop').describe('crop = fill (no bars); pad = fit'),
+  },
+  async (args) => {
+    try { return ok(await videoDelta.reframe(args)); } catch (e) { return fail(e); }
   },
 );
 

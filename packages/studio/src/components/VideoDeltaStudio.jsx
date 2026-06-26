@@ -28,6 +28,7 @@ export default function VideoDeltaStudio() {
   const [shots, setShots] = useState(2);
   const [title, setTitle] = useState('');
   const [narrate, setNarrate] = useState('');
+  const [aspect, setAspect] = useState('16:9');   // 16:9 | 9:16 | 1:1
   const [job, setJob] = useState(null);               // {id,status,out,error}
   const [elapsed, setElapsed] = useState(0);
   const [resultUrl, setResultUrl] = useState(null);
@@ -51,13 +52,13 @@ export default function VideoDeltaStudio() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             brief: prompt, shots: Number(shots), duration: Number(duration) * Number(shots),
-            motion, title: title || null, narrate: narrate || null,
+            motion, title: title || null, narrate: narrate || null, aspect,
           }),
         });
       } else {
         res = await fetch(`${API}/create`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, motion, duration: Number(duration) }),
+          body: JSON.stringify({ prompt, motion, duration: Number(duration), aspect }),
         });
       }
       const { job_id } = await res.json();
@@ -79,7 +80,7 @@ export default function VideoDeltaStudio() {
     } catch (e) {
       setJob({ status: 'error', error: String(e.message || e) });
     }
-  }, [mode, motion, prompt, duration, shots, title, narrate]);
+  }, [mode, motion, prompt, duration, shots, title, narrate, aspect]);
 
   const busy = job && ['submitting', 'queued', 'running'].includes(job.status);
   const lbl = { display: 'block', color: C.dim, fontSize: 12, margin: '14px 0 5px' };
@@ -134,6 +135,15 @@ export default function VideoDeltaStudio() {
             <div style={seg(motion === 'composite')} onClick={() => setMotion('composite')}>
               Composite · fast preview
             </div>
+          </div>
+
+          <label style={lbl}>Format</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[['16:9', 'YouTube'], ['9:16', 'TikTok / Reels'], ['1:1', 'Instagram']].map(([a, who]) => (
+              <div key={a} style={seg(aspect === a)} onClick={() => setAspect(a)}>
+                {a} <span style={{ opacity: 0.7 }}>· {who}</span>
+              </div>
+            ))}
           </div>
 
           <div style={{ display: 'flex', gap: 12 }}>

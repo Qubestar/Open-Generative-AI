@@ -43,6 +43,7 @@ const videoDelta = {
   createVideo(body) { return _json('/create', { method: 'POST', body: JSON.stringify(body) }); },
   createFilm(body) { return _json('/film', { method: 'POST', body: JSON.stringify(body) }); },
   direct(body) { return _json('/direct', { method: 'POST', body: JSON.stringify(body) }); },
+  reframe(body) { return _json('/reframe', { method: 'POST', body: JSON.stringify(body) }); },
 
   // { id, kind, status: queued|running|done|error, out: <mp4 path|null>, error }
   job(id) { return _json(`/jobs/${id}`); },
