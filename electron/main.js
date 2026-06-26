@@ -2,6 +2,9 @@ const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 const { register: registerLocalInference } = require('./lib/localInference');
 const { register: registerWan2gp } = require('./lib/wan2gpProvider');
+const { register: registerBonsai } = require('./lib/bonsaiProvider');
+const { register: registerComfyui } = require('./lib/comfyuiProvider');
+const { register: registerAgents } = require('./lib/agents');
 
 // Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1 which
 // blocks Chromium's user namespace sandbox. The .deb package ships an AppArmor
@@ -34,11 +37,21 @@ function createWindow() {
         title: 'Vidmyo',
     });
 
-    const indexPath = path.join(__dirname, '../dist/index.html');
-    mainWindow.loadFile(indexPath).catch((err) => {
-        console.error('Failed to load index.html:', err);
-        mainWindow.show();
-    });
+    // Dev: load the live Next dev server (hot-reloading, all latest changes) when
+    // VIDMYO_DEV_URL is set. Production: load the bundled Vite build as before.
+    const devUrl = process.env.VIDMYO_DEV_URL;
+    if (devUrl) {
+        mainWindow.loadURL(devUrl).catch((err) => {
+            console.error('Failed to load dev URL:', err);
+            mainWindow.show();
+        });
+    } else {
+        const indexPath = path.join(__dirname, '../dist/index.html');
+        mainWindow.loadFile(indexPath).catch((err) => {
+            console.error('Failed to load index.html:', err);
+            mainWindow.show();
+        });
+    }
 
     mainWindow.webContents.on('did-fail-load', (event, code, desc) => {
         console.error('did-fail-load:', code, desc);
@@ -62,6 +75,9 @@ app.whenReady().then(() => {
     createWindow();
     registerLocalInference();
     registerWan2gp();
+    registerBonsai();
+    registerComfyui();
+    registerAgents();
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
