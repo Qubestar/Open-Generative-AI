@@ -10,6 +10,15 @@ const C = {
   accent: '#E8A33D', accent2: '#7c3aed', good: '#3ECF8E', bad: '#ff6b6b',
 };
 
+// Cloud / more-models options (monetized via affiliate). Drop YOUR referral codes into
+// these URLs (replace YOUR_CODE). Video Delta stays free + local; these are the paid upsell
+// for when a user wants cloud speed or models we don't run locally.
+const AFFILIATES = [
+  { name: 'fal.ai', blurb: 'fast cloud video/image models', url: 'https://fal.ai/?ref=YOUR_CODE' },
+  { name: 'Replicate', blurb: 'run any model in the cloud', url: 'https://replicate.com/?ref=YOUR_CODE' },
+  { name: 'Kling', blurb: 'premium cloud video', url: 'https://klingai.com/?ref=YOUR_CODE' },
+];
+
 export default function VideoDeltaStudio() {
   const [health, setHealth] = useState('checking');   // checking | up | down
   const [mode, setMode] = useState('clip');           // clip | film
@@ -192,6 +201,20 @@ export default function VideoDeltaStudio() {
                  color: C.accent, fontSize: 13, textDecoration: 'none' }}>↓ Download MP4</a>
           )}
         </div>
+      </div>
+
+      {/* Cloud upsell (affiliate) — subtle, non-blocking. Video Delta itself is free + local. */}
+      <div style={{ marginTop: 28, paddingTop: 16, borderTop: `1px solid ${C.line}`,
+                    display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 14 }}>
+        <span style={{ color: C.dim, fontSize: 12 }}>Want cloud speed or more models?</span>
+        {AFFILIATES.map((a) => (
+          <a key={a.name} href={a.url} target="_blank" rel="noopener noreferrer"
+             title={a.blurb}
+             style={{ color: C.text, fontSize: 12, textDecoration: 'none',
+                      border: `1px solid ${C.line}`, borderRadius: 7, padding: '5px 10px' }}>
+            {a.name} <span style={{ color: C.dim }}>· {a.blurb}</span>
+          </a>
+        ))}
       </div>
     </div>
   );
