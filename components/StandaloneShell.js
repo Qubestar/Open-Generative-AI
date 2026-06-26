@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ImageStudio, VideoStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, getUserBalance } from 'studio';
+import { ImageStudio, VideoStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, getUserBalance } from 'studio';
 import axios from 'axios';
 import ApiKeyModal from './ApiKeyModal';
 
 const TABS = [
   { id: 'image',   label: 'Image Studio' },
   { id: 'video',   label: 'Video Studio' },
+  { id: 'videodelta', label: 'Video Delta' },
   { id: 'lipsync', label: 'Lip Sync' },
   { id: 'cinema',  label: 'Cinema Studio' },
   { id: 'marketing', label: 'Marketing Studio' },
@@ -305,6 +306,7 @@ export default function StandaloneShell() {
       <div className="flex-1 min-h-0 relative overflow-hidden">
         {activeTab === 'image'   && <ImageStudio   apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
         {activeTab === 'video'   && <VideoStudio   apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
+        {activeTab === 'videodelta' && <VideoDeltaStudio />}
         {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
         {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
         {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
