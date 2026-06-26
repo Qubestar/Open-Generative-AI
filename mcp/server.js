@@ -86,11 +86,12 @@ server.tool(
 
 server.tool(
   'publish_video',
-  'Social autopilot: post a finished clip to YouTube/TikTok/Instagram. YouTube is fully '
-  + 'wired (needs OAuth creds); TikTok/Instagram need approved developer apps. Set dry_run '
-  + 'to validate the file + credentials WITHOUT posting. privacy defaults to "private" so '
-  + 'autopilot never publishes publicly by accident — set "public"/"unlisted" deliberately. '
-  + 'Use list_publish_status first to see which platforms are ready.',
+  'Social autopilot: post a finished clip to YouTube/TikTok/Instagram. Preferred route is '
+  + 'the user\'s own n8n (a webhook URL — their n8n posts with their connected account, so '
+  + 'it already knows which channel/account). Native fallback: YouTube via OAuth; TikTok/IG '
+  + 'need approved dev apps. Set dry_run to validate WITHOUT posting. privacy defaults to '
+  + '"private" so autopilot never publishes publicly by accident — set "public"/"unlisted" '
+  + 'deliberately. Use list_publish_status first to see each platform\'s route + readiness.',
   {
     video: z.string().describe('absolute path to the finished MP4 (from get_job "out")'),
     platform: z.enum(['youtube', 'tiktok', 'instagram']).default('youtube'),
