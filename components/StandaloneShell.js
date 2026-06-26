@@ -5,13 +5,11 @@ import { useParams, useRouter } from 'next/navigation';
 import { ImageStudio, VideoStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio } from 'studio';
 import axios from 'axios';
 
+// The five cloud generation studios (Image/Video/Lip Sync/Cinema/Marketing) are muapi-backed,
+// so they're hidden — Vidmyo is a clean Video Delta test host with no reachable muapi UI.
+// (Their render branches + imports stay below, harmless; re-add a line here to restore one.)
 const TABS = [
-  { id: 'image',   label: 'Image Studio' },
-  { id: 'video',   label: 'Video Studio' },
   { id: 'videodelta', label: 'Video Delta' },
-  { id: 'lipsync', label: 'Lip Sync' },
-  { id: 'cinema',  label: 'Cinema Studio' },
-  { id: 'marketing', label: 'Marketing Studio' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'agents', label: 'Agents' },
   { id: 'apps', label: 'Explore Apps' },
