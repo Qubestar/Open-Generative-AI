@@ -12,19 +12,39 @@ export const PROVIDER_CATEGORIES = [
 export const PROVIDERS = [
   // ── Aggregator ───────────────────────────────────────────────────────────
   {
-    id: 'muapi',
-    name: 'Muapi',
+    id: 'openrouter',
+    name: 'OpenRouter',
     category: 'aggregator',
     type: 'aggregator',
-    baseUrl: 'https://api.muapi.ai',
-    authHeader: 'x-api-key',
-    authPrefix: '',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    authHeader: 'Authorization',
+    authPrefix: 'Bearer ',
     authInQuery: false,
-    color: '#7c3aed',
-    icon: 'muapi',
-    description: 'Unified access to 200+ models. One key, every model.',
-    docsUrl: 'https://muapi.ai',
-    studios: ['image', 'video', 'lipsync', 'cinema', 'marketing'],
+    color: '#6467f2',
+    icon: 'openrouter',
+    description: 'Unified gateway to 300+ models (OpenAI, Anthropic, Google, Meta…). One key, OpenAI-compatible.',
+    docsUrl: 'https://openrouter.ai/keys',
+    endpoints: {
+      chat: '/chat/completions',
+      image: '/images/generations',
+      models: '/models',
+    },
+    studios: ['image'],
+  },
+  {
+    id: 'fal',
+    name: 'fal.ai',
+    category: 'aggregator',
+    type: 'aggregator',
+    baseUrl: 'https://queue.fal.run',
+    authHeader: 'Authorization',
+    authPrefix: 'Key ',
+    authInQuery: false,
+    color: '#0ea5e9',
+    icon: 'fal',
+    description: 'Video editing & tools — VACE footage editing, lip-sync, watermark/object removal. Pay-per-use.',
+    docsUrl: 'https://fal.ai/dashboard/keys',
+    studios: ['video', 'lipsync'],
   },
 
   // ── Direct APIs (Premium) ────────────────────────────────────────────────
@@ -369,6 +389,21 @@ export const PROVIDERS = [
     studios: [],
   },
   {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    category: 'integration',
+    type: 'oauth',
+    color: '#4285f4',
+    icon: 'google',
+    description: "Google's Gemini CLI agent. Requires local Node.js + npx.",
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    oauthUrl: 'https://aistudio.google.com/app/apikey',
+    cliCommand: 'npx @google/gemini-cli',
+    scopes: ['code', 'workspace'],
+    connected: false,
+    studios: [],
+  },
+  {
     id: 'codex',
     name: 'OpenAI Codex',
     category: 'integration',
@@ -415,7 +450,7 @@ export const PROVIDERS = [
   },
 ];
 
-export const DEFAULT_PROVIDER = 'muapi';
+export const DEFAULT_PROVIDER = 'openrouter';
 
 // ── Provider helpers ──────────────────────────────────────
 
@@ -439,7 +474,7 @@ export function getProvidersForStudio(studioType) {
 
 // Infer the native provider for a given model entry.
 export function inferProviderForModel(model) {
-  if (!model) return 'muapi';
+  if (!model) return 'openrouter';
   const id = model.id || '';
   const endpoint = model.endpoint || '';
   const family = model.family || '';
@@ -462,7 +497,7 @@ export function inferProviderForModel(model) {
   if (id.startsWith('runway-') || id.startsWith('gen-')) return 'runway';
   if (id.startsWith('pika-')) return 'pika';
 
-  return 'muapi';
+  return 'openrouter';
 }
 
 // Return the user's saved API key for a provider (localStorage key pattern).

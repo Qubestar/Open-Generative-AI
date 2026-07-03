@@ -39,3 +39,8 @@ out/
 
 # Graphify output
 graphify-out/
+
+# Agent working files (never commit)
+.tmp/
+.claude/
+skill-creator/

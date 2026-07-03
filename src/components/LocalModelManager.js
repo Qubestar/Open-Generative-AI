@@ -244,8 +244,194 @@ function Wan2gpModelCard(model) {
     return card;
 }
 
+// ─── Bonsai Image Studio Config ─────────────────────────────────────────────
+function BonsaiConfigBar(onChange) {
+    const wrap = document.createElement('div');
+    wrap.className = 'flex flex-col gap-3 p-3 rounded-xl bg-white/3 border border-white/5';
+    wrap.innerHTML = `
+        <div class="flex flex-col gap-0.5">
+            <span class="text-xs font-bold text-white">Bonsai Image Studio</span>
+            <span class="text-[11px] text-muted leading-relaxed">
+                Installed locally at <code class="text-primary/80">/Volumes/My Lexar/AI Projects/Bonsai-Image-Demo</code>.
+                Start <code class="text-primary/80">./scripts/serve.sh</code>, then use Bonsai from Image Studio.
+            </span>
+        </div>
+        <div class="flex items-center gap-2">
+            <input id="bonsai-url" type="text" placeholder="http://127.0.0.1:8000"
+                   class="flex-1 bg-white/5 border border-white/5 focus:border-primary/40 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none"/>
+            <button id="bonsai-test" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all">Test</button>
+            <button id="bonsai-save" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-primary text-black hover:shadow-glow transition-all">Save</button>
+        </div>
+        <div id="bonsai-status" class="text-[11px] text-muted">Checking...</div>
+    `;
+
+    const input = wrap.querySelector('#bonsai-url');
+    const testBtn = wrap.querySelector('#bonsai-test');
+    const saveBtn = wrap.querySelector('#bonsai-save');
+    const statusEl = wrap.querySelector('#bonsai-status');
+    const setStatus = (text, kind = 'muted') => {
+        const colorMap = { muted: 'text-muted', ok: 'text-green-400', warn: 'text-yellow-400', err: 'text-red-400' };
+        statusEl.className = `text-[11px] ${colorMap[kind] || colorMap.muted}`;
+        statusEl.textContent = text;
+    };
+
+    const probe = async (url) => {
+        const r = await localAI.probeBonsai(url);
+        if (r.ok) {
+            const backend = r.defaultBackend ? ` · ${r.defaultBackend}` : '';
+            setStatus(`Connected${backend}`, 'ok');
+        } else {
+            setStatus(`Backend offline: ${r.error}`, 'warn');
+        }
+        return r;
+    };
+
+    (async () => {
+        const cfg = await localAI.getBonsaiConfig();
+        input.value = cfg.url || 'http://127.0.0.1:8000';
+        await probe(input.value);
+    })();
+
+    testBtn.onclick = async () => {
+        const url = input.value.trim();
+        if (!url) { setStatus('Enter a URL first', 'warn'); return; }
+        setStatus('Probing...', 'muted');
+        testBtn.disabled = true;
+        try { await probe(url); } finally { testBtn.disabled = false; }
+    };
+
+    saveBtn.onclick = async () => {
+        const url = input.value.trim();
+        saveBtn.disabled = true;
+        try {
+            await localAI.setBonsaiUrl(url);
+            await probe(url);
+            onChange?.();
+        } finally { saveBtn.disabled = false; }
+    };
+
+    return wrap;
+}
+
+function BonsaiModelCard(model) {
+    const card = document.createElement('div');
+    card.className = 'flex items-start justify-between gap-3 p-4 rounded-xl border border-white/5 bg-white/3';
+    const ready = !!model.ready;
+    card.innerHTML = `
+        <div class="flex flex-col gap-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-bold text-white truncate">${model.name}</span>
+                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-primary/20 text-primary border border-primary/30">Installed</span>
+                ${ready ? `<span class="text-green-400">${CheckIcon}</span>` : ''}
+            </div>
+            <p class="text-[11px] text-muted leading-relaxed">${model.description}</p>
+            <div class="flex items-center gap-1.5 flex-wrap mt-1">
+                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-primary/10 text-primary">IMAGE</span>
+                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-muted">via Bonsai</span>
+                ${(model.tags || []).filter(t => !['featured', 'installed'].includes(t)).map(t => `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-muted">${t}</span>`).join('')}
+            </div>
+        </div>
+        <div class="shrink-0 text-right">
+            <span class="text-[10px] font-bold ${ready ? 'text-green-400' : 'text-yellow-400'}">${ready ? 'Ready' : 'Start server'}</span>
+            ${!ready && model.unavailableReason ? `<p class="text-[10px] text-muted max-w-[12rem] mt-1">${model.unavailableReason}</p>` : ''}
+        </div>
+    `;
+    return card;
+}
+
+// ─── ComfyUI Config ─────────────────────────────────────────────────────────
+function ComfyuiConfigBar(onChange) {
+    const wrap = document.createElement('div');
+    wrap.className = 'flex flex-col gap-3 p-3 rounded-xl bg-white/3 border border-white/5';
+    wrap.innerHTML = `
+        <div class="flex flex-col gap-0.5">
+            <span class="text-xs font-bold text-white">ComfyUI</span>
+            <span class="text-[11px] text-muted leading-relaxed">
+                Installed locally at <code class="text-primary/80">/Users/look/Documents/comfy/ComfyUI</code>.
+                Start ComfyUI, then use the installed SD 1.5 checkpoint from Image Studio.
+            </span>
+        </div>
+        <div class="flex items-center gap-2">
+            <input id="comfyui-url" type="text" placeholder="http://127.0.0.1:8188"
+                   class="flex-1 bg-white/5 border border-white/5 focus:border-primary/40 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none"/>
+            <button id="comfyui-test" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all">Test</button>
+            <button id="comfyui-save" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-primary text-black hover:shadow-glow transition-all">Save</button>
+        </div>
+        <div id="comfyui-status" class="text-[11px] text-muted">Checking...</div>
+    `;
+
+    const input = wrap.querySelector('#comfyui-url');
+    const testBtn = wrap.querySelector('#comfyui-test');
+    const saveBtn = wrap.querySelector('#comfyui-save');
+    const statusEl = wrap.querySelector('#comfyui-status');
+    const setStatus = (text, kind = 'muted') => {
+        const colorMap = { muted: 'text-muted', ok: 'text-green-400', warn: 'text-yellow-400', err: 'text-red-400' };
+        statusEl.className = `text-[11px] ${colorMap[kind] || colorMap.muted}`;
+        statusEl.textContent = text;
+    };
+    const probe = async (url) => {
+        const r = await localAI.probeComfyui(url);
+        setStatus(r.ok ? 'Connected' : `Server offline: ${r.error}`, r.ok ? 'ok' : 'warn');
+        return r;
+    };
+
+    (async () => {
+        const cfg = await localAI.getComfyuiConfig();
+        input.value = cfg.url || 'http://127.0.0.1:8188';
+        await probe(input.value);
+    })();
+
+    testBtn.onclick = async () => {
+        const url = input.value.trim();
+        if (!url) { setStatus('Enter a URL first', 'warn'); return; }
+        setStatus('Probing...', 'muted');
+        testBtn.disabled = true;
+        try { await probe(url); } finally { testBtn.disabled = false; }
+    };
+
+    saveBtn.onclick = async () => {
+        const url = input.value.trim();
+        saveBtn.disabled = true;
+        try {
+            await localAI.setComfyuiUrl(url);
+            await probe(url);
+            onChange?.();
+        } finally { saveBtn.disabled = false; }
+    };
+
+    return wrap;
+}
+
+function ComfyuiModelCard(model) {
+    const card = document.createElement('div');
+    card.className = 'flex items-start justify-between gap-3 p-4 rounded-xl border border-white/5 bg-white/3';
+    const ready = !!model.ready;
+    card.innerHTML = `
+        <div class="flex flex-col gap-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-bold text-white truncate">${model.name}</span>
+                ${model.installed ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-primary/20 text-primary border border-primary/30">Installed</span>` : ''}
+                ${ready ? `<span class="text-green-400">${CheckIcon}</span>` : ''}
+            </div>
+            <p class="text-[11px] text-muted leading-relaxed">${model.description}</p>
+            <div class="flex items-center gap-1.5 flex-wrap mt-1">
+                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-primary/10 text-primary">IMAGE</span>
+                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-muted">via ComfyUI</span>
+                ${(model.tags || []).filter(t => !['installed'].includes(t)).map(t => `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-muted">${t}</span>`).join('')}
+            </div>
+        </div>
+        <div class="shrink-0 text-right">
+            <span class="text-[10px] font-bold ${ready ? 'text-green-400' : 'text-yellow-400'}">${ready ? 'Ready' : 'Start server'}</span>
+            ${!ready && model.unavailableReason ? `<p class="text-[10px] text-muted max-w-[12rem] mt-1">${model.unavailableReason}</p>` : ''}
+        </div>
+    `;
+    return card;
+}
+
 function ModelCard(model, onStateChange) {
     if (model.provider === 'wan2gp') return Wan2gpModelCard(model);
+    if (model.provider === 'bonsai') return BonsaiModelCard(model);
+    if (model.provider === 'comfyui') return ComfyuiModelCard(model);
     const card = document.createElement('div');
     card.className = 'flex flex-col gap-3 p-4 rounded-xl border border-white/5 bg-white/3 hover:border-white/10 transition-all';
 
@@ -362,6 +548,10 @@ export function LocalModelManager() {
 
     const wan2gpBar = Wan2gpConfigBar(() => renderModels());
     engineSection.appendChild(wan2gpBar);
+    const bonsaiBar = BonsaiConfigBar(() => renderModels());
+    engineSection.appendChild(bonsaiBar);
+    const comfyuiBar = ComfyuiConfigBar(() => renderModels());
+    engineSection.appendChild(comfyuiBar);
     root.appendChild(engineSection);
 
     // ── Section: models

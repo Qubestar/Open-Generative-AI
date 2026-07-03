@@ -1,8 +1,11 @@
 // Frontend-side local model catalog.
-// Two providers:
+// Three providers:
 //   - sdcpp: bundled engine, weights live on disk
 //   - wan2gp: user-run remote Gradio server
-// Mirrors electron/lib/modelCatalog.js (sd.cpp) and electron/lib/wan2gpProvider.js (wan2gp).
+//   - bonsai: installed Bonsai Image Studio FastAPI backend
+//   - comfyui: user-run local ComfyUI server with installed checkpoints
+// Mirrors electron/lib/modelCatalog.js, electron/lib/wan2gpProvider.js, and
+// electron/lib/bonsaiProvider.js / comfyuiProvider.js.
 export const LOCAL_MODEL_CATALOG = [
     // ── sd.cpp: Z-Image (Tongyi-MAI) ────────────────────────────────────────
     {
@@ -88,6 +91,37 @@ export const LOCAL_MODEL_CATALOG = [
         tags: ['sdxl', 'high-quality', 'versatile'],
     },
 
+    // ── Bonsai Image Studio: installed local image model ────────────────────
+    {
+        id: 'bonsai:image-4b-ternary-mlx',
+        name: 'Bonsai Image 4B Ternary',
+        description: 'Installed local FLUX-style image model from PrismML. Start Bonsai Image Studio, then generate from Vidmyo with no API key.',
+        type: 'image',
+        family: 'bonsai',
+        provider: 'bonsai',
+        backend: 'bonsai-ternary-mlx',
+        sizeGB: 4.0,
+        aspectRatios: ['1:1', '3:2', '2:3', '16:9', '9:16', '2:1', '1:2'],
+        defaultSteps: 4,
+        defaultGuidance: 3.5,
+        tags: ['installed', 'local', 'flux', 'apple-silicon'],
+        featured: true,
+    },
+    {
+        id: 'comfyui:sd15-pruned-ema',
+        name: 'Stable Diffusion 1.5 (ComfyUI)',
+        description: 'Installed ComfyUI checkpoint. Start ComfyUI, then generate locally from Vidmyo.',
+        type: 'image',
+        family: 'stable-diffusion',
+        provider: 'comfyui',
+        checkpoint: 'v1-5-pruned-emaonly.safetensors',
+        sizeGB: 4.0,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
+        defaultSteps: 20,
+        defaultGuidance: 7.5,
+        tags: ['installed', 'local', 'sd15', 'comfyui'],
+    },
+
     // ── Wan2GP: image models ────────────────────────────────────────────────
     {
         id: 'wan2gp:flux-dev',
@@ -170,6 +204,8 @@ export function getLocalModelById(id) {
 }
 
 export const isWan2gpModelId = (id) => getLocalModelById(id)?.provider === 'wan2gp';
+export const isBonsaiModelId = (id) => getLocalModelById(id)?.provider === 'bonsai';
+export const isComfyuiModelId = (id) => getLocalModelById(id)?.provider === 'comfyui';
 export const isLocalModelId  = (id) => !!getLocalModelById(id);
 
 export const localT2VModels = LOCAL_MODEL_CATALOG.filter(m => m.provider === 'wan2gp' && m.type === 'video' && !m.needsImage);

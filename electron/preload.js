@@ -27,6 +27,24 @@ contextBridge.exposeInMainWorld('localAI', {
         uploadFile: (payload) => ipcRenderer.invoke('wan2gp:upload-file', payload),
     },
 
+    // ── Bonsai Image Studio (local FastAPI backend) ───────────────────────
+    bonsai: {
+        getConfig:  () => ipcRenderer.invoke('bonsai:get-config'),
+        setUrl:     (url) => ipcRenderer.invoke('bonsai:set-url', url),
+        probe:      (url) => ipcRenderer.invoke('bonsai:probe', url),
+        listModels: () => ipcRenderer.invoke('bonsai:list-models'),
+        generate:   (params) => ipcRenderer.invoke('bonsai:generate', params),
+    },
+
+    // ── ComfyUI (local checkpoint server) ─────────────────────────────────
+    comfyui: {
+        getConfig:  () => ipcRenderer.invoke('comfyui:get-config'),
+        setUrl:     (url) => ipcRenderer.invoke('comfyui:set-url', url),
+        probe:      (url) => ipcRenderer.invoke('comfyui:probe', url),
+        listModels: () => ipcRenderer.invoke('comfyui:list-models'),
+        generate:   (params) => ipcRenderer.invoke('comfyui:generate', params),
+    },
+
     // Progress events — both engines emit on local-ai:progress
     onProgress: (callback) => {
         const listener = (_, data) => callback(data);
@@ -38,4 +56,17 @@ contextBridge.exposeInMainWorld('localAI', {
         ipcRenderer.on('local-ai:download-progress', listener);
         return () => ipcRenderer.removeListener('local-ai:download-progress', listener);
     },
+});
+
+// ── Local AI agent bridge ───────────────────────────────────────────────────
+// Detect/connect/launch coding agents already installed on the machine, and
+// bootstrap media-generation skills. See electron/lib/agents.js.
+contextBridge.exposeInMainWorld('agents', {
+    isElectron: true,
+    detect: () => ipcRenderer.invoke('agents:detect'),
+    authStatus: (agentId) => ipcRenderer.invoke('agents:authStatus', agentId),
+    login: (agentId) => ipcRenderer.invoke('agents:login', agentId),
+    launch: (agentId, cwd) => ipcRenderer.invoke('agents:launch', agentId, cwd),
+    setupMediaSkills: (opts) => ipcRenderer.invoke('agents:setupMediaSkills', opts),
+    openExternal: (url) => ipcRenderer.invoke('agents:openExternal', url),
 });

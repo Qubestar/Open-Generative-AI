@@ -1,5 +1,6 @@
 
 import { muapi } from '../lib/muapi.js';
+import { getSavedProviderKey } from '../lib/providers.js';
 import { CameraControls } from './CameraControls.js';
 import { buildNanoBananaPrompt, CAMERA_MAP, LENS_MAP, FOCAL_PERSPECTIVE, APERTURE_EFFECT } from '../lib/promptUtils.js';
 import { AuthModal } from './AuthModal.js';
@@ -537,7 +538,7 @@ export function CinemaStudio() {
         const basePrompt = textarea.value.trim();
         if (!basePrompt) return;
 
-        const apiKey = localStorage.getItem('muapi_key');
+        const apiKey = getSavedProviderKey('openrouter');
         if (!apiKey) {
             AuthModal(() => generateBtn.click());
             return;

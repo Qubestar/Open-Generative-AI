@@ -1,4 +1,5 @@
 import { muapi } from '../lib/muapi.js';
+import { getSavedProviderKey } from '../lib/providers.js';
 import {
     t2iModels, getAspectRatiosForModel, getResolutionsForModel, getQualityFieldForModel,
     i2iModels, getAspectRatiosForI2IModel, getResolutionsForI2IModel, getQualityFieldForI2IModel,
@@ -42,6 +43,7 @@ export function ImageStudio() {
     let useLocalModel = false;
     let selectedLocalModel = LOCAL_IMAGE_MODELS[0]?.id || null;
     let localGenProgress = 0; // 0–1
+    let applyLocalModelDefaults = () => {};
 
     // Advanced parameters state
     let negativePrompt = '';
@@ -66,6 +68,11 @@ export function ImageStudio() {
     const getCurrentAspectRatios = (id) => imageMode ? getAspectRatiosForI2IModel(id) : getAspectRatiosForModel(id);
     const getCurrentResolutions = (id) => imageMode ? getResolutionsForI2IModel(id) : getResolutionsForModel(id);
     const getCurrentQualityField = (id) => imageMode ? getQualityFieldForI2IModel(id) : getQualityFieldForModel(id);
+    const getActiveAspectRatios = () => {
+        if (useLocalModel) return getLocalModelById(selectedLocalModel)?.aspectRatios || ['1:1'];
+        return getCurrentAspectRatios(selectedModel);
+    };
+    const getLocalModelLabel = (model) => model ? `${model.name} · LOCAL` : 'Local model';
 
     // ==========================================
     // 1. HERO SECTION
@@ -220,9 +227,20 @@ export function ImageStudio() {
             // Reflect active model in the button label
             if (useLocalModel) {
                 const lm = getLocalModelById(selectedLocalModel);
-                if (lm) document.getElementById('model-btn-label').textContent = lm.name;
+                if (lm) {
+                    selectedAr = lm.aspectRatios?.[0] || '1:1';
+                    applyLocalModelDefaults(lm);
+                    document.getElementById('model-btn-label').textContent = getLocalModelLabel(lm);
+                    document.getElementById('ar-btn-label').textContent = selectedAr;
+                    qualityBtn.style.display = 'none';
+                }
             } else {
                 document.getElementById('model-btn-label').textContent = selectedModelName;
+                const remoteArs = getCurrentAspectRatios(selectedModel);
+                selectedAr = remoteArs[0] || selectedAr;
+                document.getElementById('ar-btn-label').textContent = selectedAr;
+                const validResolutions = getCurrentResolutions(selectedModel);
+                qualityBtn.style.display = validResolutions.length > 0 ? 'flex' : 'none';
             }
         };
         controlsLeft.appendChild(localToggleBtn);
@@ -623,6 +641,20 @@ export function ImageStudio() {
             stepsValue.textContent = steps;
         };
     }
+
+    applyLocalModelDefaults = (model) => {
+        if (!model) return;
+        if (typeof model.defaultSteps === 'number') {
+            steps = model.defaultSteps;
+            if (stepsSlider) stepsSlider.value = String(steps);
+            if (stepsValue) stepsValue.textContent = String(steps);
+        }
+        if (typeof model.defaultGuidance === 'number') {
+            guidanceScale = model.defaultGuidance;
+            if (guidanceSlider) guidanceSlider.value = String(guidanceScale);
+            if (guidanceValue) guidanceValue.textContent = String(guidanceScale);
+        }
+    };
     
     // Seed input
     const seedInput = advancedPanel.querySelector('#seed-input');
@@ -732,52 +764,77 @@ export function ImageStudio() {
             const renderModels = (filter = '') => {
                 list.innerHTML = '';
 
-                if (useLocalModel) {
-                    // ── Local model list (Wan2GP image-capable models only) ───
-                    const filtered = LOCAL_IMAGE_MODELS.filter(m =>
-                        m.name.toLowerCase().includes(filter.toLowerCase()) ||
-                        m.id.toLowerCase().includes(filter.toLowerCase())
-                    );
-                    if (filtered.length === 0) {
-                        list.innerHTML = `<div class="text-xs text-muted text-center py-4">No local models match</div>`;
-                        return;
-                    }
-                    filtered.forEach(m => {
+                const filterText = filter.toLowerCase();
+                const filteredLocalModels = LOCAL_IMAGE_MODELS.filter(m =>
+                    m.name.toLowerCase().includes(filterText) ||
+                    m.id.toLowerCase().includes(filterText) ||
+                    (m.provider || '').toLowerCase().includes(filterText) ||
+                    (m.family || '').toLowerCase().includes(filterText) ||
+                    'local'.includes(filterText)
+                ).sort((a, b) => {
+                    if (a.id === 'z-image-turbo') return -1;
+                    if (b.id === 'z-image-turbo') return 1;
+                    return 0;
+                });
+
+                const appendSectionLabel = (label) => {
+                    const section = document.createElement('div');
+                    section.className = 'text-[10px] font-bold text-secondary uppercase tracking-widest px-3 pt-2 pb-1';
+                    section.textContent = label;
+                    list.appendChild(section);
+                };
+
+                if (filteredLocalModels.length) {
+                    appendSectionLabel('Installed locally');
+                    filteredLocalModels.forEach(m => {
+                        const providerLabel = m.provider === 'bonsai'
+                            ? 'Bonsai'
+                            : (m.provider === 'comfyui'
+                                ? 'ComfyUI'
+                                : (m.provider === 'wan2gp' ? 'Wan2GP' : 'sd.cpp'));
+                        const familyLabel = m.family || m.type;
                         const item = document.createElement('div');
-                        item.className = `flex items-center justify-between p-3.5 hover:bg-white/5 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-white/5 ${selectedLocalModel === m.id ? 'bg-white/5 border-white/5' : ''}`;
+                        item.className = `flex items-center justify-between p-3.5 hover:bg-white/5 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-white/5 ${useLocalModel && selectedLocalModel === m.id ? 'bg-white/5 border-white/5' : ''}`;
                         item.innerHTML = `
                             <div class="flex items-center gap-3.5">
                                 <div class="w-10 h-10 ${m.featured ? 'bg-primary/10 text-primary' : 'bg-green-500/10 text-green-400'} border border-white/5 rounded-xl flex items-center justify-center font-black text-sm shadow-inner uppercase">${m.featured ? '⚡' : m.name.charAt(0)}</div>
                                 <div class="flex flex-col gap-0.5">
                                     <div class="flex items-center gap-1.5">
                                         <span class="text-xs font-bold text-white tracking-tight">${m.name}</span>
+                                        <span class="text-[9px] font-black px-1 py-0.5 rounded bg-green-500/15 text-green-300">LOCAL</span>
                                         ${m.featured ? '<span class="text-[9px] font-black px-1 py-0.5 rounded bg-primary/20 text-primary">FEATURED</span>' : ''}
                                     </div>
-                                    <span class="text-[10px] text-muted">${m.type.toUpperCase()} · ${m.family}</span>
+                                    <span class="text-[10px] text-muted">${providerLabel} · ${familyLabel.toUpperCase()}</span>
                                 </div>
                             </div>
-                            ${selectedLocalModel === m.id ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="4"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
+                            ${useLocalModel && selectedLocalModel === m.id ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="4"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
                         `;
                         item.onclick = (e) => {
                             e.stopPropagation();
+                            useLocalModel = true;
+                            if (localToggleBtn) {
+                                localToggleBtn.className = 'flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all border text-xs font-bold whitespace-nowrap bg-primary/20 border-primary/40 text-primary';
+                                localToggleBtn.textContent = '⚡ Local';
+                            }
                             selectedLocalModel = m.id;
-                            document.getElementById('model-btn-label').textContent = m.name;
-                            selectedAr = m.aspectRatios[0];
+                            applyLocalModelDefaults(m);
+                            document.getElementById('model-btn-label').textContent = getLocalModelLabel(m);
+                            selectedAr = m.aspectRatios?.[0] || '1:1';
                             document.getElementById('ar-btn-label').textContent = selectedAr;
                             qualityBtn.style.display = 'none';
                             closeDropdown();
                         };
                         list.appendChild(item);
                     });
-                    return;
                 }
 
                 // ── Remote (API) model list ───────────────────────────────────
-                const filtered = getCurrentModels().filter(m => m.name.toLowerCase().includes(filter.toLowerCase()) || m.id.toLowerCase().includes(filter.toLowerCase()));
+                const filtered = getCurrentModels().filter(m => m.name.toLowerCase().includes(filterText) || m.id.toLowerCase().includes(filterText));
+                if (filtered.length) appendSectionLabel('API models');
 
                 filtered.forEach(m => {
                     const item = document.createElement('div');
-                    item.className = `flex items-center justify-between p-3.5 hover:bg-white/5 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-white/5 ${selectedModel === m.id ? 'bg-white/5 border-white/5' : ''}`;
+                    item.className = `flex items-center justify-between p-3.5 hover:bg-white/5 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-white/5 ${!useLocalModel && selectedModel === m.id ? 'bg-white/5 border-white/5' : ''}`;
                     item.innerHTML = `
                         <div class="flex items-center gap-3.5">
                              <div class="w-10 h-10 ${m.family === 'kontext' ? 'bg-blue-500/10 text-blue-400' : m.family === 'effects' ? 'bg-purple-500/10 text-purple-400' : 'bg-primary/10 text-primary'} border border-white/5 rounded-xl flex items-center justify-center font-black text-sm shadow-inner uppercase">${m.name.charAt(0)}</div>
@@ -785,10 +842,15 @@ export function ImageStudio() {
                                 <span class="text-xs font-bold text-white tracking-tight">${m.name}</span>
                              </div>
                         </div>
-                        ${selectedModel === m.id ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="4"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
+                        ${!useLocalModel && selectedModel === m.id ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="4"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
                     `;
                     item.onclick = (e) => {
                         e.stopPropagation();
+                        useLocalModel = false;
+                        if (localToggleBtn) {
+                            localToggleBtn.className = 'flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all border text-xs font-bold whitespace-nowrap bg-white/5 border-white/5 text-white/60 hover:bg-white/10';
+                            localToggleBtn.textContent = '☁ API';
+                        }
                         selectedModel = m.id;
                         selectedModelName = m.name;
                         const availableArs = getCurrentAspectRatios(selectedModel);
@@ -825,7 +887,7 @@ export function ImageStudio() {
             const list = document.createElement('div');
             list.className = 'flex flex-col gap-1';
 
-            const availableArs = getCurrentAspectRatios(selectedModel);
+            const availableArs = getActiveAspectRatios();
             availableArs.forEach(r => {
                 const item = document.createElement('div');
                 item.className = 'flex items-center justify-between p-3.5 hover:bg-white/5 rounded-2xl cursor-pointer transition-all group';
@@ -1081,7 +1143,7 @@ export function ImageStudio() {
         const pending = getPendingJobs('image');
         if (!pending.length) return;
 
-        const apiKey = localStorage.getItem('muapi_key');
+        const apiKey = getSavedProviderKey('openrouter');
         if (!apiKey) return; // can't poll without key; jobs remain for next time
 
         const banner = document.createElement('div');
@@ -1235,7 +1297,7 @@ export function ImageStudio() {
         }
 
         // ── Remote API path ───────────────────────────────────────────────────
-        const apiKey = localStorage.getItem('muapi_key');
+        const apiKey = getSavedProviderKey('openrouter');
         if (!apiKey) {
             AuthModal(() => generateBtn.click());
             return;

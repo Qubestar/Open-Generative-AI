@@ -1,5 +1,7 @@
 import { getModelById, getVideoModelById, getI2IModelById, getI2VModelById, getV2VModelById, getLipSyncModelById } from './models.js';
 import { getActiveProviderId, getProviderById, getSavedProviderKey, buildProviderHeaders, appendProviderAuthToUrl } from './providers.js';
+import { openrouterClient } from './openrouterClient.js';
+import { falClient } from './falClient.js';
 
 export class MuapiClient {
     constructor() {
@@ -79,10 +81,19 @@ export class MuapiClient {
      * @param {string} [params.image_url] - If present, treats as Image-to-Image
      */
     async generateImage(params) {
-        const key = this.getKey();
-
-        // Resolve endpoint from model definition
         const modelInfo = getModelById(params.model);
+
+        // OpenRouter image models use OpenRouter's chat-completions image API.
+        if (modelInfo?.provider === 'openrouter') {
+            return openrouterClient.generateImage({
+                orModel: modelInfo.orModel,
+                prompt: params.prompt,
+                imageUrl: params.image_url,
+            });
+        }
+
+        const key = this.getKey();
+        // Resolve endpoint from model definition
         const endpoint = modelInfo?.endpoint || params.model;
         const url = `${this.baseUrl}/api/v1/${endpoint}`;
 
@@ -223,9 +234,20 @@ export class MuapiClient {
     }
 
     async generateVideo(params) {
-        const key = this.getKey();
-
         const modelInfo = getVideoModelById(params.model);
+
+        // OpenRouter video models use OpenRouter's async /videos API.
+        if (modelInfo?.provider === 'openrouter') {
+            return openrouterClient.generateVideo({
+                orModel: modelInfo.orModel,
+                prompt: params.prompt,
+                imageUrl: params.image_url,
+                onRequestId: params.onRequestId,
+                onTick: params.onTick,
+            });
+        }
+
+        const key = this.getKey();
         const endpoint = modelInfo?.endpoint || params.model;
         const url = `${this.baseUrl}/api/v1/${endpoint}`;
 
@@ -361,8 +383,20 @@ export class MuapiClient {
      * @param {string} [params.quality]
      */
     async generateI2V(params) {
-        const key = this.getKey();
         const modelInfo = getI2VModelById(params.model);
+
+        // OpenRouter image-to-video models use OpenRouter's async /videos API.
+        if (modelInfo?.provider === 'openrouter') {
+            return openrouterClient.generateVideo({
+                orModel: modelInfo.orModel,
+                prompt: params.prompt,
+                imageUrl: params.image_url,
+                onRequestId: params.onRequestId,
+                onTick: params.onTick,
+            });
+        }
+
+        const key = this.getKey();
         const endpoint = modelInfo?.endpoint || params.model;
         const url = `${this.baseUrl}/api/v1/${endpoint}`;
 
@@ -433,31 +467,16 @@ export class MuapiClient {
      * @returns {Promise<string>} The hosted URL of the uploaded file
      */
     async uploadFile(file) {
-        const key = this.getKey();
-        const url = `${this.baseUrl}/api/v1/upload_file`;
-
-        const formData = new FormData();
-        formData.append('file', file);
-
-        console.log('[Muapi] Uploading file:', file.name);
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'x-api-key': key },
-            body: formData
+        // MUAPI removed: there is no server-side upload endpoint anymore.
+        // OpenRouter accepts image inputs as data URLs directly, so we read the
+        // file locally and return a base64 data: URL. This works offline and
+        // feeds straight into OpenRouter's frame_images / image_url fields.
+        return await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Failed to read the selected file.'));
+            reader.readAsDataURL(file);
         });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`File upload failed: ${response.status} - ${errText.slice(0, 100)}`);
-        }
-
-        const data = await response.json();
-        console.log('[Muapi] Upload response:', data);
-
-        const fileUrl = data.url || data.file_url || data.data?.url;
-        if (!fileUrl) throw new Error('No URL returned from file upload');
-        return fileUrl;
     }
 
     /**
@@ -471,8 +490,20 @@ export class MuapiClient {
      * @param {string} [params.prompt] - Motion description (motion-control models)
      */
     async processV2V(params) {
-        const key = this.getKey();
         const modelInfo = getV2VModelById(params.model);
+
+        // fal.ai video-to-video editing (VACE, etc.).
+        if (modelInfo?.provider === 'fal') {
+            return falClient.editVideo({
+                falModel: modelInfo.falModel,
+                prompt: params.prompt,
+                videoUrl: params.video_url,
+                imageUrl: params.image_url,
+                hooks: { onRequestId: params.onRequestId, onTick: params.onTick },
+            });
+        }
+
+        const key = this.getKey();
         const endpoint = modelInfo?.endpoint || params.model;
         const url = `${this.baseUrl}/api/v1/${endpoint}`;
 

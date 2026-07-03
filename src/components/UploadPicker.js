@@ -1,4 +1,5 @@
 import { muapi } from '../lib/muapi.js';
+import { getSavedProviderKey } from '../lib/providers.js';
 import { AuthModal } from './AuthModal.js';
 import { getUploadHistory, saveUpload, removeUpload, generateThumbnail } from '../lib/uploadHistory.js';
 
@@ -324,7 +325,7 @@ export function createUploadPicker({ anchorContainer, onSelect, onClear, maxImag
         if (!files.length) return;
 
         if (needsKey()) {
-            const apiKey = localStorage.getItem('muapi_key');
+            const apiKey = getSavedProviderKey('openrouter');
             if (!apiKey) {
                 AuthModal(() => fileInput.click());
                 return;

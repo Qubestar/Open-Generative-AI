@@ -5,6 +5,7 @@ import { createUploadPicker } from './UploadPicker.js';
 import { savePendingJob, removePendingJob, getPendingJobs } from '../lib/pendingJobs.js';
 import { localAI, isLocalAIAvailable } from '../lib/localInferenceClient.js';
 import { isWan2gpModelId, getLocalModelById, localT2VModels, localI2VModels } from '../lib/localModels.js';
+import { getSavedProviderKey } from '../lib/providers.js';
 
 // Promotes a wan2gp catalog entry (lib/localModels.js shape) into the
 // `inputs`-shaped descriptor the Video Studio dropdowns/controls expect.
@@ -28,8 +29,16 @@ export function VideoStudio() {
     // reads from these arrays, so they need to be present from init.
     const localT2V = isLocalAIAvailable() ? localT2VModels.map(adaptLocalToVideoEntry) : [];
     const localI2V = isLocalAIAvailable() ? localI2VModels.map(adaptLocalToVideoEntry) : [];
-    const allT2V = [...t2vModels, ...localT2V];
-    const allI2V = [...i2vModels, ...localI2V];
+    // MUAPI removed from the video studio: only OpenRouter video models (+ any
+    // local Wan2GP models) are offered. Generation routes to OpenRouter's
+    // /videos API via MuapiClient.generateVideo's provider check.
+    const orT2V = t2vModels.filter((m) => m.provider === 'openrouter');
+    const orI2V = i2vModels.filter((m) => m.provider === 'openrouter');
+    const allT2V = [...orT2V, ...localT2V];
+    const allI2V = [...orI2V, ...localI2V];
+    // Video-to-video "tools" mode = fal.ai editing models (VACE). MUAPI v2v
+    // tools removed; fal powers footage editing.
+    const allV2V = v2vModels.filter((m) => m.provider === 'fal');
 
     // --- State ---
     const defaultModel = allT2V[0];
@@ -50,7 +59,7 @@ export function VideoStudio() {
     let v2vMode = false;   // true = video-to-video tools mode
     let uploadedVideoUrl = null;
 
-    const getCurrentModels = () => v2vMode ? v2vModels : (imageMode ? allI2V : allT2V);
+    const getCurrentModels = () => v2vMode ? allV2V : (imageMode ? allI2V : allT2V);
     // Local Wan2GP entries don't live in the Muapi-derived helpers, so we
     // resolve aspect ratios off the catalog when the selected id is local.
     const getCurrentAspectRatios = (id) => {
@@ -297,12 +306,8 @@ export function VideoStudio() {
         const file = e.target.files[0];
         if (!file) return;
 
-        const apiKey = localStorage.getItem('muapi_key');
-        if (!apiKey) {
-            AuthModal(() => videoFileInput.click());
-            return;
-        }
-
+        // Reading the file is local (data URL) — no key needed to upload. The
+        // provider key is checked at Generate time based on the chosen model.
         showVideoSpinner();
         try {
             const url = await muapi.uploadFile(file);
@@ -323,8 +328,8 @@ export function VideoStudio() {
                     imageMode = false;
                 }
                 v2vMode = true;
-                selectedModel = v2vModels[0].id;
-                selectedModelName = v2vModels[0].name;
+                selectedModel = allV2V[0].id;
+                selectedModelName = allV2V[0].name;
                 document.getElementById('v-model-btn-label').textContent = selectedModelName;
                 updateControlsForModel(selectedModel);
                 textarea.placeholder = 'Video ready — click Generate to remove watermark';
@@ -634,7 +639,7 @@ export function VideoStudio() {
                 filteredMain.forEach(m => list.appendChild(makeModelItem(m, false)));
 
                 // Video Tools section
-                const filteredV2V = v2vModels.filter(m => m.name.toLowerCase().includes(lf) || m.id.toLowerCase().includes(lf));
+                const filteredV2V = allV2V.filter(m => m.name.toLowerCase().includes(lf) || m.id.toLowerCase().includes(lf));
                 if (filteredV2V.length > 0) {
                     const sectionLabel = document.createElement('div');
                     sectionLabel.className = 'text-[10px] font-bold text-orange-400/70 uppercase tracking-widest px-3 py-2 mt-1 border-t border-white/5';
@@ -994,7 +999,7 @@ export function VideoStudio() {
         const pending = getPendingJobs('video');
         if (!pending.length) return;
 
-        const apiKey = localStorage.getItem('muapi_key');
+        const apiKey = getSavedProviderKey('openrouter');
         if (!apiKey) return; // can't poll without key; jobs remain for next time
 
         const banner = document.createElement('div');
@@ -1116,11 +1121,15 @@ export function VideoStudio() {
 
         const isLocal = isWan2gpModelId(selectedModel);
 
-        // Local Wan2GP generations don't go through Muapi — skip the auth gate.
+        // Local Wan2GP generations run on-device. Cloud models need the key for
+        // their provider — OpenRouter for generation, fal.ai for v2v editing.
         if (!isLocal) {
-            const apiKey = localStorage.getItem('muapi_key');
-            if (!apiKey) {
-                AuthModal(() => generateBtn.click());
+            const needsFal = model?.provider === 'fal';
+            const providerId = needsFal ? 'fal' : 'openrouter';
+            const providerName = needsFal ? 'fal.ai' : 'OpenRouter';
+            if (!getSavedProviderKey(providerId)) {
+                alert(`Add your ${providerName} API key in Settings → Providers to generate.`);
+                window.dispatchEvent(new CustomEvent('navigate', { detail: { page: 'settings' } }));
                 return;
             }
         }

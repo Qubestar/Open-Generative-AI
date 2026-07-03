@@ -1,5 +1,6 @@
 import { LocalModelManager } from './LocalModelManager.js';
 import { isLocalAIAvailable } from '../lib/localInferenceClient.js';
+import { agentsClient, isAgentBridgeAvailable } from '../lib/agentsClient.js';
 import {
     PROVIDER_CATEGORIES,
     getAllProviders,
@@ -38,6 +39,11 @@ export function SettingsModal(onClose) {
     ];
 
     let activeTab = 'providers';
+
+    // Real detection results from the Electron agent bridge, keyed by provider id.
+    // Populated lazily when the Integrations tab is opened in the desktop app.
+    let agentInfo = {};
+    let agentDetectStarted = false;
 
     const tabBar = document.createElement('div');
     tabBar.style.cssText = 'display:flex;gap:0.25rem;padding:0.75rem 1.5rem 0;border-bottom:1px solid rgba(255,255,255,0.06);flex-shrink:0;';
@@ -99,68 +105,12 @@ export function SettingsModal(onClose) {
 
         const foot = card.querySelector('.card-foot');
 
-        // ── OAuth / Integration card: Connect + Launch buttons ──
-        if (prov.type === 'oauth') {
-            const isConn = getIntegrationConnected(prov.id);
-            const status = document.createElement('div');
-            status.style.cssText = 'display:flex;align-items:center;gap:0.5rem;';
-            status.innerHTML = `
-                <span style="font-size:0.7rem;color:${isConn ? '#7c3aed' : 'rgba(255,255,255,0.3)'};">${isConn ? '● Connected' : '● Not connected'}</span>
-                ${prov.cliCommand ? `<code style="font-size:0.65rem;color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.05);padding:2px 6px;border-radius:4px;">${prov.cliCommand}</code>` : ''}
-            `;
-            foot.appendChild(status);
-
-            const btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex;gap:0.5rem;margin-top:0.25rem;';
-
-            const connectBtn = document.createElement('button');
-            connectBtn.textContent = isConn ? 'Disconnect' : 'Connect';
-            connectBtn.style.cssText = `
-                flex:1;padding:0.4rem 0.75rem;border-radius:0.5rem;border:1px solid rgba(255,255,255,0.1);
-                background:${isConn ? 'rgba(255,255,255,0.05)' : (prov.color || '#7c3aed') + '20'};
-                color:${isConn ? 'rgba(255,255,255,0.5)' : (prov.color || '#fff')};
-                font-size:0.75rem;font-weight:700;cursor:pointer;
-            `;
-            connectBtn.onclick = (e) => {
-                e.stopPropagation();
-                if (isConn) {
-                    setIntegrationConnected(prov.id, false);
-                    localStorage.removeItem(`vidmyo_key_${prov.id}`);
-                    // Refresh
-                    switchTab('integrations');
-                } else {
-                    // Open auth/docs in new tab
-                    window.open(prov.oauthUrl || prov.docsUrl, '_blank');
-                    // Show a prompt for the API key since OAuth isn't real for CLI tools
-                    const key = prompt(`Paste your ${prov.name} API key or access token:`);
-                    if (key) {
-                        setSavedProviderKey(prov.id, key.trim());
-                        setIntegrationConnected(prov.id, true);
-                    }
-                    switchTab('integrations');
-                }
-            };
-
-            const launchBtn = document.createElement('button');
-            launchBtn.textContent = 'Launch CLI';
-            launchBtn.style.cssText = `
-                flex:1;padding:0.4rem 0.75rem;border-radius:0.5rem;border:1px solid rgba(255,255,255,0.1);
-                background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);
-                font-size:0.75rem;font-weight:700;cursor:pointer;
-            `;
-            launchBtn.title = prov.cliCommand || '';
-            launchBtn.onclick = (e) => {
-                e.stopPropagation();
-                if (!prov.cliCommand) return;
-                // Copy to clipboard
-                navigator.clipboard.writeText(prov.cliCommand);
-                launchBtn.textContent = 'Copied!';
-                setTimeout(() => launchBtn.textContent = 'Launch CLI', 1200);
-            };
-
-            btnRow.appendChild(connectBtn);
-            btnRow.appendChild(launchBtn);
-            foot.appendChild(btnRow);
+        // ── OAuth / Integration card ──
+        if (prov.type === 'oauth' && isAgentBridgeAvailable()) {
+            buildRealAgentFoot(prov, foot);
+        }
+        else if (prov.type === 'oauth') {
+            buildFallbackAgentFoot(prov, foot);
         }
         // ── Direct / Aggregator card: API key input ──
         else {
@@ -203,6 +153,150 @@ export function SettingsModal(onClose) {
         return card;
     }
 
+    // ── Helper: small pill button used in agent cards ──
+    function mkAgentBtn(label, prov, primary) {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        const accent = prov.color || '#7c3aed';
+        btn.style.cssText = `
+            flex:1;min-width:7rem;padding:0.4rem 0.75rem;border-radius:0.5rem;border:1px solid rgba(255,255,255,0.1);
+            background:${primary ? accent + '20' : 'rgba(255,255,255,0.05)'};
+            color:${primary ? accent : 'rgba(255,255,255,0.5)'};
+            font-size:0.72rem;font-weight:700;cursor:pointer;white-space:nowrap;
+        `;
+        return btn;
+    }
+
+    // ── Helper: status line built with textContent (no innerHTML) ──
+    function mkStatusLine(label, labelColor, versionText) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;';
+        const dot = document.createElement('span');
+        dot.style.cssText = `font-size:0.7rem;color:${labelColor};`;
+        dot.textContent = `● ${label}`;
+        wrap.appendChild(dot);
+        if (versionText) {
+            const code = document.createElement('code');
+            code.style.cssText = 'font-size:0.62rem;color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.05);padding:2px 6px;border-radius:4px;';
+            code.textContent = `v${versionText}`;
+            wrap.appendChild(code);
+        }
+        return wrap;
+    }
+
+    // ── Real agent card (desktop app) — uses the Electron bridge ──
+    function buildRealAgentFoot(prov, foot) {
+        const info = agentInfo[prov.id];
+        const accent = prov.color || '#7c3aed';
+
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;';
+
+        if (!info) {
+            foot.appendChild(mkStatusLine('Checking…', 'rgba(255,255,255,0.3)'));
+            return;
+        }
+
+        if (!info.installed) {
+            foot.appendChild(mkStatusLine('Not installed on this Mac', 'rgba(255,255,255,0.3)'));
+            const installBtn = mkAgentBtn('Install guide', prov, true);
+            installBtn.onclick = (e) => { e.stopPropagation(); agentsClient.openExternal(prov.docsUrl); };
+            const copyBtn = mkAgentBtn('Copy install cmd', prov, false);
+            copyBtn.onclick = (e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(info.installCmd || prov.cliCommand || '');
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => (copyBtn.textContent = 'Copy install cmd'), 1200);
+            };
+            btnRow.appendChild(installBtn);
+            btnRow.appendChild(copyBtn);
+            foot.appendChild(btnRow);
+            return;
+        }
+
+        const connected = info.authed;
+        foot.appendChild(mkStatusLine(
+            connected ? 'Connected' : 'Installed · not signed in',
+            connected ? accent : 'rgba(255,255,255,0.55)',
+            info.version,
+        ));
+
+        const connectBtn = mkAgentBtn(connected ? 'Re-login' : 'Connect', prov, !connected);
+        connectBtn.onclick = async (e) => {
+            e.stopPropagation();
+            const prev = connectBtn.textContent;
+            connectBtn.textContent = 'Opening terminal…';
+            const r = await agentsClient.login(prov.id);
+            connectBtn.textContent = r && r.ok ? 'Terminal opened ✓' : 'Failed';
+            setTimeout(() => { connectBtn.textContent = prev; switchTab('integrations'); }, 1600);
+        };
+
+        const launchBtn = mkAgentBtn('Launch', prov, false);
+        launchBtn.onclick = async (e) => {
+            e.stopPropagation();
+            launchBtn.textContent = 'Opening…';
+            await agentsClient.launch(prov.id);
+            setTimeout(() => (launchBtn.textContent = 'Launch'), 1200);
+        };
+
+        const skillsBtn = mkAgentBtn('Set up media skills', prov, false);
+        skillsBtn.onclick = async (e) => {
+            e.stopPropagation();
+            skillsBtn.textContent = 'Opening…';
+            await agentsClient.setupMediaSkills({ muapiKey: getSavedProviderKey('muapi') });
+            setTimeout(() => (skillsBtn.textContent = 'Set up media skills'), 1400);
+        };
+
+        btnRow.appendChild(connectBtn);
+        btnRow.appendChild(launchBtn);
+        btnRow.appendChild(skillsBtn);
+        foot.appendChild(btnRow);
+    }
+
+    // ── Fallback agent card (browser / hosted) — original link-out flow ──
+    function buildFallbackAgentFoot(prov, foot) {
+        const isConn = getIntegrationConnected(prov.id);
+        foot.appendChild(mkStatusLine(
+            isConn ? 'Connected — Desktop app only' : 'Not connected — Desktop app only',
+            isConn ? '#7c3aed' : 'rgba(255,255,255,0.3)',
+        ));
+
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:0.5rem;margin-top:0.25rem;';
+
+        const connectBtn = mkAgentBtn(isConn ? 'Disconnect' : 'Connect', prov, !isConn);
+        connectBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (isConn) {
+                setIntegrationConnected(prov.id, false);
+                localStorage.removeItem(`vidmyo_key_${prov.id}`);
+                switchTab('integrations');
+            } else {
+                window.open(prov.oauthUrl || prov.docsUrl, '_blank');
+                const key = prompt(`Paste your ${prov.name} API key or access token:`);
+                if (key) {
+                    setSavedProviderKey(prov.id, key.trim());
+                    setIntegrationConnected(prov.id, true);
+                }
+                switchTab('integrations');
+            }
+        };
+
+        const launchBtn = mkAgentBtn('Copy CLI', prov, false);
+        launchBtn.title = prov.cliCommand || '';
+        launchBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (!prov.cliCommand) return;
+            navigator.clipboard.writeText(prov.cliCommand);
+            launchBtn.textContent = 'Copied!';
+            setTimeout(() => (launchBtn.textContent = 'Copy CLI'), 1200);
+        };
+
+        btnRow.appendChild(connectBtn);
+        btnRow.appendChild(launchBtn);
+        foot.appendChild(btnRow);
+    }
+
     // ── Providers Panel (grouped by category) ──
     const providersPanel = document.createElement('div');
     providersPanel.style.cssText = 'display:flex;flex-direction:column;gap:0.5rem;';
@@ -241,8 +335,6 @@ export function SettingsModal(onClose) {
                 const inpt = providersPanel.querySelector(`input[data-pid="${p.id}"]`);
                 if (inpt) setSavedProviderKey(p.id, inpt.value.trim());
             });
-            const muapiKey = getSavedProviderKey('muapi');
-            if (muapiKey) localStorage.setItem('muapi_key', muapiKey);
             close();
         };
     }
@@ -259,18 +351,34 @@ export function SettingsModal(onClose) {
             return;
         }
 
+        // In the desktop app, scan the machine for installed agent CLIs once,
+        // then re-render with real status. In the browser this is skipped.
+        if (isAgentBridgeAvailable() && !agentDetectStarted) {
+            agentDetectStarted = true;
+            agentsClient.detect().then((res) => {
+                if (res && res.ok && Array.isArray(res.agents)) {
+                    res.agents.forEach((a) => { agentInfo[a.id] = a; });
+                }
+                if (activeTab === 'integrations') renderIntegrationsPanel();
+            });
+        }
+
         integrationsPanel.appendChild(categoryHeader('Agent Integrations', intProvs.length));
         intProvs.forEach(p => integrationsPanel.appendChild(buildProviderCard(p)));
 
         const info = document.createElement('div');
         info.style.cssText = 'margin-top:0.75rem;padding:1rem;border-radius:0.5rem;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);';
-        info.innerHTML = `
-            <h4 style="font-size:0.75rem;font-weight:700;color:rgba(255,255,255,0.5);margin:0 0 0.5rem 0;">About Integrations</h4>
-            <p style="font-size:0.7rem;color:rgba(255,255,255,0.35);margin:0;line-height:1.5;">
-                Connect coding agents like Claude Code, Codex, and Hermes to enable AI-assisted workflows inside Vidmyo.
-                These agents run locally on your machine via CLI. Click "Launch CLI" to copy the install command.
-            </p>
-        `;
+        const infoBody = isAgentBridgeAvailable()
+            ? 'Vidmyo detects coding agents already installed on this Mac (Claude Code, Codex, Gemini, Hermes, OpenCode). "Connect" opens that agent\'s own sign-in (e.g. <code>codex login</code> runs the real OpenAI OAuth). "Set up media skills" installs the Generative-Media-Skills wired to your Muapi key so the agent can generate images and video from its terminal.'
+            : 'Connect coding agents like Claude Code, Codex, and Gemini to enable AI-assisted media workflows. Detection, sign-in, and launching require the Vidmyo desktop app.';
+        const h4 = document.createElement('h4');
+        h4.style.cssText = 'font-size:0.75rem;font-weight:700;color:rgba(255,255,255,0.5);margin:0 0 0.5rem 0;';
+        h4.textContent = 'About Integrations';
+        const p = document.createElement('p');
+        p.style.cssText = 'font-size:0.7rem;color:rgba(255,255,255,0.35);margin:0;line-height:1.5;';
+        p.innerHTML = infoBody; // static, app-authored copy only
+        info.appendChild(h4);
+        info.appendChild(p);
         integrationsPanel.appendChild(info);
 
         // Save / Cancel
@@ -324,12 +432,17 @@ export function SettingsModal(onClose) {
         }
     };
 
-    switchTab('providers');
-
+    // `close` must be defined BEFORE the first switchTab() call: renderProvidersPanel
+    // (and renderIntegrationsPanel) bind `onclick = close`, and the initial
+    // switchTab('providers') runs that render. Declaring it later left `close` in
+    // its temporal dead zone, throwing "Cannot access 'close' before initialization"
+    // and silently preventing the Settings modal from ever opening.
     const close = () => {
         if (document.body.contains(overlay)) document.body.removeChild(overlay);
         if (onClose) onClose();
     };
+
+    switchTab('providers');
 
     header.querySelector('#settings-close-btn').onclick = close;
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });

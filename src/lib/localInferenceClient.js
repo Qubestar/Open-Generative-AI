@@ -58,16 +58,46 @@ class LocalInferenceClient {
         });
     }
 
-    // ── Unified model list (both providers merged) ────────────────────────
+    // ── Bonsai Image Studio APIs ─────────────────────────────────────────
+    async getBonsaiConfig() {
+        if (!isLocalAIAvailable()) return { url: '' };
+        return window.localAI.bonsai.getConfig();
+    }
+    async setBonsaiUrl(url) {
+        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
+        return window.localAI.bonsai.setUrl(url);
+    }
+    async probeBonsai(url) {
+        if (!isLocalAIAvailable()) return { ok: false, error: 'Not in desktop app' };
+        return window.localAI.bonsai.probe(url);
+    }
+    async getComfyuiConfig() {
+        if (!isLocalAIAvailable()) return { url: '' };
+        return window.localAI.comfyui.getConfig();
+    }
+    async setComfyuiUrl(url) {
+        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
+        return window.localAI.comfyui.setUrl(url);
+    }
+    async probeComfyui(url) {
+        if (!isLocalAIAvailable()) return { ok: false, error: 'Not in desktop app' };
+        return window.localAI.comfyui.probe(url);
+    }
+
+    // ── Unified model list (all local providers merged) ───────────────────
     async listModels() {
         if (!isLocalAIAvailable()) return [];
-        const [sdcpp, wan2gp] = await Promise.all([
+        const [sdcpp, wan2gp, bonsai, comfyui] = await Promise.all([
             window.localAI.listModels(),
             window.localAI.wan2gp.listModels().catch(() => []),
+            window.localAI.bonsai.listModels().catch(() => []),
+            window.localAI.comfyui.listModels().catch(() => []),
         ]);
         return [
             ...sdcpp.map(m => ({ ...m, provider: m.provider || 'sdcpp' })),
             ...wan2gp,
+            ...bonsai,
+            ...comfyui,
         ];
     }
 
@@ -77,6 +107,12 @@ class LocalInferenceClient {
         const model = getLocalModelById(params.model);
         if (model?.provider === 'wan2gp') {
             return window.localAI.wan2gp.generate(params);
+        }
+        if (model?.provider === 'bonsai') {
+            return window.localAI.bonsai.generate(params);
+        }
+        if (model?.provider === 'comfyui') {
+            return window.localAI.comfyui.generate(params);
         }
         return window.localAI.generate(params);
     }
