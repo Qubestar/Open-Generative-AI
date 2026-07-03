@@ -1,0 +1,52 @@
+# Vidmyo — Session Handoff (2026-07-03, Claude Fable 5)
+
+Read this first, then: `docs/product/2026-07-03-vidmyo-product-architecture-package.md`
+(the full plan; §14 = approved decisions + what's already executed) and
+`/Volumes/My Lexar/Obsidian/Omi/Omi/agent-shared/vidmyo.md` (cross-agent log).
+
+## Where things stand
+
+Branch `feat/providers-agents-dock`, all work committed, `npm run vite:build` green:
+
+| Commit | What |
+|---|---|
+| `5610fa0` | Baseline snapshot of previously-uncommitted feature work |
+| `c48b313` | **Removed local image gen** (sd.cpp, Bonsai, ComfyUI). Wan2GP kept |
+| `89a675e` | Security: `webSecurity:true` + `net:fetch` main-process proxy; keys → OS keychain (safeStorage) with localStorage migration; agents key-leak fix |
+| `36d4f28` | Fresh-clone bootstrap without submodules; README truth pass (open-core wording) |
+| `368a037` | Product-package addendum: approved tiers, Paddle decision, executed slice |
+
+Milestone 1 is **done except**: single provider catalog (deliberately deferred into
+`packages/core`, M2) and one live verification (below).
+
+## Approved decisions (do not re-litigate)
+
+- **Pricing:** Free (open-source core) / Creator $19/mo / Pro $49/mo / founding $12/mo ×200. Tier contents: package §14.3.
+- **Payments:** Paddle at launch (Luke has an account). Revisit ≈$5k MRR (Polar/Creem/Dodo).
+- **Image quality bar:** Google Flow (model choice incl. Nano Banana 2 Pro) + professional APIs + agents. **Never re-add sd.cpp/Bonsai/ComfyUI.** Flow provider ships in the Creator tier.
+- **Wedge:** Story Studio faceless doodle MVP (pipeline exists as the external `faceless-doodle-video` skill; port it, don't reinvent).
+- **Vite/Electron = canonical desktop surface;** Next.js surface frozen (Luke hasn't objected).
+- **Higgsfield:** integrate via its official hosted MCP (`https://mcp.higgsfield.ai/mcp`, OAuth) — no browser automation, ever.
+- **ElevenLabs:** Luke already has the affiliate link — ask him for it when building the voiceover card (M8). Affiliate must be disclosed and never functionally required.
+- Standing rules: never use `gflow-cli`/`cua-driver`; scene selection by explicit `sNNN` ID only; one Flow scene at a time; verify downloads on disk + visually.
+
+## Architecture invariants introduced this session (keep them)
+
+- Renderer cloud requests go `src/lib/apiFetch.js` → `window.localNet.fetch` → `electron/lib/netProxy.js` (main-process fetch; https-only + private-host http). Do **not** add plain `fetch()` to cloud APIs in the desktop path — it will hit CORS now that webSecurity is on.
+- Provider keys come from the OS keychain via `initSecureKeys()` (in-memory cache keeps `getSavedProviderKey` synchronous). Do not reintroduce localStorage key reads.
+- `electron/lib/secrets.js` IPC: `secrets:available|get-all|set`. Preload surfaces: `localAI` (Wan2GP only), `secureKeys`, `localNet`, `agents`.
+
+## Immediate next steps (in order)
+
+1. **Verify live:** launch the app (`npm run electron:dev`), save a real key (confirm it lands in `userData/secure-keys.json` encrypted, not localStorage), generate one image via fal/OpenRouter — proves the webSecurity+proxy path. If a provider fails, the fix belongs in netProxy/apiFetch, not in loosening webSecurity.
+2. **M2 — `packages/core`:** single provider catalog (merge the drifted `src/lib/providers.js` ↔ `packages/studio/src/providers.js`, muapi entry included), job runner with durable IDs, project manifests (`project.json` with `sNNN` scenes — schema in package §6). Pure Node ESM, no Electron imports.
+3. **M3 — Story Studio MVP** (doodle template; port the external skill pipeline: script → Kokoro TTS → beat timing → images → ffmpeg assembly → outro). First task: port-feasibility check of the skill's components.
+4. Then M4 CLI/MCP exposure, M5 agent session briefs, Flow browser provider (raised priority, Creator tier).
+
+## Known debts / cautions
+
+- Graphify graph is stale: `graphify update .` refuses (651 vs 715 nodes after legitimate deletions); the CLI has no force flag — needs a forced rebuild via the Python API (`force=True`). Don't guess CLI flags (logged mistake 2026-06-04).
+- Next.js surface (`app/` + `packages/studio`) still references removed concepts in its own copies — harmless while frozen; unify when `packages/core` lands.
+- No root test script exists. `mcp/smoke.mjs` needs Video Delta running (`python -m videodelta.api`, port 7861).
+- README download links point at v1.0.9 assets named `Open.Generative.AI-*` — correct until a new release is cut.
+- `.env` exists at repo root: never read or print its values.
