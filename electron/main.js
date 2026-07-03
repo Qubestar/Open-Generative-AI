@@ -1,9 +1,6 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
-const { register: registerLocalInference } = require('./lib/localInference');
 const { register: registerWan2gp } = require('./lib/wan2gpProvider');
-const { register: registerBonsai } = require('./lib/bonsaiProvider');
-const { register: registerComfyui } = require('./lib/comfyuiProvider');
 const { register: registerAgents } = require('./lib/agents');
 
 // Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1 which
@@ -73,10 +70,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
     createWindow();
-    registerLocalInference();
     registerWan2gp();
-    registerBonsai();
-    registerComfyui();
     registerAgents();
 
     app.on('activate', () => {

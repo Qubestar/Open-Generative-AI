@@ -1,127 +1,12 @@
 // Frontend-side local model catalog.
-// Three providers:
-//   - sdcpp: bundled engine, weights live on disk
-//   - wan2gp: user-run remote Gradio server
-//   - bonsai: installed Bonsai Image Studio FastAPI backend
-//   - comfyui: user-run local ComfyUI server with installed checkpoints
-// Mirrors electron/lib/modelCatalog.js, electron/lib/wan2gpProvider.js, and
-// electron/lib/bonsaiProvider.js / comfyuiProvider.js.
+// One provider remains:
+//   - wan2gp: user-run remote Gradio server (bring-your-own GPU box)
+// Bundled low-quality local image generation (sd.cpp SD1.5/SDXL, Bonsai,
+// ComfyUI SD1.5) was removed 2026-07-03 — Vidmyo targets high-quality image
+// sources only (Google Flow, professional APIs, agents). Wan2GP stays because
+// it serves modern models (Flux, Qwen Image, Wan 2.2, Hunyuan, LTX) on the
+// user's own server. Mirrors electron/lib/wan2gpProvider.js.
 export const LOCAL_MODEL_CATALOG = [
-    // ── sd.cpp: Z-Image (Tongyi-MAI) ────────────────────────────────────────
-    {
-        id: 'z-image-turbo',
-        name: 'Z-Image Turbo',
-        description: 'WaveSpeed\'s featured local model — 6B params, ultra-fast 8-step generation. No API key needed.',
-        type: 'z-image',
-        provider: 'sdcpp',
-        filename: 'z_image_turbo-Q4_K.gguf',
-        sizeGB: 3.4,
-        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
-        defaultSteps: 8,
-        defaultGuidance: 1.0,
-        tags: ['turbo', 'fast', 'local', 'featured'],
-        featured: true,
-    },
-    {
-        id: 'z-image-base',
-        name: 'Z-Image Base',
-        description: 'Full-quality 6B parameter model from Tongyi-MAI — higher detail, 50-step generation.',
-        type: 'z-image',
-        provider: 'sdcpp',
-        filename: 'Z-Image-Q4_K_M.gguf',
-        sizeGB: 3.5,
-        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
-        defaultSteps: 50,
-        defaultGuidance: 7.5,
-        tags: ['high-quality', 'local', 'detailed'],
-        featured: true,
-    },
-    // ── sd.cpp: SD 1.5 (small, M2-friendly) ─────────────────────────────────
-    {
-        id: 'dreamshaper-8',
-        name: 'Dreamshaper 8',
-        description: 'Versatile SD 1.5 model — great for portraits, landscapes, and artistic styles.',
-        type: 'sd1',
-        provider: 'sdcpp',
-        filename: 'DreamShaper_8_pruned.safetensors',
-        sizeGB: 2.1,
-        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
-        defaultSteps: 20,
-        defaultGuidance: 7.5,
-        tags: ['photorealistic', 'artistic', 'versatile'],
-    },
-    {
-        id: 'realistic-vision-v51',
-        name: 'Realistic Vision v5.1',
-        description: 'Highly photorealistic people and scenes, based on SD 1.5.',
-        type: 'sd1',
-        provider: 'sdcpp',
-        filename: 'realisticVisionV51_v51VAE.safetensors',
-        sizeGB: 2.1,
-        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
-        defaultSteps: 25,
-        defaultGuidance: 7,
-        tags: ['photorealistic', 'portraits', 'people'],
-    },
-    {
-        id: 'anything-v5',
-        name: 'Anything v5',
-        description: 'High quality anime and illustration style image generation.',
-        type: 'sd1',
-        provider: 'sdcpp',
-        filename: 'Anything-v5.0-PRT.safetensors',
-        sizeGB: 2.1,
-        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
-        defaultSteps: 20,
-        defaultGuidance: 7,
-        tags: ['anime', 'illustration', 'artistic'],
-    },
-    // ── sd.cpp: SDXL ────────────────────────────────────────────────────────
-    {
-        id: 'stable-diffusion-xl-base',
-        name: 'SDXL Base 1.0',
-        description: 'Official Stable Diffusion XL base model — higher resolution, excellent quality.',
-        type: 'sdxl',
-        provider: 'sdcpp',
-        filename: 'sd_xl_base_1.0.safetensors',
-        sizeGB: 6.9,
-        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
-        defaultSteps: 30,
-        defaultGuidance: 7.5,
-        tags: ['sdxl', 'high-quality', 'versatile'],
-    },
-
-    // ── Bonsai Image Studio: installed local image model ────────────────────
-    {
-        id: 'bonsai:image-4b-ternary-mlx',
-        name: 'Bonsai Image 4B Ternary',
-        description: 'Installed local FLUX-style image model from PrismML. Start Bonsai Image Studio, then generate from Vidmyo with no API key.',
-        type: 'image',
-        family: 'bonsai',
-        provider: 'bonsai',
-        backend: 'bonsai-ternary-mlx',
-        sizeGB: 4.0,
-        aspectRatios: ['1:1', '3:2', '2:3', '16:9', '9:16', '2:1', '1:2'],
-        defaultSteps: 4,
-        defaultGuidance: 3.5,
-        tags: ['installed', 'local', 'flux', 'apple-silicon'],
-        featured: true,
-    },
-    {
-        id: 'comfyui:sd15-pruned-ema',
-        name: 'Stable Diffusion 1.5 (ComfyUI)',
-        description: 'Installed ComfyUI checkpoint. Start ComfyUI, then generate locally from Vidmyo.',
-        type: 'image',
-        family: 'stable-diffusion',
-        provider: 'comfyui',
-        checkpoint: 'v1-5-pruned-emaonly.safetensors',
-        sizeGB: 4.0,
-        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
-        defaultSteps: 20,
-        defaultGuidance: 7.5,
-        tags: ['installed', 'local', 'sd15', 'comfyui'],
-    },
-
     // ── Wan2GP: image models ────────────────────────────────────────────────
     {
         id: 'wan2gp:flux-dev',
@@ -204,8 +89,6 @@ export function getLocalModelById(id) {
 }
 
 export const isWan2gpModelId = (id) => getLocalModelById(id)?.provider === 'wan2gp';
-export const isBonsaiModelId = (id) => getLocalModelById(id)?.provider === 'bonsai';
-export const isComfyuiModelId = (id) => getLocalModelById(id)?.provider === 'comfyui';
 export const isLocalModelId  = (id) => !!getLocalModelById(id);
 
 export const localT2VModels = LOCAL_MODEL_CATALOG.filter(m => m.provider === 'wan2gp' && m.type === 'video' && !m.needsImage);

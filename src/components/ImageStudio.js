@@ -37,8 +37,8 @@ export function ImageStudio() {
     let imageMode = false; // false = t2i models, true = i2i models
 
     // Local inference state — only image-capable models surface here.
-    // sd.cpp uses type='sd1'|'sdxl'|'z-image'; Wan2GP image models use type='image'.
-    // Wan2GP video models (type='video') are hidden from ImageStudio.
+    // Wan2GP image models use type='image'; its video models (type='video')
+    // are hidden from ImageStudio.
     const LOCAL_IMAGE_MODELS = LOCAL_MODEL_CATALOG.filter(m => m.type !== 'video');
     let useLocalModel = false;
     let selectedLocalModel = LOCAL_IMAGE_MODELS[0]?.id || null;
@@ -787,11 +787,7 @@ export function ImageStudio() {
                 if (filteredLocalModels.length) {
                     appendSectionLabel('Installed locally');
                     filteredLocalModels.forEach(m => {
-                        const providerLabel = m.provider === 'bonsai'
-                            ? 'Bonsai'
-                            : (m.provider === 'comfyui'
-                                ? 'ComfyUI'
-                                : (m.provider === 'wan2gp' ? 'Wan2GP' : 'sd.cpp'));
+                        const providerLabel = 'Wan2GP';
                         const familyLabel = m.family || m.type;
                         const item = document.createElement('div');
                         item.className = `flex items-center justify-between p-3.5 hover:bg-white/5 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-white/5 ${useLocalModel && selectedLocalModel === m.id ? 'bg-white/5 border-white/5' : ''}`;

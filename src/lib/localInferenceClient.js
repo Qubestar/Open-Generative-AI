@@ -1,36 +1,15 @@
 // Frontend client for local inference — wraps window.localAI (Electron IPC).
-// Two providers live behind the same surface:
-//   - sd.cpp: bundled engine, downloads weights to disk, runs locally
+// One provider lives behind this surface:
 //   - wan2gp: user-run Gradio server, generation is remote HTTP
-// Provider is read off the model entry's `provider` field.
+// The bundled sd.cpp engine and the Bonsai/ComfyUI bridges were removed
+// 2026-07-03 (quality bar: Vidmyo image generation targets Google Flow and
+// professional APIs; Wan2GP stays for bring-your-own-GPU Flux/Qwen/video).
 
 import { getLocalModelById } from './localModels.js';
 
 export const isLocalAIAvailable = () => typeof window !== 'undefined' && !!window.localAI?.isElectron;
 
 class LocalInferenceClient {
-    // ── sd.cpp APIs ───────────────────────────────────────────────────────
-    async getBinaryStatus() {
-        if (!isLocalAIAvailable()) return { exists: false };
-        return window.localAI.getBinaryStatus();
-    }
-    async downloadBinary() {
-        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
-        return window.localAI.downloadBinary();
-    }
-    async downloadModel(modelId) {
-        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
-        return window.localAI.downloadModel(modelId);
-    }
-    async downloadAuxiliary(auxKey) {
-        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
-        return window.localAI.downloadAuxiliary(auxKey);
-    }
-    async deleteModel(modelId) {
-        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
-        return window.localAI.deleteModel(modelId);
-    }
-
     // ── Wan2GP APIs ───────────────────────────────────────────────────────
     async getWan2gpConfig() {
         if (!isLocalAIAvailable()) return { url: '' };
@@ -58,85 +37,34 @@ class LocalInferenceClient {
         });
     }
 
-    // ── Bonsai Image Studio APIs ─────────────────────────────────────────
-    async getBonsaiConfig() {
-        if (!isLocalAIAvailable()) return { url: '' };
-        return window.localAI.bonsai.getConfig();
-    }
-    async setBonsaiUrl(url) {
-        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
-        return window.localAI.bonsai.setUrl(url);
-    }
-    async probeBonsai(url) {
-        if (!isLocalAIAvailable()) return { ok: false, error: 'Not in desktop app' };
-        return window.localAI.bonsai.probe(url);
-    }
-    async getComfyuiConfig() {
-        if (!isLocalAIAvailable()) return { url: '' };
-        return window.localAI.comfyui.getConfig();
-    }
-    async setComfyuiUrl(url) {
-        if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
-        return window.localAI.comfyui.setUrl(url);
-    }
-    async probeComfyui(url) {
-        if (!isLocalAIAvailable()) return { ok: false, error: 'Not in desktop app' };
-        return window.localAI.comfyui.probe(url);
-    }
-
-    // ── Unified model list (all local providers merged) ───────────────────
+    // ── Unified model list ────────────────────────────────────────────────
     async listModels() {
         if (!isLocalAIAvailable()) return [];
-        const [sdcpp, wan2gp, bonsai, comfyui] = await Promise.all([
-            window.localAI.listModels(),
-            window.localAI.wan2gp.listModels().catch(() => []),
-            window.localAI.bonsai.listModels().catch(() => []),
-            window.localAI.comfyui.listModels().catch(() => []),
-        ]);
-        return [
-            ...sdcpp.map(m => ({ ...m, provider: m.provider || 'sdcpp' })),
-            ...wan2gp,
-            ...bonsai,
-            ...comfyui,
-        ];
+        return window.localAI.wan2gp.listModels().catch(() => []);
     }
 
     // ── Provider-aware generate ───────────────────────────────────────────
     async generate(params) {
         if (!isLocalAIAvailable()) throw new Error('Local AI only available in the desktop app.');
         const model = getLocalModelById(params.model);
-        if (model?.provider === 'wan2gp') {
-            return window.localAI.wan2gp.generate(params);
+        if (model?.provider !== 'wan2gp') {
+            throw new Error(`Unknown local model "${params.model}" — only Wan2GP models are supported.`);
         }
-        if (model?.provider === 'bonsai') {
-            return window.localAI.bonsai.generate(params);
-        }
-        if (model?.provider === 'comfyui') {
-            return window.localAI.comfyui.generate(params);
-        }
-        return window.localAI.generate(params);
+        return window.localAI.wan2gp.generate(params);
     }
 
     cancelGeneration() {
         if (!isLocalAIAvailable()) return;
-        // Ask both — only the running one reacts.
-        window.localAI.cancelGeneration();
         window.localAI.wan2gp.cancelGeneration();
     }
 
     /**
      * Subscribe to generation progress events.
-     * sd.cpp emits { step, totalSteps, progress, status }.
      * Wan2GP emits { progress, status }.
      */
     onProgress(callback) {
         if (!isLocalAIAvailable()) return () => {};
         return window.localAI.onProgress(callback);
-    }
-
-    onDownloadProgress(callback) {
-        if (!isLocalAIAvailable()) return () => {};
-        return window.localAI.onDownloadProgress(callback);
     }
 }
 
