@@ -413,4 +413,59 @@ Open-core, honestly stated: everything currently shipped stays free and open-sou
 
 ---
 
-*Package saved by Claude Fable 5, 2026-07-03. Working files: `.tmp/context.md`, `.tmp/todos.md`, `.tmp/insights.md`. Write-backs: Omi daily log + `agent-shared/vidmyo.md`.*
+---
+
+## 14. Addendum — Luke's decisions + same-day execution (2026-07-03, second session)
+
+### 14.1 Decisions from Luke
+1. **Pricing approved** ($19 Creator / $49 Pro / $12 founding). Detailed tier contents in §14.3.
+2. **ElevenLabs affiliate link exists** — Luke provides it when the ElevenLabs card is implemented (M8). No enrollment task needed.
+3. **Payments:** Luke has Stripe, PayPal (rejected), and Paddle. Launch on **Paddle** (already set up, merchant of record, global VAT handled) despite 5% + $0.50/txn; Stripe direct is ~2.9% + 30¢ (+0.5% Billing +0.5% Tax) but makes us seller of record for global tax — for international-heavy sales the true gap narrows to <1% ([fee comparison](https://www.globalsolo.global/blog/stripe-vs-paddle-vs-lemon-squeezy-2026), [MoR comparison](https://www.buildmvpfast.com/blog/lemon-squeezy-vs-polar-paddle-merchant-of-record-2026)). Revisit at ≈$5k MRR; evaluate newer cheaper MoRs (Polar, Creem, Dodo) then.
+4. **Local image generation removed.** sd.cpp (SD1.5/SDXL/Z-Image), Bonsai, and ComfyUI don't meet the quality bar. Image generation targets **Google Flow (with model choice incl. Nano Banana 2 Pro) + professional APIs + agents**. Wan2GP kept (BYO-GPU Flux/Qwen/video). → Google Flow browser provider moves up in priority and into the **Creator** tier at launch; §11's M7 effectively becomes M4-adjacent.
+5. **Branch commit approved** — executed.
+
+### 14.2 Executed same day (all verified: vite build green after each step)
+| Commit | Content |
+|---|---|
+| `5610fa0` | Baseline snapshot of the dirty branch (31 files) |
+| `c48b313` | Local image gen removal: deleted `electron/lib/{localInference,modelCatalog,bonsaiProvider,comfyuiProvider}.js`; preload/localModels/localInferenceClient/LocalModelManager trimmed to Wan2GP-only |
+| `89a675e` | Security: `webSecurity: true`; `net:fetch` main-process proxy (`electron/lib/netProxy.js` + `src/lib/apiFetch.js` wired into muapi/fal/OpenRouter clients); OS-keychain key store (`electron/lib/secrets.js`, safeStorage) with localStorage migration; setupMediaSkills key now passed via 0600 temp file |
+| `36d4f28` | Bootstrap: workspaces → `packages/studio` only, `setup` needs no submodules (Open-Poe-AI pin unavailability neutralized); README truth pass (local-engine sections match code; open-core statement replaces "no subscription fees") |
+
+**Still open from M1:** single provider catalog (deferred into `packages/core`, M2 — the Next surface freeze decision makes drift harmless short-term). **New verification needed:** a live in-app generation test with real keys to confirm the webSecurity+proxy path end-to-end (Luke: launch the app, run one image job).
+
+### 14.3 Approved tiers — package contents
+
+**Free — open-source core ($0)**
+- Image / Video / Lip Sync / Cinema studios with bring-your-own-key cloud providers (fal.ai, OpenRouter, direct APIs)
+- Wan2GP bring-your-own-GPU server (Flux, Qwen-Image, Wan 2.2, Hunyuan, LTX)
+- Generation library, upload history, pending-job resume
+- MCP server (Video Delta tools) + agent detection/launch
+- Community support (Discord/Reddit); build-from-source or unsigned builds
+
+**Creator — $19/mo or $190/yr** (persona: faceless-channel builder, 1-2 videos/week)
+- Everything in Free, plus:
+- **Story Studio** with the faceless doodle template: brief → script → scene plan → images → voiceover → assembled 1080p video with beat-cut timing and outro
+- **Google Flow browser provider** (one-scene safe queue, image model choice incl. Nano Banana 2 Pro)
+- Voiceover: local Kokoro (free) + ElevenLabs card (your key, affiliate-disclosed)
+- Up to **3 active story projects**; per-scene review/regenerate; resumable renders
+- Agent handoff: session briefs + `vidmyo` CLI/MCP story tools
+- First-run doctor / guided setup; signed + notarized builds with auto-update
+- 2 machines per license; priority email support
+
+**Pro — $49/mo or $490/yr** (persona: volume creator, freelancer, small studio)
+- Everything in Creator, plus:
+- **Unlimited story projects** + multi-project render queue
+- **All style templates** as they ship (cinematic, anime, whiteboard, motion-graphics, Flow/Veo)
+- Custom style bibles (bring your own template) + batch scene regeneration
+- Publishing autopilot: n8n/native routes, scheduling, per-platform reframes
+- Video Delta film presets as the quality track matures
+- **Commercial license for client work**; 3 seats / 3 machines; priority support + early access
+
+**Founding offer** — Creator features at **$12/mo locked for 12 months**, first 200 customers, badge + direct feedback channel.
+
+Limits chosen to be locally enforceable (project counts, seats) — no server-side metering at launch. BYOK compute always uncapped.
+
+---
+
+*Package saved by Claude Fable 5, 2026-07-03; addendum added same day after Luke's approvals. Working files: `.tmp/context.md`, `.tmp/todos.md`, `.tmp/insights.md`. Write-backs: Omi daily log + `agent-shared/vidmyo.md`.*
