@@ -1,6 +1,6 @@
 # Vidmyo — AI Image & Video Studio
 
-> **The free, open-source alternative to AI Video Platforms.** Generate AI images and videos using 200+ state-of-the-art models — no content filters, no closed ecosystem, no subscription fees.
+> **The open-source alternative to AI Video Platforms.** Generate AI images and videos using 200+ state-of-the-art models — no content filters, no closed ecosystem, bring your own keys. The core studios are free and open-source forever; an optional paid edition (Story Studio workflows, guided setup, signed builds) is in development.
 
 **Community:** Join [Reddit](reddit.com/r/muapi) & [Discord](https://discord.gg/s7KW4fsqXK) for discussions and support
 
@@ -115,7 +115,7 @@ Vidmyo is a free, open-source AI image, video, cinema, and lip sync studio that 
 
 **Why Vidmyo instead of other AI Video Platforms?**
 - **No filters** — no content filters, no nanny guardrails, no prompt rejections
-- **Free & open-source** — no subscription, no vendor lock-in
+- **Open-source core** — the studios in this repo stay free; no vendor lock-in, bring your own keys
 - **Self-hosted** — your data stays on your machine, full creative control
 - **200+ models** — text-to-image, image-to-image, text-to-video, image-to-video, lip sync
 - **Multi-image input** — feed up to 14 reference images into compatible models
@@ -126,40 +126,19 @@ For a deep dive into the technical architecture and the philosophy behind the "I
 
 ## ⚡ Local Model Inference (Desktop App Only)
 
-The desktop app supports **two independent local engines**. Pick whichever fits the machine you actually run on:
+The desktop app supports one bring-your-own-compute engine: **Wan2GP** — an HTTP
+client to a user-run [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) server. The
+server runs Python + PyTorch on a CUDA/ROCm GPU; the desktop app only sends
+prompts and receives results. It serves video models (Wan 2.2, Hunyuan, LTX) and
+large image models (Flux, Qwen-Image). NVIDIA/AMD GPU required on the *server*;
+the desktop app itself can run on a Mac.
 
-| Engine | What it is | Best for |
-|---|---|---|
-| **sd.cpp** (bundled) | C++ engine from [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), runs on the same machine as the app. Metal GPU on Apple Silicon, CUDA/Vulkan/ROCm on Linux/Windows. | Image-only models. Works on Mac M-series. |
-| **Wan2GP** (BYO server) | HTTP client to a user-run [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) server. The server runs Python + PyTorch on a CUDA/ROCm GPU; the desktop app only sends prompts and receives results. | Video models (Wan 2.2, Hunyuan, LTX) and large image models (Flux, Qwen-Image). NVIDIA/AMD GPU required on the *server*; the desktop app itself can run on a Mac. |
+> The previously bundled **sd.cpp** engine (SD 1.5 / SDXL / Z-Image) and the
+> Bonsai/ComfyUI bridges were removed in July 2026. Their output quality wasn't
+> up to Vidmyo's bar — image generation now targets professional cloud models
+> and browser workflows, with Wan2GP as the self-hosted GPU route.
 
-Both engines share the same UI: open **Settings → Local Models** to configure each.
-
-### Engine 1 — sd.cpp (bundled)
-
-| Model | Type | Size | Notes |
-|---|---|---|---|
-| **Z-Image Turbo** ⚡ | Diffusion Transformer | 2.5 GB + 2.7 GB aux | 8-step turbo. Heavy on memory. |
-| **Z-Image Base** ⚡ | Diffusion Transformer | 3.5 GB + 2.7 GB aux | 50-step high-quality. Heavy on memory. |
-| **Dreamshaper 8** | SD 1.5 | 2.1 GB | 20-step versatile. Lightest tested option on Mac. |
-| **Realistic Vision v5.1** | SD 1.5 | 2.1 GB | 25-step photorealistic |
-| **Anything v5** | SD 1.5 | 2.1 GB | 20-step anime/illustration |
-| **SDXL Base 1.0** | SDXL | 6.9 GB | 30-step high-res |
-
-> **Z-Image models** require two shared auxiliary files (downloaded once, shared across both models):
-> - **Qwen3-4B Text Encoder** — 2.4 GB
-> - **FLUX VAE** — 335 MB
-
-**How to use:**
-1. Open **Settings → Local Models** in the desktop app
-2. Install the **sd.cpp inference engine** (one click — auto-downloaded)
-3. Download your chosen model (and auxiliary files for Z-Image)
-4. In **Image Studio**, click the **⚡ Local** toggle next to the model selector
-5. Select your local model and generate — no API key needed
-
-All downloads happen inside the app. Nothing is installed system-wide.
-
-### Engine 2 — Wan2GP (remote Gradio server)
+### Wan2GP (remote Gradio server)
 
 The app does **not** bundle Python or model weights for Wan2GP. You run Wan2GP yourself on a machine with a CUDA or ROCm GPU and point the desktop app at its URL.
 
@@ -185,45 +164,12 @@ Then in the desktop app: **Settings → Local Models → Wan2GP server**, paste 
 
 > **Local inference is only available in the desktop app.** The hosted web version always uses cloud APIs.
 
-### Hardware Notes
-
-- **sd.cpp** runs on CPU (all platforms) and **Metal GPU** on Apple Silicon (M1/M2/M3/M4); CUDA/Vulkan/ROCm on Linux/Windows.
-- Metal GPU acceleration is built into the macOS desktop binary — significantly faster than CPU-only.
-- Recommended for sd.cpp Z-Image: 16 GB RAM (7.4 GB weights + 2.4 GB compute buffer). On a base 8 GB M-series Mac, **Z-Image is known to hang the system** — stick to SD 1.5 there.
-- For SD 1.5 on M2: expect ~1–2 s/step with the Metal dylib active. If you see ~10 s/step instead, the binary may have fallen back to CPU — see verification below.
-
-### Verifying the SD 1.5 path (the fastest sanity test on Mac)
-
-If you want to confirm sd.cpp is installed correctly without going through the UI, you can drive `sd-cli` directly. This is the same binary the app uses.
-
-```bash
-# 1. App data layout (created on first app launch)
-APP_DATA="$HOME/Library/Application Support/vidmyo/local-ai"
-ls "$APP_DATA/bin"     # sd-cli, libstable-diffusion.dylib
-ls "$APP_DATA/models"  # whatever you've downloaded
-
-# 2. Grab a small SD 1.5 model directly (Dreamshaper 8, ~2 GB)
-curl -L --fail --progress-bar \
-  -o "$APP_DATA/models/DreamShaper_8_pruned.safetensors" \
-  "https://huggingface.co/Lykon/DreamShaper/resolve/main/DreamShaper_8_pruned.safetensors"
-
-# 3. Run a single 512x512 / 12-step inference
-DYLD_LIBRARY_PATH="$APP_DATA/bin" "$APP_DATA/bin/sd-cli" \
-  -m "$APP_DATA/models/DreamShaper_8_pruned.safetensors" \
-  -p "a serene mountain lake at sunrise, oil painting" \
-  -o /tmp/sd15-test.png \
-  --steps 12 -H 512 -W 512 --cfg-scale 7.5 --seed 42 \
-  --sampling-method euler_a
-```
-
-A healthy run on Apple Silicon prints `total params memory size = 1969.78MB (VRAM 1969.78MB, RAM 0.00MB)` (Metal-backed) and produces a coherent 512×512 PNG. If `VRAM` is `0.00MB` instead, the dylib is CPU-only — check `otool -L "$APP_DATA/bin/libstable-diffusion.dylib" | grep -i metal` and reinstall the engine from **Settings → Local Models** if Metal is missing.
-
 ---
 
 ## ✨ Features
 
 - **Image Studio** — Generate images from text prompts (50+ text-to-image models) or transform existing images (55+ image-to-image models). Switches model set automatically based on whether a reference image is provided. Quality and resolution controls visible for models that support them.
-- **Local Inference** — Two engines: **sd.cpp** (bundled, runs on Mac/Win/Linux with Metal/CUDA/Vulkan/ROCm) for SD 1.5, SDXL, and Z-Image; and **Wan2GP** (BYO Gradio server) for Flux, Qwen-Image, and video models (Wan 2.2, Hunyuan, LTX). Configure both in Settings → Local Models.
+- **Local Inference** — **Wan2GP** (BYO Gradio server) for Flux, Qwen-Image, and video models (Wan 2.2, Hunyuan, LTX). Configure it in Settings → Local Models.
 - **Multi-Image Input** — Upload up to 14 reference images for compatible edit models (Nano Banana 2 Edit, Flux Kontext Dev, GPT-4o Edit, and more). Multi-select picker with order badges, batch upload, and a "Use Selected" confirmation flow.
 - **Video Studio** — Generate videos from text prompts (40+ text-to-video models) or animate a start-frame image (60+ image-to-video models). Same intelligent mode switching as Image Studio.
 - **Lip Sync Studio** — Animate portrait images or sync lips on existing videos using audio. 9 dedicated models across two modes: portrait image + audio → talking video, and video + audio → lipsync video.

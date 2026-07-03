@@ -5,9 +5,7 @@
   "private": true,
   "version": "1.1.0",
   "workspaces": [
-    "packages/studio",
-    "packages/Vibe-Workflow/packages/workflow-builder",
-    "packages/Open-Poe-AI/packages/agents"
+    "packages/studio"
   ],
   "scripts": {
     "dev": "next dev",
@@ -15,10 +13,9 @@
     "start": "next start",
     "lint": "next lint",
     "build:studio": "npm run build -w studio",
-    "build:workflow": "npm run build -w workflow-builder",
-    "build:agent": "npm run build -w ai-agent",
-    "build:packages": "npm run build:workflow && npm run build:agent && npm run build:studio",
-    "setup": "git submodule update --init --recursive && npm install && npm run build:packages",
+    "build:packages": "npm run build:studio",
+    "setup": "npm install && npm run build:packages",
+    "setup:submodules": "git submodule update --init --recursive",
     "vite:dev": "vite",
     "vite:build": "vite build",
     "electron:dev": "npm run vite:build && electron .",
