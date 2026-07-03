@@ -209,7 +209,14 @@ function register() {
   ipcMain.handle('agents:setupMediaSkills', async (_evt, opts) => {
     const muapiKey = (opts && opts.muapiKey) || '';
     const dir = (opts && opts.cwd && fs.existsSync(opts.cwd)) ? opts.cwd : HOME;
-    const keyPrefix = muapiKey ? `export MUAPI_API_KEY=${shellQuote(muapiKey)}; ` : '';
+    // Never put the key on the terminal command line (shell history, ps).
+    // Write it to a 0600 temp file the command reads and deletes.
+    let keyPrefix = '';
+    if (muapiKey) {
+      const keyFile = path.join(os.tmpdir(), `vidmyo-key-${process.pid}-${Date.now()}`);
+      fs.writeFileSync(keyFile, muapiKey, { mode: 0o600 });
+      keyPrefix = `export MUAPI_API_KEY="$(cat ${shellQuote(keyFile)})" && rm -f ${shellQuote(keyFile)} && `;
+    }
     const cmd = `${keyPrefix}npx -y skills add SamurAIGPT/Generative-Media-Skills`;
     const opened = openInTerminal(cmd, dir);
     return opened

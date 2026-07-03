@@ -1,6 +1,7 @@
 import './style.css';
 import { Header } from './components/Header.js';
 import { ImageStudio } from './components/ImageStudio.js';
+import { initSecureKeys } from './lib/providers.js';
 
 const app = document.querySelector('#app');
 let contentArea;
@@ -48,8 +49,9 @@ contentArea.id = 'content-area';
 contentArea.className = 'flex-1 relative w-full overflow-hidden flex flex-col bg-app-bg';
 app.appendChild(contentArea);
 
-// Initial Route
-navigate('image');
+// Initial Route — load keychain-backed provider keys first so studios render
+// with the right connection state (no-op in the browser build).
+initSecureKeys().finally(() => navigate('image'));
 
 // Event Listener for Navigation
 window.addEventListener('navigate', (e) => {

@@ -9,6 +9,7 @@
 // Docs: https://fal.ai/docs/documentation/model-apis/inference/queue
 
 import { getSavedProviderKey } from './providers.js';
+import { apiFetch } from './apiFetch.js';
 
 const FAL_QUEUE = 'https://queue.fal.run';
 
@@ -28,7 +29,7 @@ export async function runFalModel(model, input, { onRequestId, onTick } = {}) {
   const key = getKey();
   const headers = { Authorization: `Key ${key}`, 'Content-Type': 'application/json' };
 
-  const submit = await fetch(`${FAL_QUEUE}/${model}`, {
+  const submit = await apiFetch(`${FAL_QUEUE}/${model}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(input),
@@ -48,7 +49,7 @@ export async function runFalModel(model, input, { onRequestId, onTick } = {}) {
     await sleep(3000);
     let s;
     try {
-      s = await fetch(statusUrl, { headers: { Authorization: `Key ${key}` } });
+      s = await apiFetch(statusUrl, { headers: { Authorization: `Key ${key}` } });
     } catch {
       continue;
     }
@@ -56,7 +57,7 @@ export async function runFalModel(model, input, { onRequestId, onTick } = {}) {
     const data = await s.json();
     if (onTick) onTick(data.status);
     if (data.status === 'COMPLETED') {
-      const res = await fetch(responseUrl, { headers: { Authorization: `Key ${key}` } });
+      const res = await apiFetch(responseUrl, { headers: { Authorization: `Key ${key}` } });
       if (!res.ok) throw new Error(`fal result fetch failed: ${res.status}`);
       return res.json();
     }

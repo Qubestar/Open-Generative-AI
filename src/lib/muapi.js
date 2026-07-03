@@ -2,6 +2,7 @@ import { getModelById, getVideoModelById, getI2IModelById, getI2VModelById, getV
 import { getActiveProviderId, getProviderById, getSavedProviderKey, buildProviderHeaders, appendProviderAuthToUrl } from './providers.js';
 import { openrouterClient } from './openrouterClient.js';
 import { falClient } from './falClient.js';
+import { apiFetch } from './apiFetch.js';
 
 export class MuapiClient {
     constructor() {
@@ -59,7 +60,7 @@ export class MuapiClient {
         };
 
         console.log(`[${provider.id}] Direct request:`, url);
-        const response = await fetch(url, fetchOpts);
+        const response = await apiFetch(url, fetchOpts);
         if (!response.ok) {
             const errText = await response.text();
             console.error(`[${provider.id}] Direct API Error:`, errText);
@@ -135,7 +136,7 @@ export class MuapiClient {
 
         try {
             // Step 1: Submit the task
-            const response = await fetch(url, {
+            const response = await apiFetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -194,7 +195,7 @@ export class MuapiClient {
             console.log(`[Muapi] Polling attempt ${attempt}/${maxAttempts}...`);
 
             try {
-                const response = await fetch(pollUrl, {
+                const response = await apiFetch(pollUrl, {
                     method: 'GET',
                     headers: {
                         'Content-Type': 'application/json',
@@ -266,7 +267,7 @@ export class MuapiClient {
         console.log('[Muapi] Video Payload:', finalPayload);
 
         try {
-            const response = await fetch(url, {
+            const response = await apiFetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -342,7 +343,7 @@ export class MuapiClient {
         console.log('[Muapi] I2I Payload:', finalPayload);
 
         try {
-            const response = await fetch(url, {
+            const response = await apiFetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-api-key': key },
                 body: JSON.stringify(finalPayload)
@@ -432,7 +433,7 @@ export class MuapiClient {
         console.log('[Muapi] I2V Payload:', finalPayload);
 
         try {
-            const response = await fetch(url, {
+            const response = await apiFetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-api-key': key },
                 body: JSON.stringify(finalPayload)
@@ -521,7 +522,7 @@ export class MuapiClient {
         console.log('[Muapi] V2V Payload:', finalPayload);
 
         try {
-            const response = await fetch(url, {
+            const response = await apiFetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-api-key': key },
                 body: JSON.stringify(finalPayload)
@@ -582,7 +583,7 @@ export class MuapiClient {
         console.log('[Muapi] LipSync Payload:', finalPayload);
 
         try {
-            const response = await fetch(url, {
+            const response = await apiFetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-api-key': key },
                 body: JSON.stringify(finalPayload)

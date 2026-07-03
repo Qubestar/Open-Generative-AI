@@ -8,6 +8,7 @@
 // Docs: https://openrouter.ai/docs/guides/overview/multimodal/video-generation
 
 import { getSavedProviderKey } from './providers.js';
+import { apiFetch } from './apiFetch.js';
 
 const OR_BASE = 'https://openrouter.ai/api/v1';
 
@@ -45,7 +46,7 @@ export async function generateVideo({ orModel, prompt, imageUrl, onRequestId, on
   }
 
   // 1. Submit
-  const submitRes = await fetch(`${OR_BASE}/videos`, {
+  const submitRes = await apiFetch(`${OR_BASE}/videos`, {
     method: 'POST',
     headers: authHeaders(key),
     body: JSON.stringify(body),
@@ -65,7 +66,7 @@ export async function generateVideo({ orModel, prompt, imageUrl, onRequestId, on
     await sleep(3000);
     let pollRes;
     try {
-      pollRes = await fetch(pollingUrl, { headers: authHeaders(key, false) });
+      pollRes = await apiFetch(pollingUrl, { headers: authHeaders(key, false) });
     } catch {
       continue; // transient network error — keep polling
     }
@@ -91,7 +92,7 @@ export async function generateVideo({ orModel, prompt, imageUrl, onRequestId, on
 /** Download an auth-protected video content URL and wrap it in a blob: URL. */
 async function downloadAsBlobUrl(contentUrl, key) {
   const abs = contentUrl.startsWith('http') ? contentUrl : `${OR_BASE}${contentUrl.startsWith('/') ? '' : '/'}${contentUrl}`;
-  const res = await fetch(abs, { headers: authHeaders(key, false) });
+  const res = await apiFetch(abs, { headers: authHeaders(key, false) });
   if (!res.ok) throw new Error(`OpenRouter video download failed: ${res.status}`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
@@ -107,7 +108,7 @@ export async function generateImage({ orModel, prompt, imageUrl } = {}) {
   const content = [{ type: 'text', text: prompt || '' }];
   if (imageUrl) content.push({ type: 'image_url', image_url: { url: imageUrl } });
 
-  const res = await fetch(`${OR_BASE}/chat/completions`, {
+  const res = await apiFetch(`${OR_BASE}/chat/completions`, {
     method: 'POST',
     headers: authHeaders(key),
     body: JSON.stringify({

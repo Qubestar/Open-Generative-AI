@@ -22,6 +22,20 @@ contextBridge.exposeInMainWorld('localAI', {
     },
 });
 
+// ── Secure provider key store (OS keychain via safeStorage) ────────────────
+contextBridge.exposeInMainWorld('secureKeys', {
+    isElectron: true,
+    isAvailable: () => ipcRenderer.invoke('secrets:available'),
+    getAll: () => ipcRenderer.invoke('secrets:get-all'),
+    set: (id, key) => ipcRenderer.invoke('secrets:set', id, key),
+});
+
+// ── Main-process fetch proxy (keeps renderer webSecurity on) ───────────────
+contextBridge.exposeInMainWorld('localNet', {
+    isElectron: true,
+    fetch: (req) => ipcRenderer.invoke('net:fetch', req),
+});
+
 // ── Local AI agent bridge ───────────────────────────────────────────────────
 // Detect/connect/launch coding agents already installed on the machine, and
 // bootstrap media-generation skills. See electron/lib/agents.js.

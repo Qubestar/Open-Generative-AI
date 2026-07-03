@@ -2,6 +2,8 @@ const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 const { register: registerWan2gp } = require('./lib/wan2gpProvider');
 const { register: registerAgents } = require('./lib/agents');
+const { register: registerSecrets } = require('./lib/secrets');
+const { register: registerNetProxy } = require('./lib/netProxy');
 
 // Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1 which
 // blocks Chromium's user namespace sandbox. The .deb package ships an AppArmor
@@ -23,7 +25,9 @@ function createWindow() {
         minWidth: 1024,
         minHeight: 640,
         webPreferences: {
-            webSecurity: false,
+            // Cloud requests go through the main-process fetch proxy
+            // (lib/netProxy.js), so the renderer keeps web security enabled.
+            webSecurity: true,
             contextIsolation: true,
             nodeIntegration: false,
             preload: path.join(__dirname, 'preload.js'),
@@ -72,6 +76,8 @@ app.whenReady().then(() => {
     createWindow();
     registerWan2gp();
     registerAgents();
+    registerSecrets();
+    registerNetProxy();
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
