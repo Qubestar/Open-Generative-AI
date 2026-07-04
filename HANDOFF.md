@@ -50,7 +50,7 @@ Milestone 1 is **done except**: single provider catalog (deliberately deferred i
 
 ## Immediate next steps (in order)
 
-1. **Verify live (Luke, one sitting):** close the Vidmyo window, re-run the launcher (Electron restart picks up storyBridge/secrets/webSecurity). Then: Settings → add the fal key (check `userData/secure-keys.json` gets an encrypted entry) → Story tab → create project → paste script → run the stages. Session-5 commits: `d5b16ea` (real Settings modal), `d343cfd` (Vite surface removed).
+1. **LIVE-VERIFIED by Luke (2026-07-04):** Electron restarted, fal key saved via Settings (keychain), Image tab generated a real image. The full stack — keychain → secrets IPC → mediaBridge → core runJob → falAdapter → artifact → inline display — is production-verified. Remaining human test: the Story tab end-to-end (script → voiceover → beats → images → assemble → finalize) using the Faceless YT 1 pipeline venv.
 2. **M2 remainder — DONE (commit `704efe2`):** `src/run.js` (runJob: poll/cancel/resume/timeout) + `src/adapters/fal.js`; 28/28 tests. Live acceptance is one command away: `FAL_KEY=... node scripts/live-image-test.mjs` (performs ONE paid fal generation).
 3. **M3 — Story Studio MVP** — STARTED (commits `aefb347`, + finalize vendoring):
    - Feasibility: VERIFIED straight port — `docs/product/2026-07-03-story-studio-port-feasibility.md`.
