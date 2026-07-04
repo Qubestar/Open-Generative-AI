@@ -7,6 +7,7 @@ export * from './src/providers.js';
 export * from './src/jobs.js';
 export * from './src/project.js';
 export * from './src/run.js';
+export * from './src/sheets.js';
 export * from './src/story.js';
 export * from './src/storyRunner.js';
 export { DoodlePipeline, DEFAULT_SCRIPTS_DIR } from './src/pipeline.js';

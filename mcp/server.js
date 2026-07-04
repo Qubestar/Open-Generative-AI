@@ -10,9 +10,17 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-import { videoDelta } from './lib/videoDelta.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const server = new McpServer({ name: 'vidmyo', version: '0.1.0' });
+import { videoDelta } from './lib/videoDelta.js';
+import {
+  Project, DoodlePipeline, stageVoiceover, stageBeats, stageAssemble, stageFinalize,
+  stageStatus, validateScript, getStyle, readSheetValues, trackerRows, sheetIdFromInput,
+} from '../packages/core/index.js';
+
+const server = new McpServer({ name: 'vidmyo', version: '0.2.0' });
 
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
 const fail = (err) => ({ isError: true, content: [{ type: 'text', text: String(err.message || err) }] });
@@ -137,6 +145,180 @@ server.tool(
   { job_id: z.string() },
   async ({ job_id }) => {
     try { return ok(await videoDelta.job(job_id)); } catch (e) { return fail(e); }
+  },
+);
+
+// ── Story Studio tools (v0.2) ───────────────────────────────────────────────
+// The agent-facing pipeline: agents do the thinking (script per the channel
+// rules, fact-checking, prompts); these tools run the deterministic stages.
+// The sheet is a read-only queue; project.json is the source of truth.
+
+const DEFAULT_SHEET_ID = '1ZrdLMkdC1-OXxaPwgMGZW7dUO9bSNcQRNETP7D5d4jo';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+function makePipeline() {
+  const candidates = [
+    process.env.VIDMYO_VENV_PYTHON,
+    path.join(HERE, '..', 'packages', 'core', 'pipelines', 'doodle', 'scripts', '.venv', 'bin', 'python'),
+    '/Volumes/My Lexar/AI Projects/Faceless YT 1/pipeline/.venv/bin/python',
+  ].filter(Boolean);
+  const venvPython = candidates.find((p) => fs.existsSync(p));
+  if (!venvPython) {
+    throw new Error(`No pipeline venv found. Set VIDMYO_VENV_PYTHON or run pipelines/doodle/scripts/setup_env.sh. Tried: ${candidates.join(' | ')}`);
+  }
+  return new DoodlePipeline({ venvPython });
+}
+
+function storySummary(project) {
+  const m = project.manifest;
+  return {
+    dir: project.dir,
+    brief: m.brief,
+    style: m.style,
+    script_words: m.script ? m.script.trim().split(/\s+/).length : 0,
+    voiceover: m.voiceover.source ? { source: m.voiceover.source, artifact: m.voiceover.artifact } : null,
+    scenes: m.scenes.map((s) => ({
+      id: s.id, beat: s.beat, prompt: s.prompt,
+      artifact: s.image.artifact, approved: s.image.approved,
+      narration_span: s.narrationSpan,
+    })),
+    renders: m.renders,
+    status: stageStatus(project),
+  };
+}
+
+server.tool(
+  'story_sheet_rows',
+  'List the video briefs on the tracker sheet (read-only). Rows have 1-based sheet row '
+  + 'numbers, status (e.g. "Planned"), video #, working title, hook, and topic/angle. '
+  + 'Pick a Planned row and pass its row number to story_create.',
+  { sheet: z.string().optional().describe('sheet URL or id (default: the Doodle 1 tracker)') },
+  async ({ sheet }) => {
+    try {
+      const sheetId = sheet ? (sheetIdFromInput(sheet) || sheet) : DEFAULT_SHEET_ID;
+      const data = await readSheetValues(sheetId, 'A1:E60');
+      return ok({ sheetId, via: data.via, rows: trackerRows(data.values) });
+    } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'story_create',
+  'Create a new story project in a directory (must not already contain one). Give either '
+  + 'a topic, or a tracker sheet_row — then the brief (title/hook/angle) is pulled from the '
+  + 'sheet. Next step: write the script per the channel rules and call story_set_script.',
+  {
+    dir: z.string().describe('absolute path for the project folder (created if missing)'),
+    topic: z.string().optional(),
+    sheet_row: z.number().int().optional().describe('1-based tracker row to take the brief from'),
+    sheet: z.string().optional().describe('sheet URL/id when using sheet_row (default: Doodle 1)'),
+  },
+  async ({ dir, topic, sheet_row, sheet }) => {
+    try {
+      let brief = { topic: topic || 'untitled' };
+      if (sheet_row) {
+        const sheetId = sheet ? (sheetIdFromInput(sheet) || sheet) : DEFAULT_SHEET_ID;
+        const data = await readSheetValues(sheetId, `A${sheet_row}:E${sheet_row}`);
+        const r = data.values?.[0];
+        if (!r || !r[2]) throw new Error(`Sheet row ${sheet_row} has no Working Title`);
+        brief = { topic: r[2], hook: r[3] || '', angle: r[4] || '', videoNum: r[1] || '', sheetRow: sheet_row, sheetId };
+      }
+      return ok(storySummary(Project.create(dir, { brief })));
+    } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'story_open',
+  'Open an existing story project and report its full state: brief, script length, scenes '
+  + 'with per-scene artifact/approval, renders, and which stage is next.',
+  { dir: z.string() },
+  async ({ dir }) => {
+    try { return ok(storySummary(Project.load(dir))); } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'story_set_script',
+  'Save the narration script. Enforces the channel retention rules: the response includes '
+  + 'the word-count check (target 1,400-1,900 words for a 5:00+ video). Clean the text for '
+  + 'TTS first (numbers spelled out, no markdown).',
+  { dir: z.string(), script: z.string() },
+  async ({ dir, script }) => {
+    try {
+      const project = Project.load(dir);
+      project.manifest.script = script;
+      project.save();
+      const check = validateScript(script, getStyle(project.manifest.style));
+      return ok({ script_check: check, status: stageStatus(project) });
+    } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'story_run_stage',
+  'Run a pipeline stage SYNCHRONOUSLY (local, free): "to-scenes" = Kokoro voiceover + '
+  + 'whisper beat detection + prompt scaffolding in one go (recommended after the script; '
+  + 'takes seconds to a few minutes). "assemble" needs every scene approved unless '
+  + 'allow_missing (white placeholder frames). "finalize" = 4K upscale + -14 LUFS master.',
+  {
+    dir: z.string(),
+    stage: z.enum(['to-scenes', 'voiceover', 'beats', 'assemble', 'finalize']),
+    force: z.boolean().default(false).describe('override the short-script gate (tests only)'),
+    allow_missing: z.boolean().default(false).describe('assemble with white frames for missing scenes'),
+  },
+  async ({ dir, stage, force, allow_missing }) => {
+    try {
+      const project = Project.load(dir);
+      const pipeline = makePipeline();
+      if (stage === 'to-scenes') {
+        await stageVoiceover(project, pipeline, { force });
+        await stageBeats(project, pipeline);
+      } else if (stage === 'voiceover') {
+        await stageVoiceover(project, pipeline, { force });
+      } else if (stage === 'beats') {
+        await stageBeats(project, pipeline);
+      } else if (stage === 'assemble') {
+        await stageAssemble(project, pipeline, { allowMissing: allow_missing });
+      } else if (stage === 'finalize') {
+        await stageFinalize(project, pipeline);
+      }
+      return ok(storySummary(Project.load(dir)));
+    } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'story_accept_artifact',
+  'Attach a generated image to a scene. The file MUST already exist on disk (never claim '
+  + 'downloads you have not verified). Prefer saving directly as <dir>/images/<sceneId>.png. '
+  + 'Set approved only after you have actually viewed the image and it matches the beat.',
+  {
+    dir: z.string(),
+    scene_id: z.string().describe('explicit sNNN id — never a line number'),
+    path: z.string().describe('absolute path to the image file'),
+    approved: z.boolean().default(false),
+  },
+  async ({ dir, scene_id, path: artifactPath, approved }) => {
+    try {
+      const project = Project.load(dir);
+      project.acceptSceneArtifact(scene_id, artifactPath, { approved });
+      return ok({ scene: storySummary(project).scenes.find((s) => s.id === scene_id), status: stageStatus(project) });
+    } catch (e) { return fail(e); }
+  },
+);
+
+server.tool(
+  'story_approve_scene',
+  'Mark a scene image approved after visual review (it matches the beat text, the style '
+  + 'spec, and any on-screen text is spelled correctly).',
+  { dir: z.string(), scene_id: z.string() },
+  async ({ dir, scene_id }) => {
+    try {
+      const project = Project.load(dir);
+      project.approveScene(scene_id);
+      return ok({ status: stageStatus(project), pending: project.pendingScenes().map((s) => s.id) });
+    } catch (e) { return fail(e); }
   },
 );
 
