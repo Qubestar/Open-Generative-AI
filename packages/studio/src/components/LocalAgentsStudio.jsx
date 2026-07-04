@@ -128,13 +128,6 @@ export default function LocalAgentsStudio() {
           );
         })}
 
-        <div style={{ ...card, background: 'rgba(0,0,0,0.2)' }}>
-          <div style={{ color: C.dim, fontSize: 11, lineHeight: 1.7 }}>
-            <b style={{ color: C.text }}>Templates</b> (different video styles — doodle today; 2D animation,
-            cinematic, whiteboard next) live in Story Studio as style templates and will appear here as
-            they ship. The old cloud “My Agents / My Chats” screens were retired with the muapi backend.
-          </div>
-        </div>
       </div>
     </div>
   );
