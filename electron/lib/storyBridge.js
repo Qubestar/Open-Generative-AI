@@ -227,10 +227,62 @@ function register() {
     }
   });
 
-  // ── Tracker sheet (Google Sheets via the authenticated gws CLI) ──────────
-  // Read-only: Vidmyo never writes to the production tracker. Default sheet
-  // is the Doodle 1 queue; override via story-config.json { sheetId }.
+  // ── Tracker sheet (read-only; Vidmyo never writes the production tracker)
+  // Two access paths, tried in order:
+  //   1. Public CSV export — works for any link-shared sheet, no Google auth.
+  //      This is the sellable-product path: the user pastes a sheet URL.
+  //   2. The gws CLI (Google Workspace, authenticated) — dev-machine fallback
+  //      for private sheets.
+  // Default sheet is the Doodle 1 queue; override via story:set-sheet.
   const DEFAULT_SHEET_ID = '1ZrdLMkdC1-OXxaPwgMGZW7dUO9bSNcQRNETP7D5d4jo';
+
+  const sheetIdFromInput = (input) => {
+    const m = String(input || '').match(/\/d\/([\w-]{20,})/);
+    return m ? m[1] : (/^[\w-]{20,}$/.test(String(input || '').trim()) ? String(input).trim() : null);
+  };
+
+  // Minimal RFC-correct CSV parser (quoted fields may contain commas,
+  // quotes, and newlines — sheet descriptions do).
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], field = '', inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(field); field = '';
+        rows.push(row); row = [];
+      } else field += c;
+    }
+    if (field || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  }
+
+  async function readSheetValues(sheetId, range) {
+    // Path 1: public CSV export (link-shared sheets).
+    try {
+      const res = await fetch(
+        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&range=${encodeURIComponent(range)}`,
+        { redirect: 'follow' },
+      );
+      const text = await res.text();
+      if (res.ok && !text.trimStart().startsWith('<')) {
+        return { values: parseCsv(text), via: 'public-link' };
+      }
+    } catch { /* fall through to gws */ }
+    // Path 2: authenticated gws CLI.
+    const data = await gwsRead(sheetId, range).catch((err) => {
+      throw new Error(`Could not read the sheet. Make it link-readable (Share → Anyone with the link → Viewer) or sign in with gws. (${err.message})`);
+    });
+    return { values: data.values || [], via: 'gws' };
+  }
 
   function gwsRead(sheetId, range) {
     return new Promise((resolve, reject) => {
@@ -247,10 +299,19 @@ function register() {
     });
   }
 
+  ipcMain.handle('story:set-sheet', async (_evt, input) => {
+    const id = sheetIdFromInput(input);
+    if (!id) return fail(new Error('Paste a Google Sheet URL (or its ID).'));
+    const cfg = readConfig();
+    cfg.sheetId = id;
+    writeConfig(cfg);
+    return { ok: true, sheetId: id };
+  });
+
   ipcMain.handle('story:sheet-rows', async () => {
     try {
       const sheetId = readConfig().sheetId || DEFAULT_SHEET_ID;
-      const data = await gwsRead(sheetId, 'A1:E60');
+      const data = await readSheetValues(sheetId, 'A1:E60');
       const rows = (data.values || []).slice(1)
         .map((r, i) => ({
           row: i + 2, // 1-based sheet row (header is row 1)
@@ -261,7 +322,7 @@ function register() {
           topic: r[4] || '',
         }))
         .filter((r) => r.title);
-      return { ok: true, sheetId, rows };
+      return { ok: true, sheetId, via: data.via, rows };
     } catch (err) { return fail(err); }
   });
 
@@ -269,7 +330,7 @@ function register() {
     try {
       if (!dir || !row) return fail(new Error('dir and row are required'));
       const sheetId = readConfig().sheetId || DEFAULT_SHEET_ID;
-      const data = await gwsRead(sheetId, `A${row}:E${row}`);
+      const data = await readSheetValues(sheetId, `A${row}:E${row}`);
       const r = data.values?.[0];
       if (!r || !r[2]) return fail(new Error(`Sheet row ${row} has no Working Title`));
       const { Project } = await core();

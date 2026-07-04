@@ -100,13 +100,47 @@ export default function StoryStudio() {
     setRenderLabel(render.preview ? 'Preview render (white placeholder frames)' : (render.finalized ? 'Final video' : 'Assembled video'));
   };
 
-  const createProject = async () => {
-    const picked = await window.story.pickDir();
-    if (picked.ok && picked.dir) apply(await window.story.create({ dir: picked.dir, brief: { topic: topic.trim() || 'untitled' } }));
+  const rememberRecent = (res) => {
+    try {
+      const recent = JSON.parse(localStorage.getItem('vidmyo_story_recent') || '[]')
+        .filter((r) => r.dir !== res.dir);
+      recent.unshift({ dir: res.dir, topic: res.manifest?.brief?.topic || 'untitled' });
+      localStorage.setItem('vidmyo_story_recent', JSON.stringify(recent.slice(0, 8)));
+    } catch { /* recents are a convenience, never fatal */ }
   };
+
+  const createProject = async (presetTopic = null) => {
+    const picked = await window.story.pickDir();
+    if (!picked.ok || !picked.dir) return;
+    const t = presetTopic ?? (topic.trim() || prompt('Topic for the new video:', '') || 'untitled');
+    const res = await window.story.create({ dir: picked.dir, brief: { topic: t } });
+    if (res.ok) rememberRecent(res);
+    apply(res);
+  };
+
+  // Open works on existing projects; an empty folder offers to start one
+  // there instead of erroring out.
   const openProject = async () => {
     const picked = await window.story.pickDir();
-    if (picked.ok && picked.dir) apply(await window.story.get(picked.dir));
+    if (!picked.ok || !picked.dir) return;
+    const res = await window.story.get(picked.dir);
+    if (res.ok) { rememberRecent(res); apply(res); return; }
+    if (confirm('No project in that folder yet — create a new one there?')) {
+      const t = prompt('Topic for the new video:', '') || 'untitled';
+      const created = await window.story.create({ dir: picked.dir, brief: { topic: t } });
+      if (created.ok) rememberRecent(created);
+      apply(created);
+    }
+  };
+
+  // Everything is saved to project.json on disk as you go — closing just
+  // returns to the start screen.
+  const closeProject = () => {
+    setData(null);
+    setSheet(null);
+    setLightbox(null);
+    if (renderUrl) { URL.revokeObjectURL(renderUrl); setRenderUrl(null); }
+    localStorage.removeItem(LAST_DIR_KEY);
   };
 
   const loadSheet = async () => {
@@ -123,7 +157,7 @@ export default function StoryStudio() {
     setSheetBusy(true);
     const res = await window.story.createFromSheet({ dir: picked.dir, row });
     setSheetBusy(false);
-    if (res.ok) { setSheet(null); apply(res); }
+    if (res.ok) { setSheet(null); rememberRecent(res); apply(res); }
     else alert(res.error);
   };
   const runStage = async (stage, opts = {}) => {
@@ -196,7 +230,7 @@ export default function StoryStudio() {
           style={{ background: 'rgba(255,255,255,0.05)', border: `1px solid ${C.line}`, borderRadius: 11, padding: '11px 14px', fontSize: 13, color: C.text, outline: 'none' }}
         />
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <button style={btn(true)} onClick={createProject}>Create project…</button>
+          <button style={btn(true)} onClick={() => createProject()}>Create project…</button>
           <button style={btn(false, sheetBusy)} disabled={sheetBusy} onClick={loadSheet}>
             {sheetBusy ? 'Loading tracker…' : 'From tracker sheet…'}
           </button>
@@ -208,6 +242,16 @@ export default function StoryStudio() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <span style={{ color: C.dim, fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase' }}>
                 Tracker rows ({sheet.rows.length})
+                <button
+                  onClick={async () => {
+                    const url = prompt('Google Sheet URL (Share → Anyone with the link → Viewer):', '');
+                    if (!url) return;
+                    const res = await window.story.setSheet(url);
+                    if (res.ok) loadSheet(); else alert(res.error);
+                  }}
+                  style={{ marginLeft: 10, background: 'none', border: 'none', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer', textTransform: 'none', letterSpacing: 0 }}>
+                  change sheet…
+                </button>
               </span>
               {sheet.rows.some((r) => r.status.toLowerCase() === 'planned') && (
                 <button style={btn(true, sheetBusy)} disabled={sheetBusy}
@@ -236,6 +280,27 @@ export default function StoryStudio() {
             </div>
           </div>
         )}
+
+        {(() => {
+          let recent = [];
+          try { recent = JSON.parse(localStorage.getItem('vidmyo_story_recent') || '[]'); } catch { /* ignore */ }
+          if (!recent.length) return null;
+          return (
+            <div style={card}>
+              <div style={{ color: C.dim, fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Recent projects</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {recent.map((r) => (
+                  <div key={r.dir}
+                       onClick={async () => { const res = await window.story.get(r.dir); apply(res); }}
+                       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 8, background: 'rgba(0,0,0,0.25)', cursor: 'pointer' }}>
+                    <span style={{ color: C.text, fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{r.topic}</span>
+                    <span style={{ color: C.dim, fontSize: 10, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'ui-monospace, monospace' }}>{r.dir}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         {readinessBanner}
       </div>
@@ -295,7 +360,11 @@ export default function StoryStudio() {
             </div>
           )}
         </div>
-        <button style={btn()} onClick={openProject}>Switch project…</button>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <button style={btn()} onClick={() => createProject()}>New project…</button>
+          <button style={btn()} onClick={openProject}>Open…</button>
+          <button style={btn()} onClick={closeProject}>Close</button>
+        </div>
       </div>
 
       {readinessBanner}

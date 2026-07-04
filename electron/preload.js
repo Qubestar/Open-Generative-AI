@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('story', {
     pickDir: () => ipcRenderer.invoke('story:pick-dir'),
     create: (opts) => ipcRenderer.invoke('story:create', opts),
     sheetRows: () => ipcRenderer.invoke('story:sheet-rows'),
+    setSheet: (input) => ipcRenderer.invoke('story:set-sheet', input),
     createFromSheet: (opts) => ipcRenderer.invoke('story:create-from-sheet', opts),
     get: (dir) => ipcRenderer.invoke('story:get', dir),
     setScript: (dir, text) => ipcRenderer.invoke('story:set-script', dir, text),
