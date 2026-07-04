@@ -224,6 +224,35 @@ function register() {
       : { ok: false, error: 'could not open a terminal' };
   });
 
+  // Register the Vidmyo MCP server into an agent's CLI config. One-click for
+  // CLIs with an `mcp add` command; the rest get the command to run manually.
+  ipcMain.handle('agents:installMcp', async (_evt, agentId) => {
+    const serverPath = path.join(__dirname, '..', '..', 'mcp', 'server.js');
+    const stdioCmd = (bin) => `${bin} mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`;
+    const manual = (hint) => ({
+      ok: false, error: 'manual',
+      command: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
+      hint,
+      serverPath,
+    });
+    if (agentId === 'claude_code') {
+      const res = await loginShellExec(stdioCmd('claude'), 20000);
+      return res.ok
+        ? { ok: true, output: res.stdout.slice(0, 300), serverPath }
+        : { ok: false, error: res.stderr.slice(0, 300) || 'claude mcp add failed', serverPath };
+    }
+    if (agentId === 'codex') {
+      const res = await loginShellExec(`codex mcp add vidmyo -- node ${shellQuote(serverPath)}`, 20000);
+      return res.ok
+        ? { ok: true, output: res.stdout.slice(0, 300), serverPath }
+        : manual('Codex: add a stdio MCP server named "vidmyo" in its config (command: node, args: the server path).');
+    }
+    if (agentId === 'gemini') {
+      return manual('Gemini CLI: add to ~/.gemini/settings.json → mcpServers.vidmyo = { command: "node", args: ["<server path>"] }.');
+    }
+    return manual('Register a stdio MCP server named "vidmyo": command node, argument = the server path.');
+  });
+
   // Open an arbitrary docs/url externally (used by the UI for "Install" links).
   ipcMain.handle('agents:openExternal', async (_evt, url) => {
     try {

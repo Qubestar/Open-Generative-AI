@@ -85,5 +85,6 @@ contextBridge.exposeInMainWorld('agents', {
     login: (agentId) => ipcRenderer.invoke('agents:login', agentId),
     launch: (agentId, cwd) => ipcRenderer.invoke('agents:launch', agentId, cwd),
     setupMediaSkills: (opts) => ipcRenderer.invoke('agents:setupMediaSkills', opts),
+    installMcp: (agentId) => ipcRenderer.invoke('agents:installMcp', agentId),
     openExternal: (url) => ipcRenderer.invoke('agents:openExternal', url),
 });

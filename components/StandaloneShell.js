@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { StoryStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio } from 'studio';
+import { StoryStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
 import axios from 'axios';
 
 // The five cloud generation studios (Image/Video/Lip Sync/Cinema/Marketing) are muapi-backed,
@@ -303,7 +303,7 @@ export default function StandaloneShell() {
         {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
         {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
         {activeTab === 'workflows' && <WorkflowStudio apiKey={apiKey} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />}
-        {activeTab === 'agents' && <AgentStudio apiKey={apiKey} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />}
+        {activeTab === 'agents' && <LocalAgentsStudio />}
         {activeTab === 'apps' && <AppsStudio apiKey={apiKey} />}
       </div>
 

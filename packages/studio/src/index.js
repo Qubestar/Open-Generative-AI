@@ -14,5 +14,6 @@ export { default as McpCliStudio } from './components/McpCliStudio';
 export { default as SettingsModal } from './components/SettingsModal';
 export { default as CloudImageStudio } from './components/CloudImageStudio';
 export { default as CloudVideoStudio } from './components/CloudVideoStudio';
+export { default as LocalAgentsStudio } from './components/LocalAgentsStudio';
 export * from './muapi';
 export * from './providers';
