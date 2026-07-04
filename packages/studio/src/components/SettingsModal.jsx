@@ -14,6 +14,38 @@ const lsKey = (id) => `vidmyo_key_${id}`;
 // Only providers a key can be entered for (integrations connect via their own CLIs).
 const KEYED_CATEGORIES = ['aggregator', 'direct', 'budget'];
 
+// How "Launch" opens a detected agent from the Agents tab.
+function AgentLaunchSection() {
+  const hasAgents = typeof window !== 'undefined' && !!window.agents?.isElectron && !!window.agents.getLaunchConfig;
+  const [mode, setMode] = useState('desktop');
+  useEffect(() => {
+    if (hasAgents) window.agents.getLaunchConfig().then((r) => r?.ok && setMode(r.launchMode));
+  }, [hasAgents]);
+  if (!hasAgents) return null;
+  return (
+    <div>
+      <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Agents</div>
+      <div className="bg-white/[0.03] border border-white/[0.05] rounded-lg px-3.5 py-2.5 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-white">Open agents as</div>
+          <div className="text-[11px] text-white/40">Falls back to Terminal when an agent has no desktop app installed.</div>
+        </div>
+        <select
+          value={mode}
+          onChange={async (e) => {
+            const r = await window.agents.setLaunchConfig({ launchMode: e.target.value });
+            if (r?.ok) setMode(r.launchMode);
+          }}
+          className="bg-black/40 border border-white/10 rounded-md px-2.5 py-1.5 text-[12px] text-white outline-none shrink-0"
+        >
+          <option value="desktop">Desktop app</option>
+          <option value="terminal">Terminal</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsModal({ onClose, onCloudKeyChange }) {
   const hasKeychain = typeof window !== 'undefined' && !!window.secureKeys?.isElectron;
   const [keys, setKeys] = useState({});        // providerId -> saved key (plaintext, in-memory only)
@@ -93,6 +125,7 @@ export default function SettingsModal({ onClose, onCloudKeyChange }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-5">
+          <AgentLaunchSection />
           {grouped.map((cat) => (
             <div key={cat.id}>
               <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">{cat.label}</div>

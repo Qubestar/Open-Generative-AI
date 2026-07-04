@@ -11,11 +11,41 @@
 // and returns structured results instead of throwing, so the Settings UI can
 // degrade gracefully.
 
-const { ipcMain, shell } = require('electron');
+const { ipcMain, shell, app } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+
+// ── Launch preferences ──────────────────────────────────────────────────────
+// How "Launch" opens an agent: its desktop app (default, Luke's preference)
+// or a Terminal session. Stored in userData/agents-config.json.
+const agentsConfigFile = () => path.join(app.getPath('userData'), 'agents-config.json');
+function readAgentsConfig() {
+    try { return JSON.parse(fs.readFileSync(agentsConfigFile(), 'utf8')) || {}; } catch { return {}; }
+}
+function writeAgentsConfig(cfg) {
+    fs.writeFileSync(agentsConfigFile(), JSON.stringify(cfg, null, 2));
+}
+
+// Desktop-app candidates per agent, first installed one wins (checked in
+// /Applications and ~/Applications at detect/launch time).
+const APP_CANDIDATES = {
+    claude_code: ['Claude Code', 'Claude'],
+    codex: ['Codex', 'ChatGPT'],
+    gemini: ['Antigravity', 'Gemini'],
+    hermes: ['Hermes'],
+    opencode: ['OpenCode'],
+};
+
+function findDesktopApp(agentId) {
+    for (const name of APP_CANDIDATES[agentId] || []) {
+        for (const base of ['/Applications', path.join(HOME, 'Applications')]) {
+            if (fs.existsSync(path.join(base, `${name}.app`))) return name;
+        }
+    }
+    return null;
+}
 
 const HOME = os.homedir();
 const USER_SHELL = process.env.SHELL || '/bin/zsh';
@@ -160,6 +190,7 @@ async function detectAll() {
       authed: installed ? isAuthed(agent) : false,
       installCmd: agent.installCmd,
       loginCmd: agent.loginCmd,
+      desktopApp: findDesktopApp(agent.id),
     });
   }
   return out;
@@ -197,10 +228,39 @@ function register() {
   ipcMain.handle('agents:launch', async (_evt, agentId, cwd) => {
     const agent = KNOWN_AGENTS.find((a) => a.id === agentId);
     if (!agent) return { ok: false, error: 'unknown agent' };
+
+    const mode = readAgentsConfig().launchMode || 'desktop';
+    if (mode === 'desktop') {
+      const appName = findDesktopApp(agentId);
+      if (appName) {
+        return new Promise((resolve) => {
+          execFile('open', ['-a', appName], (err) =>
+            resolve(err
+              ? { ok: false, error: `could not open ${appName}.app: ${err.message}` }
+              : { ok: true, via: 'desktop', app: appName }));
+        });
+      }
+      // No desktop app installed for this agent — fall through to Terminal.
+    }
     const cliPath = await resolveCliPath(agent.cli);
     if (!cliPath) return { ok: false, error: 'not_installed', installCmd: agent.installCmd };
     const opened = openInTerminal(agent.cli, cwd && fs.existsSync(cwd) ? cwd : HOME);
-    return opened ? { ok: true } : { ok: false, error: 'could not open a terminal' };
+    return opened
+      ? { ok: true, via: mode === 'desktop' ? 'terminal-fallback' : 'terminal' }
+      : { ok: false, error: 'could not open a terminal' };
+  });
+
+  ipcMain.handle('agents:getLaunchConfig', async () => {
+    const cfg = readAgentsConfig();
+    return { ok: true, launchMode: cfg.launchMode || 'desktop' };
+  });
+
+  ipcMain.handle('agents:setLaunchConfig', async (_evt, { launchMode } = {}) => {
+    if (!['desktop', 'terminal'].includes(launchMode)) return { ok: false, error: 'launchMode must be desktop or terminal' };
+    const cfg = readAgentsConfig();
+    cfg.launchMode = launchMode;
+    writeAgentsConfig(cfg);
+    return { ok: true, launchMode };
   });
 
   // Install the Generative-Media-Skills and seed the muapi key so a connected

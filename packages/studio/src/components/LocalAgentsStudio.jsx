@@ -100,8 +100,13 @@ export default function LocalAgentsStudio() {
                     <button style={btn(true, busyId === a.id)} disabled={busyId === a.id} onClick={() => connect(a)}>
                       {busyId === a.id ? 'Connecting…' : 'Connect Vidmyo MCP'}
                     </button>
-                    <button style={btn()} onClick={() => window.agents.launch(a.id, '/Volumes/My Lexar/AI Projects/Vidmyo')}>
-                      Launch ↗
+                    <button style={btn()}
+                            title={a.desktopApp ? `Opens ${a.desktopApp}.app (change in Settings)` : 'Opens in Terminal (no desktop app found)'}
+                            onClick={async () => {
+                              const r = await window.agents.launch(a.id, '/Volumes/My Lexar/AI Projects/Vidmyo');
+                              if (!r.ok) alert(r.error);
+                            }}>
+                      Launch{a.desktopApp ? ` ${a.desktopApp}` : ''} ↗
                     </button>
                   </>
                 )}
