@@ -16,7 +16,7 @@ these scripts; it does not reimplement them.
 | Images | provider choice — Google Flow (default, free) / APIs | scene queue via `Project.pendingScenes()` |
 | Caption fixes | `scripts/fix_captions.py` | PIL cover+redraw |
 | Assembly (Ken-Burns, cuts on beat cues, sync-exact) | `scripts/assemble.py` | ffmpeg — do NOT "simplify" the hold-to-next-cue logic; it prevents desync |
-| Finalize (4K upscale + −14 LUFS master) | not vendored yet | lives in the Curio project `pipeline/finalize_video.sh`; port in M3 |
+| Finalize (4K upscale + −14 LUFS master) | `scripts/finalize_video.sh` (wraps `master_audio.sh` + `upscale_4k.sh`, script-relative) | ffmpeg two-pass loudnorm; `NO4K=1` env to skip upscale for one run |
 
 ## Runtime dependencies (doctor installs these with consent)
 
