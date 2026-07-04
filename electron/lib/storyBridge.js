@@ -30,10 +30,26 @@ function writeConfig(cfg) {
   fs.writeFileSync(configFile(), JSON.stringify(cfg, null, 2));
 }
 
+// Known working venvs on this dev machine — auto-adopted (and persisted)
+// when nothing is configured, so the pipeline works with zero setup clicks.
+// The doctor/first-run installer replaces this convenience for end users.
+const CANDIDATE_VENVS = [
+  '/Volumes/My Lexar/AI Projects/Faceless YT 1/pipeline/.venv/bin/python',
+];
+
 async function makePipeline() {
   const { DoodlePipeline } = await core();
   const cfg = readConfig();
-  return new DoodlePipeline(cfg.venvPython ? { venvPython: cfg.venvPython } : {});
+  let pipeline = new DoodlePipeline(cfg.venvPython ? { venvPython: cfg.venvPython } : {});
+  if (!fs.existsSync(pipeline.venvPython)) {
+    const found = CANDIDATE_VENVS.find((p) => fs.existsSync(p));
+    if (found) {
+      cfg.venvPython = found;
+      writeConfig(cfg);
+      pipeline = new DoodlePipeline({ venvPython: found });
+    }
+  }
+  return pipeline;
 }
 
 function sendProgress(payload) {

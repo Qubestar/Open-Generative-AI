@@ -73,6 +73,12 @@ export default function StoryStudio() {
     if (picked.ok && picked.dir) apply(await window.story.get(picked.dir));
   };
   const runStage = async (stage, opts = {}) => {
+    // Pipeline stages spawn the local Python scripts — refuse with a pointer
+    // to the banner instead of failing with a raw spawn ENOENT.
+    if (readiness?.missing?.length > 0 && stage !== 'finalize') {
+      alert('The pipeline environment isn’t ready yet — use the yellow banner above: “Install pipeline environment…” or “Use existing venv…”.');
+      return;
+    }
     setBusy(stage);
     const res = await window.story.runStage(dir, stage, opts);
     setBusy(null);
