@@ -282,15 +282,16 @@ function register() {
 
     const mode = readAgentsConfig().launchMode || 'desktop';
     if (mode === 'desktop') {
-      // Claude Desktop: official deep link opens a NEW chat with the kickoff
-      // prompt prefilled (user reviews and sends — nothing auto-submits).
+      // Claude Desktop: official deep link opens a NEW Code-tab session at the
+      // project folder with the kickoff prompt prefilled (the app asks you to
+      // confirm the folder; nothing auto-submits).
       if (agentId === 'claude_code' && findDesktopApp('claude_code')) {
-        const url = `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`;
+        const url = `claude://code/new?q=${encodeURIComponent(prompt)}&folder=${encodeURIComponent(projectDir)}`;
         return new Promise((resolve) => {
           execFile('open', [url], (err) =>
             resolve(err
               ? { ok: false, error: `deep link failed: ${err.message}` }
-              : { ok: true, via: 'claude-deeplink', message: `New Claude chat opened with the "${topic}" brief prefilled — review and send.` }));
+              : { ok: true, via: 'claude-code-deeplink', message: `New Claude Code session opened at "${topic}" — confirm the folder, review the prefilled prompt, send.` }));
         });
       }
       const appName = findDesktopApp(agentId);
