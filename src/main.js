@@ -13,6 +13,10 @@ function navigate(page) {
 
   if (page === 'image') {
     contentArea.appendChild(ImageStudio());
+  } else if (page === 'story') {
+    import('./components/StoryStudio.js').then(({ StoryStudio }) => {
+      contentArea.appendChild(StoryStudio());
+    });
   } else if (page === 'video') {
     import('./components/VideoStudio.js').then(({ VideoStudio }) => {
       contentArea.appendChild(VideoStudio());

@@ -36,7 +36,8 @@
     "afterPack": "./afterPack.js",
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "packages/core/**/*"
     ],
     "mac": {
       "category": "public.app-category.graphics-design",

@@ -36,6 +36,26 @@ contextBridge.exposeInMainWorld('localNet', {
     fetch: (req) => ipcRenderer.invoke('net:fetch', req),
 });
 
+// ── Story Studio bridge (core runs in the main process) ─────────────────────
+contextBridge.exposeInMainWorld('story', {
+    isElectron: true,
+    pickDir: () => ipcRenderer.invoke('story:pick-dir'),
+    create: (opts) => ipcRenderer.invoke('story:create', opts),
+    get: (dir) => ipcRenderer.invoke('story:get', dir),
+    setScript: (dir, text) => ipcRenderer.invoke('story:set-script', dir, text),
+    runStage: (dir, stage, opts) => ipcRenderer.invoke('story:run-stage', dir, stage, opts),
+    approveScene: (dir, sceneId) => ipcRenderer.invoke('story:approve-scene', dir, sceneId),
+    attachImage: (dir, sceneId) => ipcRenderer.invoke('story:attach-image', dir, sceneId),
+    readiness: () => ipcRenderer.invoke('story:readiness'),
+    setVenv: (venvPython) => ipcRenderer.invoke('story:set-venv', venvPython),
+    setupEnv: () => ipcRenderer.invoke('story:setup-env'),
+    onProgress: (callback) => {
+        const listener = (_, data) => callback(data);
+        ipcRenderer.on('story:progress', listener);
+        return () => ipcRenderer.removeListener('story:progress', listener);
+    },
+});
+
 // ── Local AI agent bridge ───────────────────────────────────────────────────
 // Detect/connect/launch coding agents already installed on the machine, and
 // bootstrap media-generation skills. See electron/lib/agents.js.
