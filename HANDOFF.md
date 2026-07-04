@@ -6,10 +6,10 @@ LIVE-VERIFIED by Luke: fal image gen (Image tab), full Story chain to-scenes (Ko
 Story tab has: New/Open/Close + recents; tracker-sheet picker (Doodle 1 default, 'change sheet…' accepts any link-shared sheet URL via public CSV — the sellable path; gws CLI fallback for private sheets); one-click 'to-scenes' chain; voice dropdown Kokoro/ElevenLabs (ElevenLabs TTS via keychain key + ffmpeg; provider in catalog/Settings); scene thumbnails + lightbox; playable renders (PREVIEW/FINAL badges).
 
 ## NEXT UP (agreed with Luke, in order)
-1. **M4 — MCP story tools (THE priority):** extend mcp/server.js (keep the 8 Video Delta tools) with @vidmyo/core story tools: sheet_rows, project create/open/status, set_script, run_stage (to-scenes/assemble/finalize), scene list/approve/accept-artifact/generate(fal), read artifact paths. Goal: "agent, make video #14 from the sheet" = one request from Claude Code/Hermes/Codex. Agents do the thinking (script per the faceless-doodle skill's rules, fact-check, prompts); Vidmyo executes the deterministic stages free. Luke explicitly wants this agent-driven; decision recorded: sheet stays a queue/brief tracker, project.json stays the source of truth (do NOT move scene data into the sheet).
+1. **M4 — MCP story tools: SHIPPED + acceptance-verified** (15 tools; real run: sheet row → script → to-scenes over stdio). Remaining M4 polish: mcp/README update; per-scene fal generation tool (key via FAL_KEY env — MCP has no keychain); async job wrapping for very long stages; dedup — electron/lib/storyBridge.js still carries its own copy of the sheet logic, swap it to core/src/sheets.js.
 2. Agents area 'connect' = one-click register of the vidmyo MCP into each installed agent CLI (claude mcp add …; codex/hermes config equivalents) — reuse electron/lib/agents.js detection.
 3. Story polish: outro-slide stage; n8n-webhook publish route; Google OAuth for private customer sheets (Settings).
-4. PENDING FROM LUKE: ElevenLabs affiliate URL (wire into the ElevenLabs Settings row as the disclosed 'get a key' link); optional preferred ElevenLabs voice id (default = premade Adam).
+4. ElevenLabs affiliate DONE (https://vidmyo.com/elevenlabs, disclosed 'get a key ↗ · affiliate'). Still open from Luke: preferred ElevenLabs voice id (default = premade Adam). Agent connect instructions: `claude mcp add --transport stdio vidmyo -- node "/Volumes/My Lexar/AI Projects/Vidmyo/mcp/server.js"` — the one-click Agents-area version is next.
 
 
 
