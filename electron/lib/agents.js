@@ -11,7 +11,7 @@
 // and returns structured results instead of throwing, so the Settings UI can
 // degrade gracefully.
 
-const { ipcMain, shell, app } = require('electron');
+const { ipcMain, shell, app, clipboard } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -37,6 +37,52 @@ const APP_CANDIDATES = {
     hermes: ['Hermes'],
     opencode: ['OpenCode'],
 };
+
+// ── Session brief ───────────────────────────────────────────────────────────
+// Written into <project>/.vidmyo/session-brief.md before launching an agent,
+// so a new session starts with real context instead of a cold open. The
+// kickoff prompt tells the agent where the brief is and to use the vidmyo
+// MCP tools — no keystroke injection, no credential touching.
+
+function readManifest(dir) {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8')); } catch { return null; }
+}
+
+function writeSessionBrief(dir, manifest) {
+  const briefDir = path.join(dir, '.vidmyo');
+  fs.mkdirSync(briefDir, { recursive: true });
+  const m = manifest;
+  const approved = m ? m.scenes.filter((s) => s.image.approved).length : 0;
+  const lines = [
+    `# Vidmyo — ${m?.brief?.topic || path.basename(dir)}`,
+    '',
+    `Project dir: ${dir}`,
+    m?.brief?.hook ? `Hook: ${m.brief.hook}` : null,
+    m?.brief?.angle ? `Angle: ${m.brief.angle}` : null,
+    m?.brief?.sheetRow ? `Tracker row: ${m.brief.sheetRow} (video #${m.brief.videoNum})` : null,
+    '',
+    '## State',
+    m ? `- script: ${m.script ? `${m.script.trim().split(/\s+/).length} words` : 'MISSING — write it first (channel rules: 1,400-1,900 words, hook, dopamine beats, CTA)'}` : '- no project.json in this folder yet',
+    m ? `- voiceover: ${m.voiceover.artifact ? m.voiceover.source : 'not generated'}` : null,
+    m ? `- scenes: ${m.scenes.length} (${approved} approved)` : null,
+    m ? `- renders: ${m.renders.length}` : null,
+    '',
+    '## How to work',
+    'Use the `vidmyo` MCP tools: story_open → story_set_script → story_run_stage {stage:"to-scenes"} →',
+    'generate each scene image (Google Flow is the free default; match the prompt exactly) →',
+    'story_accept_artifact (file must exist on disk, sNNN ids only) → story_approve_scene after a real',
+    'visual check → story_run_stage assemble → finalize.',
+  ].filter((l) => l !== null);
+  const file = path.join(briefDir, 'session-brief.md');
+  fs.writeFileSync(file, lines.join('\n'));
+  return { file, topic: m?.brief?.topic || path.basename(dir) };
+}
+
+function kickoffPrompt(dir, topic, briefFile) {
+  return `Vidmyo — ${topic}\n\nYou are driving the Vidmyo Story pipeline for the project at ${dir}. `
+    + `Read ${briefFile} for the current state, then continue the pipeline using the vidmyo MCP tools `
+    + `(story_open first). Follow the channel production rules baked into the tool descriptions.`;
+}
 
 function findDesktopApp(agentId) {
     for (const name of APP_CANDIDATES[agentId] || []) {
@@ -229,24 +275,52 @@ function register() {
     const agent = KNOWN_AGENTS.find((a) => a.id === agentId);
     if (!agent) return { ok: false, error: 'unknown agent' };
 
+    const projectDir = cwd && fs.existsSync(cwd) ? cwd : HOME;
+    const manifest = readManifest(projectDir);
+    const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest);
+    const prompt = kickoffPrompt(projectDir, topic, briefFile);
+
     const mode = readAgentsConfig().launchMode || 'desktop';
     if (mode === 'desktop') {
+      // Claude Desktop: official deep link opens a NEW chat with the kickoff
+      // prompt prefilled (user reviews and sends — nothing auto-submits).
+      if (agentId === 'claude_code' && findDesktopApp('claude_code')) {
+        const url = `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`;
+        return new Promise((resolve) => {
+          execFile('open', [url], (err) =>
+            resolve(err
+              ? { ok: false, error: `deep link failed: ${err.message}` }
+              : { ok: true, via: 'claude-deeplink', message: `New Claude chat opened with the "${topic}" brief prefilled — review and send.` }));
+        });
+      }
       const appName = findDesktopApp(agentId);
       if (appName) {
+        // IDE-style apps take the project folder directly = real context.
+        const ideLike = ['Antigravity', 'Antigravity IDE', 'OpenCode'].includes(appName);
+        const args = ideLike ? ['-a', appName, projectDir] : ['-a', appName];
+        if (!ideLike) clipboard.writeText(prompt);
         return new Promise((resolve) => {
-          execFile('open', ['-a', appName], (err) =>
+          execFile('open', args, (err) =>
             resolve(err
               ? { ok: false, error: `could not open ${appName}.app: ${err.message}` }
-              : { ok: true, via: 'desktop', app: appName }));
+              : {
+                  ok: true, via: 'desktop', app: appName,
+                  message: ideLike
+                    ? `${appName} opened at the project folder — the session brief is in .vidmyo/session-brief.md.`
+                    : `${appName} opened. The kickoff prompt is on your clipboard — press ⌘N for a new chat, then ⌘V.`,
+                }));
         });
       }
       // No desktop app installed for this agent — fall through to Terminal.
     }
     const cliPath = await resolveCliPath(agent.cli);
     if (!cliPath) return { ok: false, error: 'not_installed', installCmd: agent.installCmd };
-    const opened = openInTerminal(agent.cli, cwd && fs.existsSync(cwd) ? cwd : HOME);
+    const opened = openInTerminal(agent.cli, projectDir);
     return opened
-      ? { ok: true, via: mode === 'desktop' ? 'terminal-fallback' : 'terminal' }
+      ? {
+          ok: true, via: mode === 'desktop' ? 'terminal-fallback' : 'terminal',
+          message: `Terminal opened at the project — tell the agent to read .vidmyo/session-brief.md.`,
+        }
       : { ok: false, error: 'could not open a terminal' };
   });
 

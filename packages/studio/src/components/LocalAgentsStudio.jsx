@@ -101,10 +101,14 @@ export default function LocalAgentsStudio() {
                       {busyId === a.id ? 'Connecting…' : 'Connect Vidmyo MCP'}
                     </button>
                     <button style={btn()}
-                            title={a.desktopApp ? `Opens ${a.desktopApp}.app (change in Settings)` : 'Opens in Terminal (no desktop app found)'}
+                            title={a.desktopApp ? `Opens ${a.desktopApp}.app with the current project brief (change mode in Settings)` : 'Opens in Terminal at the project (no desktop app found)'}
                             onClick={async () => {
-                              const r = await window.agents.launch(a.id, '/Volumes/My Lexar/AI Projects/Vidmyo');
-                              if (!r.ok) alert(r.error);
+                              // Launch with the active story project so the new
+                              // session starts with real context.
+                              const projectDir = localStorage.getItem('vidmyo_story_last_dir')
+                                || '/Volumes/My Lexar/AI Projects/Vidmyo';
+                              const r = await window.agents.launch(a.id, projectDir);
+                              setResults((prev) => ({ ...prev, [a.id]: r.ok ? { ok: true, notice: r.message } : r }));
                             }}>
                       Launch{a.desktopApp ? ` ${a.desktopApp}` : ''} ↗
                     </button>
@@ -114,7 +118,7 @@ export default function LocalAgentsStudio() {
               {res && (
                 <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'rgba(0,0,0,0.3)', fontSize: 11, lineHeight: 1.6 }}>
                   {res.ok ? (
-                    <span style={{ color: C.good }}>Connected — the “vidmyo” MCP server is registered. Restart the agent session to pick it up.</span>
+                    <span style={{ color: C.good }}>{res.notice || 'Connected — the “vidmyo” MCP server is registered. Restart the agent session to pick it up.'}</span>
                   ) : res.error === 'manual' ? (
                     <>
                       <div style={{ color: C.accent }}>{res.hint}</div>
