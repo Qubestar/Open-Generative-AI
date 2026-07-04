@@ -35,7 +35,8 @@ Milestone 1 is **done except**: single provider catalog (deliberately deferred i
 - **ONE app**: the Next.js dev shell (`components/StandaloneShell.js` + `packages/studio`) served on :3210 and opened in Electron by the launcher. The Vite renderer was DELETED in `d343cfd` (git history keeps it for the future packaged app). Do not recreate `src/`.
 - Provider keys: OS keychain via `window.secureKeys` (`electron/lib/secrets.js`); the Settings UI is `packages/studio/src/components/SettingsModal.jsx` over the canonical catalog. muapi key mirrors to legacy `vidmyo_cloud_key` for older shell consumers. Provider entries are added ONLY in `packages/core/src/providers.js`.
 - Electron main runs with `webSecurity: true`. Direct renderer fetches must target CORS-permissive endpoints (Video Delta sends `access-control-allow-origin: *` — verified) or go through `window.localNet.fetch` → `electron/lib/netProxy.js`. Next server routes (`app/api/proxy`) are also fine.
-- Preload surfaces: `localAI` (Wan2GP), `secureKeys`, `localNet`, `agents`, `story`. Electron main-process changes require restarting the Electron window; the page hot-reloads.
+- Preload surfaces: `localAI` (Wan2GP), `secureKeys`, `localNet`, `agents`, `story`, `media`. Electron main-process changes require restarting the Electron window; the page hot-reloads.
+- Cloud Image/Video tabs (commit `979e53a`): `CloudImageStudio.jsx` / `CloudVideoStudio.jsx` over `electron/lib/mediaBridge.js` (fal via core runJob, keychain key, durable jobs in ~/.vidmyo). Curated endpoints: flux schnell/dev, veo3 + a custom-endpoint field because fal ids drift. The muapi-era ImageStudio/VideoStudio components stay exported but unrendered.
 
 ## M2 foundation shipped (commit `f9da846`, 2026-07-03 session 3)
 
