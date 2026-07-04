@@ -259,6 +259,9 @@ export const PROVIDERS = [
     icon: 'elevenlabs',
     description: 'Premium AI voiceover — the paid alternative to local Kokoro in Story Studio.',
     docsUrl: 'https://elevenlabs.io/',
+    // Disclosed affiliate link (never functionally required — Kokoro stays
+    // the free default). Shown as the "get a key" link in Settings.
+    affiliateUrl: 'https://vidmyo.com/elevenlabs',
     endpoints: {
       tts: '/text-to-speech',
       voices: '/voices',

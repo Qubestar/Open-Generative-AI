@@ -139,9 +139,12 @@ export default function SettingsModal({ onClose, onCloudKeyChange }) {
                           />
                           <button onClick={() => saveKey(p.id, drafts[p.id])}
                                   className="px-3 py-1.5 rounded-md bg-white text-black text-[11px] font-bold">Save</button>
-                          {p.docsUrl && (
-                            <a href={p.docsUrl} target="_blank" rel="noreferrer"
-                               className="text-[11px] text-white/40 hover:text-white/70 whitespace-nowrap">get a key ↗</a>
+                          {(p.affiliateUrl || p.docsUrl) && (
+                            <a href={p.affiliateUrl || p.docsUrl} target="_blank" rel="noreferrer"
+                               title={p.affiliateUrl ? 'Affiliate link — supports Vidmyo at no extra cost to you' : undefined}
+                               className="text-[11px] text-white/40 hover:text-white/70 whitespace-nowrap">
+                              get a key ↗{p.affiliateUrl ? ' · affiliate' : ''}
+                            </a>
                           )}
                         </div>
                       )}
