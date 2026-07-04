@@ -229,12 +229,21 @@ export function StoryStudio() {
                     <span class="text-[11px] font-black text-primary w-10">${s.id}</span>
                     <span class="text-[12px] text-muted flex-1 truncate" title="${(s.prompt || '').replace(/"/g, '&quot;')}">${s.beat || '(no beat text)'}</span>
                     <span class="text-[10px] font-bold ${color} w-24 text-right">${state}</span>
-                    <button data-act="copy" class="px-2 py-1 rounded text-[10px] font-bold bg-white/5 text-white border border-white/10" title="Copy the image prompt">Prompt</button>
+                    <button data-act="copy" class="px-2 py-1 rounded text-[10px] font-bold bg-white/5 text-white border border-white/10" title="Copy the image prompt (paste into Google Flow — the free path)">Prompt</button>
                     <button data-act="attach" class="px-2 py-1 rounded text-[10px] font-bold bg-white/5 text-white border border-white/10">Attach…</button>
+                    ${!s.image.artifact ? '<button data-act="generate" class="px-2 py-1 rounded text-[10px] font-bold bg-white/5 text-white border border-white/10" title="Generate with your fal.ai key — paid per image">fal ⚡</button>' : ''}
                     ${s.image.artifact && !s.image.approved ? '<button data-act="approve" class="px-2 py-1 rounded text-[10px] font-bold bg-primary text-black">Approve</button>' : ''}
                 </div>`);
             row.querySelector('[data-act="copy"]').onclick = () => {
                 navigator.clipboard.writeText(s.prompt || '');
+            };
+            const genBtn = row.querySelector('[data-act="generate"]');
+            if (genBtn) genBtn.onclick = async () => {
+                genBtn.disabled = true;
+                genBtn.textContent = '…';
+                const res = await window.story.generateScene(projectDir, s.id);
+                if (res.ok) { summary = res; render(); }
+                else { alert(res.error); genBtn.disabled = false; genBtn.textContent = 'fal ⚡'; }
             };
             row.querySelector('[data-act="attach"]').onclick = async () => {
                 const res = await window.story.attachImage(projectDir, s.id);

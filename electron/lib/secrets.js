@@ -24,6 +24,19 @@ function writeStore(store) {
     fs.writeFileSync(storeFile(), JSON.stringify(store, null, 2), { mode: 0o600 });
 }
 
+// Main-process read of a single provider key (e.g. the story bridge running
+// a cloud image job). Never crosses IPC; never logged.
+function getSecret(id) {
+    if (!safeStorage.isEncryptionAvailable()) return '';
+    const b64 = readStore()[id];
+    if (!b64) return '';
+    try {
+        return safeStorage.decryptString(Buffer.from(b64, 'base64'));
+    } catch {
+        return '';
+    }
+}
+
 function register() {
     ipcMain.handle('secrets:available', () => safeStorage.isEncryptionAvailable());
 
@@ -56,4 +69,4 @@ function register() {
     });
 }
 
-module.exports = { register };
+module.exports = { register, getSecret };

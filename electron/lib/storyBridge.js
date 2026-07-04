@@ -10,6 +10,7 @@ const { ipcMain, dialog, app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const { getSecret } = require('./secrets');
 
 let corePromise = null;
 function core() {
@@ -144,6 +145,49 @@ function register() {
       project.acceptSceneArtifact(sceneId, dest);
       return await summarize(project);
     } catch (err) { return fail(err); }
+  });
+
+  // Generate one scene image through a PAID cloud provider (fal, user's key).
+  // The free default path remains Google Flow via agent/manual attach — this
+  // is the in-product alternative for users who prefer paying per image.
+  ipcMain.handle('story:generate-scene', async (_evt, dir, sceneId, { model = null } = {}) => {
+    try {
+      const { JobStore, runJob, falAdapter } = await core();
+      const project = await openProject(dir);
+      const scene = project.getScene(sceneId);
+      if (!scene.prompt) return fail(new Error(`${sceneId} has no image prompt yet`));
+      const key = getSecret('fal');
+      if (!key) return fail(new Error('No fal.ai key saved — add it in Settings → Providers, or attach an image manually (Google Flow is the free path).'));
+
+      const cfg = readConfig();
+      const falModel = model || cfg.imageModel || 'fal-ai/flux/schnell';
+      const store = new JobStore();
+      const job = store.create({
+        type: 'image',
+        provider: 'fal',
+        project: project.manifest.id,
+        params: { prompt: scene.prompt, image_size: 'landscape_16_9' },
+      });
+      sendProgress({ stage: `image:${sceneId}`, phase: 'start', message: falModel });
+      const done = await runJob(store, job.id, falAdapter({ model: falModel, key }), {
+        outDir: path.join(dir, 'images'),
+        pollMs: 1500,
+      });
+      if (done.state !== 'done') {
+        sendProgress({ stage: `image:${sceneId}`, phase: 'error', message: done.error });
+        return fail(new Error(done.error || `job ended in state ${done.state}`));
+      }
+      // Rename the job-named artifact to the scene id so assemble.py finds it.
+      const produced = done.artifacts[0].path;
+      const dest = path.join(dir, 'images', `${sceneId}${path.extname(produced) || '.png'}`);
+      fs.renameSync(produced, dest);
+      project.acceptSceneArtifact(sceneId, dest);
+      sendProgress({ stage: `image:${sceneId}`, phase: 'done' });
+      return await summarize(project);
+    } catch (err) {
+      sendProgress({ stage: `image:${sceneId}`, phase: 'error', message: String(err.message || err) });
+      return fail(err);
+    }
   });
 
   ipcMain.handle('story:readiness', async () => {
