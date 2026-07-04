@@ -149,8 +149,26 @@ export default function StoryStudio() {
   const check = data.scriptCheck;
   const finalized = m.renders?.find((r) => r.finalized);
 
+  // Short scripts fail the 1,400-word retention gate — offer the override
+  // in plain language instead of surfacing the internal force flag.
+  const generateVoiceover = () => {
+    if (check && !check.ok) {
+      const goAhead = confirm(
+        `The script is ${check.words} words, under the ${check.minWords}-word target — the finished video will run well short of 5 minutes (fine for a test, weak for the channel).\n\nGenerate the voiceover anyway?`
+      );
+      if (!goAhead) return;
+      runStage('voiceover', { force: true });
+      return;
+    }
+    runStage('voiceover');
+  };
+
   const stageActions = {
-    voiceover: status.script && !status.voiceover && [['Generate voiceover', () => runStage('voiceover'), true]],
+    voiceover: status.script && !status.voiceover && [[
+      check && !check.ok ? 'Generate anyway (short script)' : 'Generate voiceover',
+      generateVoiceover,
+      true,
+    ]],
     beats: status.voiceover && !status.beats && [['Detect beats', () => runStage('beats'), true]],
     assemble: status.beats && !status.finalize && [
       ['Preview (white frames)', () => runStage('assemble', { allowMissing: true }), false],
