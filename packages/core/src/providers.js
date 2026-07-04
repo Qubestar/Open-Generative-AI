@@ -1,10 +1,15 @@
-// ⚠️ DEPRECATED CATALOG COPY — do not edit provider entries here.
-// The canonical registry is packages/core/src/providers.js (@vidmyo/core).
-// This file only still exists because the Next.js surface is frozen; it will
-// be replaced by a core import when that surface is unfrozen or retired.
-// Provider registry for Vidmyo
-// Maps external provider APIs so users can bring their own keys.
-// Categories: aggregator, direct, integration (OAuth/CLI), budget (cheap APIs).
+// Canonical Vidmyo provider registry — the single source of truth.
+//
+// This is the merge of the two previously drifted catalogs
+// (src/lib/providers.js and packages/studio/src/providers.js, 2026-07-03):
+// the Vite catalog's superset (OpenRouter, fal.ai, agent integrations) plus
+// the studio catalog's `muapi` entry. Consumers:
+//   - src/lib/providers.js re-exports this and adds browser key storage
+//   - the CLI and MCP server import it directly
+// Pure data + pure functions only: key lookup is always an explicit argument.
+//
+// NOTE: keep `openrouter` first — getProviderById falls back to PROVIDERS[0]
+// and the desktop default is OpenRouter.
 
 export const PROVIDER_CATEGORIES = [
   { id: 'aggregator', label: 'Unified' },
@@ -15,6 +20,41 @@ export const PROVIDER_CATEGORIES = [
 
 export const PROVIDERS = [
   // ── Aggregator ───────────────────────────────────────────────────────────
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    category: 'aggregator',
+    type: 'aggregator',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    authHeader: 'Authorization',
+    authPrefix: 'Bearer ',
+    authInQuery: false,
+    color: '#6467f2',
+    icon: 'openrouter',
+    description: 'Unified gateway to 300+ models (OpenAI, Anthropic, Google, Meta…). One key, OpenAI-compatible.',
+    docsUrl: 'https://openrouter.ai/keys',
+    endpoints: {
+      chat: '/chat/completions',
+      image: '/images/generations',
+      models: '/models',
+    },
+    studios: ['image'],
+  },
+  {
+    id: 'fal',
+    name: 'fal.ai',
+    category: 'aggregator',
+    type: 'aggregator',
+    baseUrl: 'https://queue.fal.run',
+    authHeader: 'Authorization',
+    authPrefix: 'Key ',
+    authInQuery: false,
+    color: '#0ea5e9',
+    icon: 'fal',
+    description: 'Video editing & tools — VACE footage editing, lip-sync, watermark/object removal. Pay-per-use.',
+    docsUrl: 'https://fal.ai/dashboard/keys',
+    studios: ['video', 'lipsync'],
+  },
   {
     id: 'muapi',
     name: 'Muapi',
@@ -28,7 +68,7 @@ export const PROVIDERS = [
     icon: 'muapi',
     description: 'Unified access to 200+ models. One key, every model.',
     docsUrl: 'https://muapi.ai',
-    studios: ['image', 'video', 'lipsync', 'cinema', 'marketing'],
+    studios: ['image', 'video', 'lipsync', 'cinema'],
   },
 
   // ── Direct APIs (Premium) ────────────────────────────────────────────────
@@ -373,6 +413,21 @@ export const PROVIDERS = [
     studios: [],
   },
   {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    category: 'integration',
+    type: 'oauth',
+    color: '#4285f4',
+    icon: 'google',
+    description: "Google's Gemini CLI agent. Requires local Node.js + npx.",
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    oauthUrl: 'https://aistudio.google.com/app/apikey',
+    cliCommand: 'npx @google/gemini-cli',
+    scopes: ['code', 'workspace'],
+    connected: false,
+    studios: [],
+  },
+  {
     id: 'codex',
     name: 'OpenAI Codex',
     category: 'integration',
@@ -419,9 +474,9 @@ export const PROVIDERS = [
   },
 ];
 
-export const DEFAULT_PROVIDER = 'muapi';
+export const DEFAULT_PROVIDER = 'openrouter';
 
-// ── Provider helpers ──────────────────────────────────────
+// ── Pure helpers ─────────────────────────────────────────────────────────────
 
 export function getProviderById(id) {
   return PROVIDERS.find(p => p.id === id) || PROVIDERS[0];
@@ -443,22 +498,20 @@ export function getProvidersForStudio(studioType) {
 
 // Infer the native provider for a given model entry.
 export function inferProviderForModel(model) {
-  if (!model) return 'muapi';
+  if (!model) return 'openrouter';
   const id = model.id || '';
-  const endpoint = model.endpoint || '';
   const family = model.family || '';
 
   if (family) return family;
   if (id.startsWith('openai-') || id.includes('gpt4o') || id.includes('dall')) return 'openai';
   if (id.startsWith('google-') || id.includes('imagen') || id.includes('veo')) return 'google';
   if (id.startsWith('grok-')) return 'xai';
-  if (id.startsWith('flux-') && id.includes('kontext')) return 'blackforest';
   if (id.startsWith('flux-')) return 'blackforest';
   if (id.startsWith('hidream-')) return 'hidream';
   if (id.startsWith('wan2')) return 'wan2';
   if (id.startsWith('kling-')) return 'kling';
   if (id.startsWith('luma-')) return 'luma';
-  if (id.startsWith('veo-') || id.includes('veo')) return 'google';
+  if (id.startsWith('veo-')) return 'google';
   if (id.startsWith('seedream-')) return 'seedream';
   if (id.startsWith('recraft-')) return 'recraft';
   if (id.startsWith('minimax-')) return 'minimax';
@@ -466,44 +519,7 @@ export function inferProviderForModel(model) {
   if (id.startsWith('runway-') || id.startsWith('gen-')) return 'runway';
   if (id.startsWith('pika-')) return 'pika';
 
-  return 'muapi';
-}
-
-// Return the user's saved API key for a provider (localStorage key pattern).
-export function getProviderStorageKey(providerId) {
-  return `vidmyo_key_${providerId}`;
-}
-
-export function getSavedProviderKey(providerId) {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem(getProviderStorageKey(providerId)) || '';
-}
-
-export function setSavedProviderKey(providerId, key) {
-  if (typeof window === 'undefined') return;
-  if (key) localStorage.setItem(getProviderStorageKey(providerId), key);
-  else localStorage.removeItem(getProviderStorageKey(providerId));
-}
-
-export function getActiveProviderId() {
-  if (typeof window === 'undefined') return DEFAULT_PROVIDER;
-  return localStorage.getItem('vidmyo_active_provider') || DEFAULT_PROVIDER;
-}
-
-export function setActiveProviderId(id) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem('vidmyo_active_provider', id);
-}
-
-// For OAuth/CLI integrations, track connection state separately.
-export function getIntegrationConnected(providerId) {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem(`vidmyo_connected_${providerId}`) === 'true';
-}
-
-export function setIntegrationConnected(providerId, connected) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(`vidmyo_connected_${providerId}`, connected ? 'true' : 'false');
+  return 'openrouter';
 }
 
 // For direct providers, build the full request URL.
@@ -513,9 +529,9 @@ export function buildProviderUrl(provider, endpointPath) {
   return `${base}/${path}`;
 }
 
-// Build headers object for a provider + optional user key.
-export function buildProviderHeaders(provider, userKey) {
-  const key = userKey || getSavedProviderKey(provider.id);
+// Build headers for a provider. The key is always explicit here — key storage
+// is a surface concern (keychain in the desktop app, localStorage in browser).
+export function buildProviderHeaders(provider, key) {
   if (!key) return { 'Content-Type': 'application/json' };
   const value = provider.authPrefix ? `${provider.authPrefix}${key}` : key;
   return {
@@ -524,11 +540,9 @@ export function buildProviderHeaders(provider, userKey) {
   };
 }
 
-// Append auth key to query string if the provider requires it.
-export function appendProviderAuthToUrl(provider, url, userKey) {
-  if (!provider.authInQuery) return url;
-  const key = userKey || getSavedProviderKey(provider.id);
-  if (!key) return url;
+// Append auth key to the query string if the provider requires it.
+export function appendProviderAuthToUrl(provider, url, key) {
+  if (!provider.authInQuery || !key) return url;
   const sep = url.includes('?') ? '&' : '?';
   return `${url}${sep}${provider.authHeader}=${encodeURIComponent(key)}`;
 }

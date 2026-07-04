@@ -1,0 +1,17 @@
+{
+  "name": "@vidmyo/core",
+  "version": "0.1.0",
+  "description": "Vidmyo shared capability core: provider registry, durable jobs, project manifests. Pure Node ESM — no Electron, no DOM.",
+  "type": "module",
+  "private": true,
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./providers": "./src/providers.js",
+    "./jobs": "./src/jobs.js",
+    "./project": "./src/project.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
