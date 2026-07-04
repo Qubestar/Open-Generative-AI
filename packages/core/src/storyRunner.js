@@ -10,7 +10,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getStyle, validateScript, importBeats, scaffoldPrompts, stageStatus } from './story.js';
 
-export async function stageVoiceover(project, pipeline, { force = false } = {}) {
+// `ttsOverride(scriptFile, outWav)` lets the caller swap the voice engine
+// (e.g. ElevenLabs in the desktop bridge); default is the pipeline's local
+// Kokoro. `source` is recorded on the manifest for provenance.
+export async function stageVoiceover(project, pipeline, { force = false, source = 'kokoro', ttsOverride = null } = {}) {
   const m = project.manifest;
   if (!m.script) throw new Error('voiceover stage: manifest.script is empty — write the script first');
   const style = getStyle(m.style);
@@ -21,8 +24,13 @@ export async function stageVoiceover(project, pipeline, { force = false } = {}) 
   const scriptFile = path.join(project.dir, 'script.txt');
   const outWav = path.join(project.dir, 'voiceover.wav');
   fs.writeFileSync(scriptFile, m.script);
-  await pipeline.tts(scriptFile, outWav, { voice: style.voice });
-  m.voiceover = { ...m.voiceover, source: 'kokoro', artifact: outWav };
+  if (ttsOverride) {
+    await ttsOverride(scriptFile, outWav);
+    if (!fs.existsSync(outWav)) throw new Error(`voiceover (${source}) produced no file`);
+  } else {
+    await pipeline.tts(scriptFile, outWav, { voice: style.voice });
+  }
+  m.voiceover = { ...m.voiceover, source, artifact: outWav };
   project.save();
   return stageStatus(project);
 }

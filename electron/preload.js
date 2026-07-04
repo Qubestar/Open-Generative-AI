@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('story', {
     isElectron: true,
     pickDir: () => ipcRenderer.invoke('story:pick-dir'),
     create: (opts) => ipcRenderer.invoke('story:create', opts),
+    sheetRows: () => ipcRenderer.invoke('story:sheet-rows'),
+    createFromSheet: (opts) => ipcRenderer.invoke('story:create-from-sheet', opts),
     get: (dir) => ipcRenderer.invoke('story:get', dir),
     setScript: (dir, text) => ipcRenderer.invoke('story:set-script', dir, text),
     runStage: (dir, stage, opts) => ipcRenderer.invoke('story:run-stage', dir, stage, opts),

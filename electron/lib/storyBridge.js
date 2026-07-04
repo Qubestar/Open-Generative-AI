@@ -9,6 +9,8 @@
 const { ipcMain, dialog, app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 const { getSecret } = require('./secrets');
 
@@ -122,9 +124,23 @@ function register() {
       const mod = await core();
       const project = await openProject(dir);
       const pipeline = await makePipeline();
+      const voOpts = () => ({
+        force: !!opts.force,
+        ...(opts.voice === 'elevenlabs' ? { source: 'elevenlabs', ttsOverride: elevenLabsTts } : {}),
+      });
       const runners = {
-        voiceover: () => mod.stageVoiceover(project, pipeline, opts),
+        voiceover: () => mod.stageVoiceover(project, pipeline, voOpts()),
         beats: () => mod.stageBeats(project, pipeline),
+        // One click from script to reviewable scenes: voiceover + beats +
+        // prompt scaffolding (beats does the scaffolding internally).
+        'to-scenes': async () => {
+          sendProgress({ stage: 'voiceover', phase: 'start' });
+          await mod.stageVoiceover(project, pipeline, voOpts());
+          sendProgress({ stage: 'voiceover', phase: 'done' });
+          sendProgress({ stage: 'beats', phase: 'start' });
+          await mod.stageBeats(project, pipeline);
+          sendProgress({ stage: 'beats', phase: 'done' });
+        },
         assemble: () => mod.stageAssemble(project, pipeline, opts),
         finalize: () => mod.stageFinalize(project, pipeline, opts),
       };
@@ -210,6 +226,94 @@ function register() {
       return fail(err);
     }
   });
+
+  // ── Tracker sheet (Google Sheets via the authenticated gws CLI) ──────────
+  // Read-only: Vidmyo never writes to the production tracker. Default sheet
+  // is the Doodle 1 queue; override via story-config.json { sheetId }.
+  const DEFAULT_SHEET_ID = '1ZrdLMkdC1-OXxaPwgMGZW7dUO9bSNcQRNETP7D5d4jo';
+
+  function gwsRead(sheetId, range) {
+    return new Promise((resolve, reject) => {
+      execFile('gws', ['sheets', '+read', '--spreadsheet', sheetId, '--range', range, '--format', 'json'],
+        { timeout: 20000, env: { ...process.env, PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin` } },
+        (err, stdout) => {
+          if (err) { reject(new Error(`gws failed: ${String(err.message).slice(0, 300)}`)); return; }
+          try {
+            // gws may print a keyring notice before the JSON.
+            const jsonStart = stdout.indexOf('{');
+            resolve(JSON.parse(stdout.slice(jsonStart)));
+          } catch (e) { reject(new Error(`gws returned unparseable output`)); }
+        });
+    });
+  }
+
+  ipcMain.handle('story:sheet-rows', async () => {
+    try {
+      const sheetId = readConfig().sheetId || DEFAULT_SHEET_ID;
+      const data = await gwsRead(sheetId, 'A1:E60');
+      const rows = (data.values || []).slice(1)
+        .map((r, i) => ({
+          row: i + 2, // 1-based sheet row (header is row 1)
+          status: r[0] || '',
+          videoNum: r[1] || '',
+          title: r[2] || '',
+          hook: r[3] || '',
+          topic: r[4] || '',
+        }))
+        .filter((r) => r.title);
+      return { ok: true, sheetId, rows };
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('story:create-from-sheet', async (_evt, { dir, row } = {}) => {
+    try {
+      if (!dir || !row) return fail(new Error('dir and row are required'));
+      const sheetId = readConfig().sheetId || DEFAULT_SHEET_ID;
+      const data = await gwsRead(sheetId, `A${row}:E${row}`);
+      const r = data.values?.[0];
+      if (!r || !r[2]) return fail(new Error(`Sheet row ${row} has no Working Title`));
+      const { Project } = await core();
+      const project = Project.create(dir, {
+        brief: {
+          topic: r[2],
+          hook: r[3] || '',
+          angle: r[4] || '',
+          videoNum: r[1] || '',
+          sheetRow: row,
+          sheetId,
+        },
+      });
+      return await summarize(project);
+    } catch (err) { return fail(err); }
+  });
+
+  // ── ElevenLabs voiceover (paid alternative to local Kokoro) ─────────────
+  // Key from the keychain ('elevenlabs' in Settings). Voice/model overridable
+  // via story-config.json { elevenLabsVoiceId, elevenLabsModelId }. Output is
+  // converted to the pipeline's expected mono 24 kHz wav with ffmpeg.
+  async function elevenLabsTts(scriptFile, outWav) {
+    const key = getSecret('elevenlabs');
+    if (!key) throw new Error('No ElevenLabs key saved — add it in Settings, or switch the voice back to Kokoro (free).');
+    const cfg = readConfig();
+    const voiceId = cfg.elevenLabsVoiceId || 'pNInz6obpgDQGcFmaJgB'; // premade "Adam" — calm narrator
+    const modelId = cfg.elevenLabsModelId || 'eleven_multilingual_v2';
+    const text = fs.readFileSync(scriptFile, 'utf8');
+
+    const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
+      method: 'POST',
+      headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, model_id: modelId }),
+    });
+    if (!res.ok) throw new Error(`ElevenLabs TTS failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+    const mp3 = path.join(os.tmpdir(), `vidmyo-vo-${Date.now()}.mp3`);
+    fs.writeFileSync(mp3, Buffer.from(await res.arrayBuffer()));
+    await new Promise((resolve, reject) => {
+      execFile('ffmpeg', ['-y', '-i', mp3, '-ar', '24000', '-ac', '1', outWav],
+        { env: { ...process.env, PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin` } },
+        (err, _o, stderr) => err ? reject(new Error(`ffmpeg convert failed: ${String(stderr).slice(-200)}`)) : resolve());
+    });
+    fs.unlinkSync(mp3);
+  }
 
   // Read a file belonging to a story project (scene thumbnails, render
   // playback). Strictly scoped: the path must live inside the given project

@@ -43,6 +43,9 @@ export default function StoryStudio() {
   const [log, setLog] = useState([]);
   const [topic, setTopic] = useState('');
   const [scriptDraft, setScriptDraft] = useState('');
+  const [voice, setVoice] = useState('kokoro');   // kokoro (free) | elevenlabs (paid)
+  const [sheet, setSheet] = useState(null);       // { rows } after loading the tracker
+  const [sheetBusy, setSheetBusy] = useState(false);
   const [thumbs, setThumbs] = useState({});       // sceneId -> blob URL
   const [lightbox, setLightbox] = useState(null); // enlarged image URL
   const [renderUrl, setRenderUrl] = useState(null); // playing render blob URL
@@ -104,6 +107,24 @@ export default function StoryStudio() {
   const openProject = async () => {
     const picked = await window.story.pickDir();
     if (picked.ok && picked.dir) apply(await window.story.get(picked.dir));
+  };
+
+  const loadSheet = async () => {
+    setSheetBusy(true);
+    const res = await window.story.sheetRows();
+    setSheetBusy(false);
+    if (res.ok) setSheet(res);
+    else alert(res.error);
+  };
+
+  const createFromSheetRow = async (row) => {
+    const picked = await window.story.pickDir();
+    if (!picked.ok || !picked.dir) return;
+    setSheetBusy(true);
+    const res = await window.story.createFromSheet({ dir: picked.dir, row });
+    setSheetBusy(false);
+    if (res.ok) { setSheet(null); apply(res); }
+    else alert(res.error);
   };
   const runStage = async (stage, opts = {}) => {
     // Pipeline stages spawn the local Python scripts — refuse with a pointer
@@ -174,10 +195,48 @@ export default function StoryStudio() {
           placeholder="Topic, e.g. Why you wake up at 2am"
           style={{ background: 'rgba(255,255,255,0.05)', border: `1px solid ${C.line}`, borderRadius: 11, padding: '11px 14px', fontSize: 13, color: C.text, outline: 'none' }}
         />
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
           <button style={btn(true)} onClick={createProject}>Create project…</button>
+          <button style={btn(false, sheetBusy)} disabled={sheetBusy} onClick={loadSheet}>
+            {sheetBusy ? 'Loading tracker…' : 'From tracker sheet…'}
+          </button>
           <button style={btn()} onClick={openProject}>Open existing…</button>
         </div>
+
+        {sheet && (
+          <div style={card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ color: C.dim, fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase' }}>
+                Tracker rows ({sheet.rows.length})
+              </span>
+              {sheet.rows.some((r) => r.status.toLowerCase() === 'planned') && (
+                <button style={btn(true, sheetBusy)} disabled={sheetBusy}
+                        onClick={() => createFromSheetRow(sheet.rows.find((r) => r.status.toLowerCase() === 'planned').row)}>
+                  Next planned →
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto' }}>
+              {sheet.rows.map((r) => {
+                const planned = r.status.toLowerCase() === 'planned';
+                return (
+                  <div key={r.row}
+                       onClick={() => !sheetBusy && createFromSheetRow(r.row)}
+                       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 8, background: 'rgba(0,0,0,0.25)', cursor: 'pointer' }}>
+                    <span style={{
+                      fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, flexShrink: 0, textTransform: 'uppercase',
+                      color: planned ? C.accent : '#3ECF8E',
+                      border: `1px solid ${planned ? 'rgba(232,163,61,0.4)' : 'rgba(62,207,142,0.35)'}`,
+                    }}>{r.status || '—'}</span>
+                    <span style={{ color: C.dim, fontSize: 11, width: 20, flexShrink: 0 }}>#{r.videoNum}</span>
+                    <span style={{ color: C.text, fontSize: 12, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {readinessBanner}
       </div>
     );
@@ -188,23 +247,25 @@ export default function StoryStudio() {
   const check = data.scriptCheck;
   const finalized = m.renders?.find((r) => r.finalized);
 
+  // One click from script to reviewable scenes (voiceover + beats + prompts).
   // Short scripts fail the 1,400-word retention gate — offer the override
   // in plain language instead of surfacing the internal force flag.
   const generateVoiceover = () => {
+    const opts = { voice };
     if (check && !check.ok) {
       const goAhead = confirm(
         `The script is ${check.words} words, under the ${check.minWords}-word target — the finished video will run well short of 5 minutes (fine for a test, weak for the channel).\n\nGenerate the voiceover anyway?`
       );
       if (!goAhead) return;
-      runStage('voiceover', { force: true });
-      return;
+      opts.force = true;
     }
-    runStage('voiceover');
+    if (voice === 'elevenlabs' && !confirm('ElevenLabs voiceover uses your paid ElevenLabs credits. Continue?')) return;
+    runStage(status.beats ? 'voiceover' : 'to-scenes', opts);
   };
 
   const stageActions = {
     voiceover: status.script && !status.voiceover && [[
-      check && !check.ok ? 'Generate anyway (short script)' : 'Generate voiceover',
+      check && !check.ok ? 'Voiceover → scenes (short script)' : 'Voiceover → scenes',
       generateVoiceover,
       true,
     ]],
@@ -223,7 +284,16 @@ export default function StoryStudio() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ color: C.text, fontSize: 20, fontWeight: 900 }}>{m.brief?.topic || 'Story project'}</h2>
-          <div style={{ color: C.dim, fontSize: 11, marginTop: 2 }}>{dir} · {m.style} · {m.aspect}</div>
+          <div style={{ color: C.dim, fontSize: 11, marginTop: 2 }}>
+            {dir} · {m.style} · {m.aspect}
+            {m.brief?.sheetRow ? ` · tracker row ${m.brief.sheetRow} (#${m.brief.videoNum})` : ''}
+          </div>
+          {(m.brief?.hook || m.brief?.angle) && (
+            <div style={{ color: C.dim, fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+              {m.brief.hook && <div><span style={{ color: C.accent, fontWeight: 700 }}>Hook:</span> {m.brief.hook}</div>}
+              {m.brief.angle && <div><span style={{ color: C.accent, fontWeight: 700 }}>Angle:</span> {m.brief.angle}</div>}
+            </div>
+          )}
         </div>
         <button style={btn()} onClick={openProject}>Switch project…</button>
       </div>
@@ -258,7 +328,14 @@ export default function StoryStudio() {
                 <span style={{ color: done ? C.text : C.dim, fontSize: 13, fontWeight: 700 }}>{label}</span>
                 {isNext && <span style={{ color: C.accent, fontSize: 9, fontWeight: 900, letterSpacing: 1.5 }}>NEXT</span>}
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {stage === 'voiceover' && actions && actions.length > 0 && (
+                  <select value={voice} onChange={(e) => setVoice(e.target.value)} disabled={!!busy}
+                          style={{ background: '#0d0d10', border: `1px solid ${C.line}`, borderRadius: 8, padding: '7px 8px', fontSize: 11, color: C.text }}>
+                    <option value="kokoro">Kokoro (free, local)</option>
+                    <option value="elevenlabs">ElevenLabs (paid)</option>
+                  </select>
+                )}
                 {actions && actions.map(([lab, fn, primary]) => (
                   <button key={lab} style={btn(primary, !!busy)} disabled={!!busy} onClick={fn}>
                     {busy ? 'Working…' : lab}
