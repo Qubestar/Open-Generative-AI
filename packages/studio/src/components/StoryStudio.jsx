@@ -396,6 +396,9 @@ export default function StoryStudio() {
                 <span style={{ color: done ? C.good : 'rgba(255,255,255,0.25)' }}>{done ? '✓' : '○'}</span>
                 <span style={{ color: done ? C.text : C.dim, fontSize: 13, fontWeight: 700 }}>{label}</span>
                 {isNext && <span style={{ color: C.accent, fontSize: 9, fontWeight: 900, letterSpacing: 1.5 }}>NEXT</span>}
+                {isNext && stage === 'images' && (
+                  <span style={{ color: C.dim, fontSize: 11 }}>↓ use the Scenes list below: fal ⚡ or Attach each image, then Approve</span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 {stage === 'voiceover' && actions && actions.length > 0 && (

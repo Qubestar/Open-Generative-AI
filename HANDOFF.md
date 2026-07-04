@@ -1,4 +1,17 @@
-# Vidmyo — Session Handoff (2026-07-03, Claude Fable 5)
+# Vidmyo — Session Handoff (updated 2026-07-04 end of session, Claude Fable 5)
+
+## CURRENT STATE (read this first)
+The app = Next.js dev shell (:3210/studio) in Electron via the Desktop launcher. Tabs: Story · Image · Video · Video Delta · Workflows · Agents · Apps. Brand = "Vidmyo" + Beat Wave mark (app/icon.svg, public/vidmyo-icon.png).
+LIVE-VERIFIED by Luke: fal image gen (Image tab), full Story chain to-scenes (Kokoro voiceover → whisper beats → prompts) — his 31-word test correctly stopped at the Scene-images human gate (fal ⚡/Attach + Approve unlocks Assemble).
+Story tab has: New/Open/Close + recents; tracker-sheet picker (Doodle 1 default, 'change sheet…' accepts any link-shared sheet URL via public CSV — the sellable path; gws CLI fallback for private sheets); one-click 'to-scenes' chain; voice dropdown Kokoro/ElevenLabs (ElevenLabs TTS via keychain key + ffmpeg; provider in catalog/Settings); scene thumbnails + lightbox; playable renders (PREVIEW/FINAL badges).
+
+## NEXT UP (agreed with Luke, in order)
+1. **M4 — MCP story tools (THE priority):** extend mcp/server.js (keep the 8 Video Delta tools) with @vidmyo/core story tools: sheet_rows, project create/open/status, set_script, run_stage (to-scenes/assemble/finalize), scene list/approve/accept-artifact/generate(fal), read artifact paths. Goal: "agent, make video #14 from the sheet" = one request from Claude Code/Hermes/Codex. Agents do the thinking (script per the faceless-doodle skill's rules, fact-check, prompts); Vidmyo executes the deterministic stages free. Luke explicitly wants this agent-driven; decision recorded: sheet stays a queue/brief tracker, project.json stays the source of truth (do NOT move scene data into the sheet).
+2. Agents area 'connect' = one-click register of the vidmyo MCP into each installed agent CLI (claude mcp add …; codex/hermes config equivalents) — reuse electron/lib/agents.js detection.
+3. Story polish: outro-slide stage; n8n-webhook publish route; Google OAuth for private customer sheets (Settings).
+4. PENDING FROM LUKE: ElevenLabs affiliate URL (wire into the ElevenLabs Settings row as the disclosed 'get a key' link); optional preferred ElevenLabs voice id (default = premade Adam).
+
+
 
 Read this first, then: `docs/product/2026-07-03-vidmyo-product-architecture-package.md`
 (the full plan; §14 = approved decisions + what's already executed) and
