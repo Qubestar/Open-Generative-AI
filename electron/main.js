@@ -39,21 +39,14 @@ function createWindow() {
         title: 'Vidmyo',
     });
 
-    // Dev: load the live Next dev server (hot-reloading, all latest changes) when
-    // VIDMYO_DEV_URL is set. Production: load the bundled Vite build as before.
-    const devUrl = process.env.VIDMYO_DEV_URL;
-    if (devUrl) {
-        mainWindow.loadURL(devUrl).catch((err) => {
-            console.error('Failed to load dev URL:', err);
-            mainWindow.show();
-        });
-    } else {
-        const indexPath = path.join(__dirname, '../dist/index.html');
-        mainWindow.loadFile(indexPath).catch((err) => {
-            console.error('Failed to load index.html:', err);
-            mainWindow.show();
-        });
-    }
+    // The app IS the Next.js dev shell (hot reload) — the old bundled Vite
+    // renderer was removed 2026-07-04. The launcher starts `npm run dev` on
+    // :3210 and opens this window; VIDMYO_DEV_URL can point elsewhere.
+    const devUrl = process.env.VIDMYO_DEV_URL || 'http://localhost:3210/studio';
+    mainWindow.loadURL(devUrl).catch((err) => {
+        console.error(`Failed to load ${devUrl} — is the dev server running? (npm run dev -- -p 3210)`, err);
+        mainWindow.show();
+    });
 
     mainWindow.webContents.on('did-fail-load', (event, code, desc) => {
         console.error('did-fail-load:', code, desc);

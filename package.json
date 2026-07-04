@@ -18,13 +18,7 @@
     "setup": "npm install && npm run build:packages",
     "setup:submodules": "git submodule update --init --recursive",
     "test": "npm --prefix packages/core test",
-    "vite:dev": "vite",
-    "vite:build": "vite build",
-    "electron:dev": "npm run vite:build && electron .",
-    "electron:build": "vite build && electron-builder --mac",
-    "electron:build:win": "vite build && electron-builder --win",
-    "electron:build:linux": "vite build && electron-builder --linux",
-    "electron:build:all": "vite build && electron-builder --mac --win --linux"
+    "electron": "electron ."
   },
   "build": {
     "appId": "com.vidmyo.app",
