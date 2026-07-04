@@ -43,6 +43,10 @@ export default function StoryStudio() {
   const [log, setLog] = useState([]);
   const [topic, setTopic] = useState('');
   const [scriptDraft, setScriptDraft] = useState('');
+  const [thumbs, setThumbs] = useState({});       // sceneId -> blob URL
+  const [lightbox, setLightbox] = useState(null); // enlarged image URL
+  const [renderUrl, setRenderUrl] = useState(null); // playing render blob URL
+  const [renderLabel, setRenderLabel] = useState('');
 
   const apply = useCallback((res) => {
     if (res?.ok) {
@@ -63,6 +67,35 @@ export default function StoryStudio() {
     if (last) window.story.get(last).then((res) => { if (res.ok) apply(res); });
     return unsub;
   }, [hasBridge, apply]);
+
+  // Scene thumbnails — the approval gate needs eyes on the actual image.
+  useEffect(() => {
+    if (!hasBridge || !data?.manifest?.scenes) return;
+    let cancelled = false;
+    (async () => {
+      const next = {};
+      for (const s of data.manifest.scenes) {
+        if (!s.image?.artifact) continue;
+        const r = await window.story.readFile(data.dir, s.image.artifact);
+        if (r.ok) next[s.id] = URL.createObjectURL(new Blob([r.bytes], { type: r.mime }));
+      }
+      if (!cancelled) {
+        setThumbs((old) => {
+          Object.values(old).forEach((u) => URL.revokeObjectURL(u));
+          return next;
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hasBridge, data]);
+
+  const playRender = async (render) => {
+    const r = await window.story.readFile(data.dir, render.path);
+    if (!r.ok) { alert(r.error); return; }
+    if (renderUrl) URL.revokeObjectURL(renderUrl);
+    setRenderUrl(URL.createObjectURL(new Blob([r.bytes], { type: r.mime })));
+    setRenderLabel(render.preview ? 'Preview render (white placeholder frames)' : (render.finalized ? 'Final video' : 'Assembled video'));
+  };
 
   const createProject = async () => {
     const picked = await window.story.pickDir();
@@ -268,6 +301,14 @@ export default function StoryStudio() {
               return (
                 <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 9, background: 'rgba(0,0,0,0.25)' }}>
                   <span style={{ color: C.accent2, fontSize: 11, fontWeight: 900, width: 36 }}>{s.id}</span>
+                  {thumbs[s.id] ? (
+                    <img src={thumbs[s.id]} alt={s.id} onClick={() => setLightbox(thumbs[s.id])}
+                         style={{ width: 64, height: 36, objectFit: 'cover', borderRadius: 6, border: `1px solid ${C.line}`, cursor: 'zoom-in', flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 64, height: 36, borderRadius: 6, border: `1px dashed ${C.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 9, flexShrink: 0 }}>
+                      no img
+                    </div>
+                  )}
                   <span title={s.prompt || ''} style={{ color: C.dim, fontSize: 12, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {s.beat || '(no beat text)'}
                   </span>
@@ -297,10 +338,51 @@ export default function StoryStudio() {
         </div>
       )}
 
+      {/* Renders — every assembled video is playable here, previews included */}
+      {m.renders?.length > 0 && (
+        <div style={card}>
+          <div style={{ color: C.dim, fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 }}>
+            Renders ({m.renders.length})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {m.renders.map((r, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 9, background: 'rgba(0,0,0,0.25)' }}>
+                <span style={{
+                  fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 6, flexShrink: 0,
+                  color: r.finalized ? C.good : (r.preview ? C.accent : C.text),
+                  border: `1px solid ${r.finalized ? 'rgba(62,207,142,0.4)' : C.line}`,
+                }}>
+                  {r.finalized ? 'FINAL' : (r.preview ? 'PREVIEW' : 'ASSEMBLED')}
+                </span>
+                <span style={{ color: C.dim, fontSize: 11, flex: 1, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {r.finalized && r.finalPath ? r.finalPath : r.path}
+                </span>
+                <button style={smallBtn} onClick={() => playRender(r.finalized && r.finalPath ? { ...r, path: r.finalPath } : r)}>▶ Play</button>
+              </div>
+            ))}
+          </div>
+          {renderUrl && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ color: C.dim, fontSize: 11, marginBottom: 6 }}>{renderLabel}</div>
+              <video src={renderUrl} controls autoPlay
+                     style={{ width: '100%', borderRadius: 10, border: `1px solid ${C.line}` }} />
+            </div>
+          )}
+        </div>
+      )}
+
       {finalized && (
         <div style={{ ...card, borderColor: 'rgba(62,207,142,0.4)', background: 'rgba(62,207,142,0.07)' }}>
           <span style={{ color: C.good, fontSize: 13, fontWeight: 800 }}>Final video ready: </span>
           <span style={{ color: C.text, fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>{finalized.finalPath}</span>
+        </div>
+      )}
+
+      {/* Lightbox — click anywhere to close */}
+      {lightbox && (
+        <div onClick={() => setLightbox(null)}
+             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, cursor: 'zoom-out' }}>
+          <img src={lightbox} alt="scene" style={{ maxWidth: '92%', maxHeight: '92%', borderRadius: 10 }} />
         </div>
       )}
     </div>

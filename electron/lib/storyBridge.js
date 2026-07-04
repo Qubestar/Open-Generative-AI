@@ -80,6 +80,11 @@ async function summarize(project) {
 
 const fail = (err) => ({ ok: false, error: String((err && err.message) || err) });
 
+const MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.mp4': 'video/mp4', '.wav': 'audio/wav', '.webm': 'video/webm',
+};
+
 function register() {
   ipcMain.handle('story:pick-dir', async () => {
     const res = await dialog.showOpenDialog({
@@ -204,6 +209,24 @@ function register() {
       sendProgress({ stage: `image:${sceneId}`, phase: 'error', message: String(err.message || err) });
       return fail(err);
     }
+  });
+
+  // Read a file belonging to a story project (scene thumbnails, render
+  // playback). Strictly scoped: the path must live inside the given project
+  // dir, and that dir must actually be a Vidmyo project.
+  ipcMain.handle('story:read-file', async (_evt, dir, filePath) => {
+    try {
+      const root = path.resolve(dir);
+      if (!fs.existsSync(path.join(root, 'project.json'))) {
+        return fail(new Error('not a story project dir'));
+      }
+      const resolved = path.resolve(filePath);
+      if (!resolved.startsWith(root + path.sep)) {
+        return fail(new Error('path outside the project'));
+      }
+      const ext = path.extname(resolved).toLowerCase();
+      return { ok: true, bytes: new Uint8Array(fs.readFileSync(resolved)), mime: MIME[ext] || 'application/octet-stream' };
+    } catch (err) { return fail(err); }
   });
 
   ipcMain.handle('story:readiness', async () => {
