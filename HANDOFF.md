@@ -50,7 +50,11 @@ Milestone 1 is **done except**: single provider catalog (deliberately deferred i
 
 1. **Verify live:** launch the app (`npm run electron:dev`), save a real key (confirm it lands in `userData/secure-keys.json` encrypted, not localStorage), generate one image via fal/OpenRouter — proves the webSecurity+proxy path. Note: the Settings "Unified" section now also shows a Muapi card (restored canonical entry) — expected.
 2. **M2 remainder — DONE (commit `704efe2`):** `src/run.js` (runJob: poll/cancel/resume/timeout) + `src/adapters/fal.js`; 28/28 tests. Live acceptance is one command away: `FAL_KEY=... node scripts/live-image-test.mjs` (performs ONE paid fal generation).
-3. **M3 — Story Studio MVP** (doodle template; port the external `faceless-doodle-video` skill pipeline: script → Kokoro TTS → beat timing → images → ffmpeg assembly → outro) on top of `Project` + `JobStore`. First task: port-feasibility check of the skill's components.
+3. **M3 — Story Studio MVP** — STARTED (commits `aefb347`, + finalize vendoring):
+   - Feasibility: VERIFIED straight port — `docs/product/2026-07-03-story-studio-port-feasibility.md`.
+   - Vendored: full deterministic pipeline in `packages/core/pipelines/doodle/` (tts_kokoro, detect_beats, assemble, fix_captions, setup_env, finalize_video/master_audio/upscale_4k + style-spec + master-prompt). Read its README before touching assemble.py — the hold-to-next-cue logic must not be "simplified".
+   - Core `src/story.js` (pure, 35/35 suite): DOODLE_STYLE, buildImagePrompt, validateScript (1,400-word gate), importBeats (sNNN drift assertion), scaffoldPrompts, stageStatus.
+   - **Remaining for M3:** (a) Python runner — spawn vendored scripts against a doctor-built venv (wrap setup_env.sh, disclose model download sizes); (b) image-stage queue over Project.pendingScenes() with source picker (default Google Flow NB2 free — agent/manual until the Flow provider ships; NB2 *Pro* = explicit paid choice; Higgsfield MCP generate_image bills credits — behind explicit choice only); (c) Story tab UI in the Vite surface; (d) publish stage as a generic n8n-webhook route (Luke's Drive/tracker/Curio infra is deliberately NOT vendored).
 4. Then M4 CLI/MCP exposure (import @vidmyo/core from `mcp/server.js`), M5 agent session briefs, Flow browser provider (raised priority, Creator tier).
 
 ## Known debts / cautions
