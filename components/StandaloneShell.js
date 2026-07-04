@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ImageStudio, StoryStudio, VideoStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, SettingsModal } from 'studio';
+import { StoryStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio } from 'studio';
 import axios from 'axios';
 
 // The five cloud generation studios (Image/Video/Lip Sync/Cinema/Marketing) are muapi-backed,
@@ -10,6 +10,8 @@ import axios from 'axios';
 // (Their render branches + imports stay below, harmless; re-add a line here to restore one.)
 const TABS = [
   { id: 'story', label: 'Story' },
+  { id: 'image', label: 'Image' },
+  { id: 'video', label: 'Video' },
   { id: 'videodelta', label: 'Video Delta' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'agents', label: 'Agents' },
@@ -285,8 +287,8 @@ export default function StandaloneShell() {
 
       {/* Studio Content */}
       <div className="flex-1 min-h-0 relative overflow-hidden">
-        {activeTab === 'image'   && <ImageStudio   apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
-        {activeTab === 'video'   && <VideoStudio   apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
+        {activeTab === 'image'   && <CloudImageStudio />}
+        {activeTab === 'video'   && <CloudVideoStudio />}
         {activeTab === 'story' && <StoryStudio />}
         {activeTab === 'videodelta' && <VideoDeltaStudio />}
         {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}

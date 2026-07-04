@@ -36,6 +36,20 @@ contextBridge.exposeInMainWorld('localNet', {
     fetch: (req) => ipcRenderer.invoke('net:fetch', req),
 });
 
+// ── Cloud media bridge (fal via core job runner, keychain key) ──────────────
+contextBridge.exposeInMainWorld('media', {
+    isElectron: true,
+    generate: (opts) => ipcRenderer.invoke('media:generate', opts),
+    readFile: (p) => ipcRenderer.invoke('media:read-file', p),
+    recent: (opts) => ipcRenderer.invoke('media:recent', opts),
+    reveal: (p) => ipcRenderer.invoke('media:reveal', p),
+    onProgress: (callback) => {
+        const listener = (_, data) => callback(data);
+        ipcRenderer.on('media:progress', listener);
+        return () => ipcRenderer.removeListener('media:progress', listener);
+    },
+});
+
 // ── Story Studio bridge (core runs in the main process) ─────────────────────
 contextBridge.exposeInMainWorld('story', {
     isElectron: true,

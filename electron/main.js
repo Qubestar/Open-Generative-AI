@@ -5,6 +5,7 @@ const { register: registerAgents } = require('./lib/agents');
 const { register: registerSecrets } = require('./lib/secrets');
 const { register: registerNetProxy } = require('./lib/netProxy');
 const { register: registerStory } = require('./lib/storyBridge');
+const { register: registerMedia } = require('./lib/mediaBridge');
 
 // Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1 which
 // blocks Chromium's user namespace sandbox. The .deb package ships an AppArmor
@@ -73,6 +74,7 @@ app.whenReady().then(() => {
     registerSecrets();
     registerNetProxy();
     registerStory();
+    registerMedia();
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
