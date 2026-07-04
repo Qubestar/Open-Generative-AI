@@ -243,11 +243,16 @@ export default function StandaloneShell() {
         >
           {/* Left: Logo */}
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-              </svg>
-            </div>
+            {/* Beat Wave mark — voiceover waveform meets the V */}
+            <svg width="30" height="30" viewBox="0 0 512 512" aria-label="Vidmyo">
+              <rect width="512" height="512" rx="115" fill="#17171B"/>
+              <g stroke="#3ECF8E" strokeWidth="34" strokeLinecap="round">
+                <line x1="98" y1="230" x2="98" y2="282"/>
+                <line x1="152" y1="202" x2="152" y2="310"/>
+                <line x1="206" y1="160" x2="206" y2="352"/>
+              </g>
+              <path d="M266 138 L342 374 L418 138" stroke="#FFFFFF" strokeWidth="50" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+            </svg>
             <span className="text-sm font-bold tracking-tight hidden sm:block">Vidmyo</span>
           </div>
 

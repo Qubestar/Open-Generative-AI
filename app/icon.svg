@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Vidmyo — Beat Wave mark: voiceover waveform meets the V -->
+  <rect width="512" height="512" rx="115" fill="#0B0B0D"/>
+  <g stroke="#3ECF8E" stroke-width="30" stroke-linecap="round">
+    <line x1="92" y1="230" x2="92" y2="282"/>
+    <line x1="147" y1="202" x2="147" y2="310"/>
+    <line x1="202" y1="160" x2="202" y2="352"/>
+  </g>
+  <path d="M262 132 L340 380 L418 132" stroke="#FFFFFF" stroke-width="46" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

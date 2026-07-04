@@ -1,5 +1,7 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, nativeImage } = require('electron');
 const path = require('path');
+
+app.name = 'Vidmyo';
 const { register: registerWan2gp } = require('./lib/wan2gpProvider');
 const { register: registerAgents } = require('./lib/agents');
 const { register: registerSecrets } = require('./lib/secrets');
@@ -68,6 +70,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+    // Beat Wave dock icon (dev runs under the generic Electron binary).
+    if (process.platform === 'darwin' && app.dock) {
+        const icon = nativeImage.createFromPath(path.join(__dirname, '..', 'public', 'vidmyo-icon.png'));
+        if (!icon.isEmpty()) app.dock.setIcon(icon);
+    }
     createWindow();
     registerWan2gp();
     registerAgents();
