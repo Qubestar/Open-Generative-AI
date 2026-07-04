@@ -217,6 +217,8 @@ export default function StoryStudio() {
   };
 
   return (
+    // The shell's content area is overflow-hidden — this root owns scrolling.
+    <div style={{ height: '100%', overflowY: 'auto' }}>
     <div style={{ maxWidth: 860, margin: '0 auto', padding: '24px 20px 60px', display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -385,6 +387,7 @@ export default function StoryStudio() {
           <img src={lightbox} alt="scene" style={{ maxWidth: '92%', maxHeight: '92%', borderRadius: 10 }} />
         </div>
       )}
+    </div>
     </div>
   );
 }

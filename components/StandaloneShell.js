@@ -237,7 +237,10 @@ export default function StandaloneShell() {
 
       {/* Header */}
       {isHeaderVisible && (
-        <header className="flex-shrink-0 h-14 border-b border-white/[0.03] flex items-center justify-between px-6 bg-black/20 backdrop-blur-md z-40">
+        <header
+          className="flex-shrink-0 h-14 border-b border-white/[0.03] flex items-center justify-between px-6 bg-black/20 backdrop-blur-md z-40"
+          style={{ WebkitAppRegion: 'drag' }}  /* frameless Electron window: header = drag handle */
+        >
           {/* Left: Logo */}
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
@@ -249,7 +252,7 @@ export default function StandaloneShell() {
           </div>
 
           {/* Center: Navigation */}
-          <nav className="absolute left-1/2 -translate-x-1/2 flex items-center gap-6">
+          <nav className="absolute left-1/2 -translate-x-1/2 flex items-center gap-6" style={{ WebkitAppRegion: 'no-drag' }}>
             {TABS.map((tab) => (
               <button
                 key={tab.id}
@@ -269,7 +272,7 @@ export default function StandaloneShell() {
           </nav>
 
           {/* Right: Actions */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4" style={{ WebkitAppRegion: 'no-drag' }}>
             <button
               onClick={() => setShowSettings(true)}
               title="Settings"
