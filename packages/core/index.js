@@ -7,4 +7,5 @@ export * from './src/providers.js';
 export * from './src/jobs.js';
 export * from './src/project.js';
 export * from './src/run.js';
+export * from './src/story.js';
 export { falAdapter } from './src/adapters/fal.js';
