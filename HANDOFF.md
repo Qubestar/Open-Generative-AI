@@ -49,7 +49,7 @@ Milestone 1 is **done except**: single provider catalog (deliberately deferred i
 ## Immediate next steps (in order)
 
 1. **Verify live:** launch the app (`npm run electron:dev`), save a real key (confirm it lands in `userData/secure-keys.json` encrypted, not localStorage), generate one image via fal/OpenRouter — proves the webSecurity+proxy path. Note: the Settings "Unified" section now also shows a Muapi card (restored canonical entry) — expected.
-2. **M2 remainder:** a core `runJob(job, adapter)` execution layer + first provider adapter (fal queue is simplest: submit → poll → artifact), so a CLI-less script can drive one real image job end-to-end (needs a key). Reuse JobStore checkpoints.
+2. **M2 remainder — DONE (commit `704efe2`):** `src/run.js` (runJob: poll/cancel/resume/timeout) + `src/adapters/fal.js`; 28/28 tests. Live acceptance is one command away: `FAL_KEY=... node scripts/live-image-test.mjs` (performs ONE paid fal generation).
 3. **M3 — Story Studio MVP** (doodle template; port the external `faceless-doodle-video` skill pipeline: script → Kokoro TTS → beat timing → images → ffmpeg assembly → outro) on top of `Project` + `JobStore`. First task: port-feasibility check of the skill's components.
 4. Then M4 CLI/MCP exposure (import @vidmyo/core from `mcp/server.js`), M5 agent session briefs, Flow browser provider (raised priority, Creator tier).
 
