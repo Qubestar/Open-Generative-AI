@@ -30,11 +30,12 @@ Milestone 1 is **done except**: single provider catalog (deliberately deferred i
 - **ElevenLabs:** Luke already has the affiliate link — ask him for it when building the voiceover card (M8). Affiliate must be disclosed and never functionally required.
 - Standing rules: never use `gflow-cli`/`cua-driver`; scene selection by explicit `sNNN` ID only; one Flow scene at a time; verify downloads on disk + visually.
 
-## Architecture invariants introduced this session (keep them)
+## Architecture invariants (keep them) — updated 2026-07-04 after the Vite-surface removal
 
-- Renderer cloud requests go `src/lib/apiFetch.js` → `window.localNet.fetch` → `electron/lib/netProxy.js` (main-process fetch; https-only + private-host http). Do **not** add plain `fetch()` to cloud APIs in the desktop path — it will hit CORS now that webSecurity is on.
-- Provider keys come from the OS keychain via `initSecureKeys()` (in-memory cache keeps `getSavedProviderKey` synchronous). Do not reintroduce localStorage key reads.
-- `electron/lib/secrets.js` IPC: `secrets:available|get-all|set`. Preload surfaces: `localAI` (Wan2GP only), `secureKeys`, `localNet`, `agents`.
+- **ONE app**: the Next.js dev shell (`components/StandaloneShell.js` + `packages/studio`) served on :3210 and opened in Electron by the launcher. The Vite renderer was DELETED in `d343cfd` (git history keeps it for the future packaged app). Do not recreate `src/`.
+- Provider keys: OS keychain via `window.secureKeys` (`electron/lib/secrets.js`); the Settings UI is `packages/studio/src/components/SettingsModal.jsx` over the canonical catalog. muapi key mirrors to legacy `vidmyo_cloud_key` for older shell consumers. Provider entries are added ONLY in `packages/core/src/providers.js`.
+- Electron main runs with `webSecurity: true`. Direct renderer fetches must target CORS-permissive endpoints (Video Delta sends `access-control-allow-origin: *` — verified) or go through `window.localNet.fetch` → `electron/lib/netProxy.js`. Next server routes (`app/api/proxy`) are also fine.
+- Preload surfaces: `localAI` (Wan2GP), `secureKeys`, `localNet`, `agents`, `story`. Electron main-process changes require restarting the Electron window; the page hot-reloads.
 
 ## M2 foundation shipped (commit `f9da846`, 2026-07-03 session 3)
 
@@ -48,7 +49,7 @@ Milestone 1 is **done except**: single provider catalog (deliberately deferred i
 
 ## Immediate next steps (in order)
 
-1. **Verify live:** launch the app (`npm run electron:dev`), save a real key (confirm it lands in `userData/secure-keys.json` encrypted, not localStorage), generate one image via fal/OpenRouter — proves the webSecurity+proxy path. Note: the Settings "Unified" section now also shows a Muapi card (restored canonical entry) — expected.
+1. **Verify live (Luke, one sitting):** close the Vidmyo window, re-run the launcher (Electron restart picks up storyBridge/secrets/webSecurity). Then: Settings → add the fal key (check `userData/secure-keys.json` gets an encrypted entry) → Story tab → create project → paste script → run the stages. Session-5 commits: `d5b16ea` (real Settings modal), `d343cfd` (Vite surface removed).
 2. **M2 remainder — DONE (commit `704efe2`):** `src/run.js` (runJob: poll/cancel/resume/timeout) + `src/adapters/fal.js`; 28/28 tests. Live acceptance is one command away: `FAL_KEY=... node scripts/live-image-test.mjs` (performs ONE paid fal generation).
 3. **M3 — Story Studio MVP** — STARTED (commits `aefb347`, + finalize vendoring):
    - Feasibility: VERIFIED straight port — `docs/product/2026-07-03-story-studio-port-feasibility.md`.
