@@ -36,17 +36,28 @@ Milestone 1 is **done except**: single provider catalog (deliberately deferred i
 - Provider keys come from the OS keychain via `initSecureKeys()` (in-memory cache keeps `getSavedProviderKey` synchronous). Do not reintroduce localStorage key reads.
 - `electron/lib/secrets.js` IPC: `secrets:available|get-all|set`. Preload surfaces: `localAI` (Wan2GP only), `secureKeys`, `localNet`, `agents`.
 
+## M2 foundation shipped (commit `f9da846`, 2026-07-03 session 3)
+
+`packages/core` (@vidmyo/core, pure Node ESM, 23 node:test cases green, root `npm test` runs them):
+
+- `src/providers.js` — **canonical provider catalog** (drift resolved; muapi restored beside openrouter/fal; openrouter stays PROVIDERS[0]/default). Auth helpers are pure — key always an explicit argument.
+- `src/jobs.js` — `JobStore`: one JSON file per job, atomic writes, enforced state machine queued→running→done|error|cancelled, logs/artifacts/checkpoints. Default dir `~/.vidmyo/jobs`.
+- `src/project.js` — `Project` manifests (`project.json`, version 1): scenes resolve ONLY via `getScene('sNNN')` (throws on malformed/unknown), `acceptSceneArtifact()` requires the file on disk, `pendingScenes()` is the resume queue.
+- `src/lib/providers.js` is now re-export from core + the browser/keychain key layer ONLY. `packages/studio/src/providers.js` carries a DEPRECATED header (frozen surface).
+- New invariant: **provider entries are added only in `packages/core/src/providers.js`.**
+
 ## Immediate next steps (in order)
 
-1. **Verify live:** launch the app (`npm run electron:dev`), save a real key (confirm it lands in `userData/secure-keys.json` encrypted, not localStorage), generate one image via fal/OpenRouter — proves the webSecurity+proxy path. If a provider fails, the fix belongs in netProxy/apiFetch, not in loosening webSecurity.
-2. **M2 — `packages/core`:** single provider catalog (merge the drifted `src/lib/providers.js` ↔ `packages/studio/src/providers.js`, muapi entry included), job runner with durable IDs, project manifests (`project.json` with `sNNN` scenes — schema in package §6). Pure Node ESM, no Electron imports.
-3. **M3 — Story Studio MVP** (doodle template; port the external skill pipeline: script → Kokoro TTS → beat timing → images → ffmpeg assembly → outro). First task: port-feasibility check of the skill's components.
-4. Then M4 CLI/MCP exposure, M5 agent session briefs, Flow browser provider (raised priority, Creator tier).
+1. **Verify live:** launch the app (`npm run electron:dev`), save a real key (confirm it lands in `userData/secure-keys.json` encrypted, not localStorage), generate one image via fal/OpenRouter — proves the webSecurity+proxy path. Note: the Settings "Unified" section now also shows a Muapi card (restored canonical entry) — expected.
+2. **M2 remainder:** a core `runJob(job, adapter)` execution layer + first provider adapter (fal queue is simplest: submit → poll → artifact), so a CLI-less script can drive one real image job end-to-end (needs a key). Reuse JobStore checkpoints.
+3. **M3 — Story Studio MVP** (doodle template; port the external `faceless-doodle-video` skill pipeline: script → Kokoro TTS → beat timing → images → ffmpeg assembly → outro) on top of `Project` + `JobStore`. First task: port-feasibility check of the skill's components.
+4. Then M4 CLI/MCP exposure (import @vidmyo/core from `mcp/server.js`), M5 agent session briefs, Flow browser provider (raised priority, Creator tier).
 
 ## Known debts / cautions
 
-- Graphify graph is stale: `graphify update .` refuses (651 vs 715 nodes after legitimate deletions); the CLI has no force flag — needs a forced rebuild via the Python API (`force=True`). Don't guess CLI flags (logged mistake 2026-06-04).
-- Next.js surface (`app/` + `packages/studio`) still references removed concepts in its own copies — harmless while frozen; unify when `packages/core` lands.
-- No root test script exists. `mcp/smoke.mjs` needs Video Delta running (`python -m videodelta.api`, port 7861).
+- Graphify graph is stale: `graphify update .` refuses (679 vs 715 nodes; baseline predates the deletions); the CLI has no force flag — needs a forced rebuild via the Python API (`force=True`). Don't guess CLI flags (logged mistake 2026-06-04).
+- Next.js surface (`app/` + `packages/studio`) still ships its own deprecated catalog copy — harmless while frozen.
+- `mcp/smoke.mjs` needs Video Delta running (`python -m videodelta.api`, port 7861).
 - README download links point at v1.0.9 assets named `Open.Generative.AI-*` — correct until a new release is cut.
 - `.env` exists at repo root: never read or print its values.
+- Workspaces now include `packages/core`; `npm install` hasn't been rerun (not needed — the renderer imports core by relative path).
