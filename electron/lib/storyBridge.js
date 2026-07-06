@@ -388,7 +388,7 @@ function register() {
   // Select a tracker row and hand the whole video to a connected agent:
   // create the subfolder + brief, then launch the preferred agent with an
   // autonomous kickoff. No manual pipeline steps.
-  ipcMain.handle('story:delegate-sheet-row', async (_evt, { row, base } = {}) => {
+  ipcMain.handle('story:delegate-sheet-row', async (_evt, { row, base, agentId } = {}) => {
     try {
       if (!row) return fail(new Error('row is required'));
       const cfg = readConfig();
@@ -409,13 +409,13 @@ function register() {
         });
       }
 
-      const agentId = await agentsLib.preferredAgentId();
-      if (!agentId) {
+      const chosen = agentId || await agentsLib.preferredAgentId();
+      if (!chosen) {
         return { ok: false, error: 'no-agent', dir,
-          hint: 'No coding agent detected. Install/connect one in the Agents tab (Claude Code recommended), or open the project to build it manually.' };
+          hint: 'No coding agent detected. Install/connect one in the Agents tab, or open the project to build it manually.' };
       }
-      const launch = await agentsLib.launchAgent(agentId, dir, { autonomous: true });
-      return { ok: launch.ok, dir, topic: r[2], agent: agentId, launch };
+      const launch = await agentsLib.launchAgent(chosen, dir, { autonomous: true });
+      return { ok: launch.ok, dir, topic: r[2], agent: chosen, launch };
     } catch (err) { return fail(err); }
   });
 

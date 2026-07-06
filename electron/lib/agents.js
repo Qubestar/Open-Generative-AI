@@ -146,10 +146,12 @@ async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
     : { ok: false, error: 'could not open a terminal' };
 }
 
-// Preferred agent for auto-delegation: Claude Code if installed, else the
-// first installed known agent.
+// Agent used for auto-delegation. The user's saved choice wins (when still
+// installed); otherwise Claude Code if present, else the first installed one.
 async function preferredAgentId() {
   const all = await detectAll();
+  const saved = readAgentsConfig().preferredAgent;
+  if (saved && all.find((a) => a.id === saved && a.installed)) return saved;
   const claude = all.find((a) => a.id === 'claude_code' && a.installed);
   if (claude) return 'claude_code';
   const any = all.find((a) => a.installed);
@@ -347,7 +349,14 @@ function register() {
 
   ipcMain.handle('agents:getLaunchConfig', async () => {
     const cfg = readAgentsConfig();
-    return { ok: true, launchMode: cfg.launchMode || 'desktop' };
+    return { ok: true, launchMode: cfg.launchMode || 'desktop', preferredAgent: cfg.preferredAgent || null, resolvedAgent: await preferredAgentId() };
+  });
+
+  ipcMain.handle('agents:setPreferred', async (_evt, agentId) => {
+    const cfg = readAgentsConfig();
+    cfg.preferredAgent = agentId || null; // null = auto
+    writeAgentsConfig(cfg);
+    return { ok: true, preferredAgent: cfg.preferredAgent, resolvedAgent: await preferredAgentId() };
   });
 
   ipcMain.handle('agents:setLaunchConfig', async (_evt, { launchMode } = {}) => {

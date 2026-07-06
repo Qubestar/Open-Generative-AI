@@ -47,6 +47,8 @@ export default function StoryStudio() {
   const [sheet, setSheet] = useState(null);       // { rows } after loading the tracker
   const [sheetBusy, setSheetBusy] = useState(false);
   const [delegated, setDelegated] = useState([]); // recent hand-offs to agents
+  const [agentList, setAgentList] = useState([]); // installed agents for the picker
+  const [chosenAgent, setChosenAgent] = useState(''); // '' = auto (preferred)
   const [thumbs, setThumbs] = useState({});       // sceneId -> blob URL
   const [lightbox, setLightbox] = useState(null); // enlarged image URL
   const [renderUrl, setRenderUrl] = useState(null); // playing render blob URL
@@ -146,10 +148,20 @@ export default function StoryStudio() {
 
   const loadSheet = async () => {
     setSheetBusy(true);
-    const res = await window.story.sheetRows();
+    const [res] = await Promise.all([window.story.sheetRows(), loadAgents()]);
     setSheetBusy(false);
     if (res.ok) setSheet(res);
     else alert(res.error);
+  };
+
+  const loadAgents = async () => {
+    if (!window.agents?.isElectron) return;
+    const [det, cfg] = await Promise.all([
+      window.agents.detect(),
+      window.agents.getLaunchConfig?.() || Promise.resolve({}),
+    ]);
+    if (det?.ok) setAgentList(det.agents.filter((a) => a.installed));
+    if (cfg?.preferredAgent) setChosenAgent(cfg.preferredAgent);
   };
 
   const ensureBase = async () => {
@@ -169,7 +181,7 @@ export default function StoryStudio() {
     const base = await ensureBase();
     if (!base) return;
     setSheetBusy(true);
-    const res = await window.story.delegateSheetRow({ row, base });
+    const res = await window.story.delegateSheetRow({ row, base, agentId: chosenAgent || undefined });
     setSheetBusy(false);
     if (res.ok) {
       setDelegated((d) => [{ row, title, agent: res.agent, message: res.launch?.message }, ...d].slice(0, 6));
@@ -305,8 +317,21 @@ export default function StoryStudio() {
                 </button>
               )}
             </div>
-            <div style={{ color: C.dim, fontSize: 10, marginBottom: 8 }}>
-              Click a row to hand the whole video to your connected agent. Use “edit” to build it manually instead.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ color: C.dim, fontSize: 11 }}>Build with:</span>
+              <select
+                value={chosenAgent}
+                onChange={async (e) => {
+                  const v = e.target.value;
+                  setChosenAgent(v);
+                  if (window.agents?.setPreferred) await window.agents.setPreferred(v || null);
+                }}
+                style={{ background: '#0d0d10', border: `1px solid ${C.line}`, borderRadius: 8, padding: '6px 8px', fontSize: 12, color: C.text }}>
+                <option value="">Auto (preferred agent)</option>
+                {agentList.map((a) => <option key={a.id} value={a.id}>{a.name}{a.authed ? '' : ' — not signed in'}</option>)}
+              </select>
+              {agentList.length === 0 && <span style={{ color: C.accent, fontSize: 10 }}>No agents detected — connect one in the Agents tab.</span>}
+              <span style={{ color: C.dim, fontSize: 10, flex: 1, textAlign: 'right' }}>Click a row → hand off · “edit” = manual</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto' }}>
               {sheet.rows.map((r) => {

@@ -91,5 +91,6 @@ contextBridge.exposeInMainWorld('agents', {
     installMcp: (agentId) => ipcRenderer.invoke('agents:installMcp', agentId),
     getLaunchConfig: () => ipcRenderer.invoke('agents:getLaunchConfig'),
     setLaunchConfig: (cfg) => ipcRenderer.invoke('agents:setLaunchConfig', cfg),
+    setPreferred: (agentId) => ipcRenderer.invoke('agents:setPreferred', agentId),
     openExternal: (url) => ipcRenderer.invoke('agents:openExternal', url),
 });
