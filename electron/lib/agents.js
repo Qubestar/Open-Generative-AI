@@ -16,6 +16,7 @@ const { execFile, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { getAgentPipeline, pipelineInstructions } = require('./agentPipelines');
 
 // ── Launch preferences ──────────────────────────────────────────────────────
 // How "Launch" opens an agent: its desktop app (default, Luke's preference)
@@ -55,11 +56,12 @@ function readManifest(dir) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8')); } catch { return null; }
 }
 
-function writeSessionBrief(dir, manifest) {
+function writeSessionBrief(dir, manifest, agentId) {
   const briefDir = path.join(dir, '.vidmyo');
   fs.mkdirSync(briefDir, { recursive: true });
   const m = manifest;
   const approved = m ? m.scenes.filter((s) => s.image.approved).length : 0;
+  const pipeline = agentId ? getAgentPipeline(agentId, readAgentsConfig()) : null;
   const lines = [
     `# Vidmyo — ${m?.brief?.topic || path.basename(dir)}`,
     '',
@@ -69,39 +71,43 @@ function writeSessionBrief(dir, manifest) {
     m?.brief?.sheetRow ? `Tracker row: ${m.brief.sheetRow} (video #${m.brief.videoNum})` : null,
     '',
     '## State',
-    m ? `- script: ${m.script ? `${m.script.trim().split(/\s+/).length} words` : 'MISSING — write it first (channel rules: 1,400-1,900 words, hook, dopamine beats, CTA)'}` : '- no project.json in this folder yet',
+    m ? `- script: ${m.script ? `${m.script.trim().split(/\s+/).length} words` : 'MISSING — write it first'}` : '- no project.json in this folder yet',
     m ? `- voiceover: ${m.voiceover.artifact ? m.voiceover.source : 'not generated'}` : null,
     m ? `- scenes: ${m.scenes.length} (${approved} approved)` : null,
     m ? `- renders: ${m.renders.length}` : null,
     '',
-    '## How to work',
-    'Use the `vidmyo` MCP tools: story_open → story_set_script → story_run_stage {stage:"to-scenes"} →',
-    'generate each scene image (Google Flow is the free default; match the prompt exactly) →',
-    'story_accept_artifact (file must exist on disk, sNNN ids only) → story_approve_scene after a real',
-    'visual check → story_run_stage assemble → finalize.',
+    // Prefer the agent's OWN pipeline (correct venv + image-gen workflow).
+    pipeline ? pipelineInstructions(agentId, readAgentsConfig(), dir) : null,
+    pipeline ? '' : null,
+    '## Vidmyo MCP (alternative)',
+    'The `vidmyo` MCP server also exposes: story_open → story_set_script → story_run_stage',
+    '{stage:"to-scenes"} → per-scene generate + story_accept_artifact (file on disk, sNNN only) →',
+    'story_approve_scene → story_run_stage assemble → finalize. Use these if you are not running',
+    'your own pipeline folder.',
   ].filter((l) => l !== null);
   const file = path.join(briefDir, 'session-brief.md');
   fs.writeFileSync(file, lines.join('\n'));
   return { file, topic: m?.brief?.topic || path.basename(dir) };
 }
 
-function kickoffPrompt(dir, topic, briefFile, { autonomous = false } = {}) {
+function kickoffPrompt(dir, topic, briefFile, { autonomous = false, pipeline = null } = {}) {
   if (autonomous) {
+    const via = pipeline
+      ? `using YOUR OWN pipeline at ${pipeline.dir} (exact commands and your image-generation `
+        + `workflow are in the brief). `
+      : `using the vidmyo MCP tools. `;
     return `Vidmyo — ${topic}\n\n`
-      + `Create this ENTIRE faceless doodle video end to end, autonomously, using the vidmyo MCP tools. `
-      + `Do not stop to ask for approval unless something truly blocks you. Steps:\n`
-      + `1. story_open "${dir}" and read ${briefFile}.\n`
-      + `2. Write the full narration script per the channel rules (1,400-1,900 words, strong hook, `
-      + `retention beats with named facts/numbers, CTA) and save it with story_set_script.\n`
-      + `3. story_run_stage stage:"to-scenes".\n`
-      + `4. For each scene: generate the doodle image with Google Flow matching the scene prompt exactly, `
-      + `save it to <dir>/images/<sceneId>.png, story_accept_artifact, then story_approve_scene after a real visual check.\n`
-      + `5. story_run_stage stage:"assemble", then stage:"finalize".\n`
-      + `Report the final MP4 path when done.`;
+      + `Create this ENTIRE faceless doodle video end to end, autonomously, ${via}`
+      + `Read ${briefFile} first for the project state, brief (hook/angle/tracker row), and your pipeline steps. `
+      + `Do not stop for approval unless something truly blocks you.\n`
+      + `Flow: write the full script per your channel rules → voiceover → beats → per-scene doodle images `
+      + `via your image workflow (Google Flow · Nano Banana 2, match each prompt exactly) → assemble → `
+      + `finalize (4K + −14 LUFS). Resolve scenes by explicit sNNN id only, verify each image on disk, and `
+      + `report the final MP4 path when done.`;
   }
   return `Vidmyo — ${topic}\n\nYou are driving the Vidmyo Story pipeline for the project at ${dir}. `
-    + `Read ${briefFile} for the current state, then continue the pipeline using the vidmyo MCP tools `
-    + `(story_open first). Follow the channel production rules baked into the tool descriptions.`;
+    + `Read ${briefFile} for the current state and your pipeline steps, then continue`
+    + (pipeline ? ` with your own pipeline at ${pipeline.dir}.` : ` using the vidmyo MCP tools.`);
 }
 
 // Shared launch used by the IPC handler and by the sheet-delegate flow.
@@ -111,8 +117,9 @@ async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
 
   const projectDir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const manifest = readManifest(projectDir);
-  const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest);
-  const prompt = kickoffPrompt(projectDir, topic, briefFile, { autonomous });
+  const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest, agentId);
+  const pipeline = getAgentPipeline(agentId, readAgentsConfig());
+  const prompt = kickoffPrompt(projectDir, topic, briefFile, { autonomous, pipeline });
 
   const mode = readAgentsConfig().launchMode || 'desktop';
   if (mode === 'desktop') {
