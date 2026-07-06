@@ -12,7 +12,7 @@
 // degrade gracefully.
 
 const { ipcMain, shell, app, clipboard } = require('electron');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -36,6 +36,13 @@ const APP_CANDIDATES = {
     gemini: ['Antigravity', 'Gemini'],
     hermes: ['Hermes'],
     opencode: ['OpenCode'],
+};
+
+// Known non-/Applications install locations (self-built Electron agents).
+const EXTRA_APP_PATHS = {
+    hermes: [
+        '/Volumes/My Lexar/This Mac System Redirects/hermes/hermes-agent/apps/desktop/release/mac-arm64/Hermes.app',
+    ],
 };
 
 // ── Session brief ───────────────────────────────────────────────────────────
@@ -121,19 +128,22 @@ async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
                   : `New Claude Code session opened at "${topic}" — confirm the folder, review the prompt, send.` }));
       });
     }
-    const appName = findDesktopApp(agentId);
-    if (appName) {
-      const ideLike = ['Antigravity', 'Antigravity IDE', 'OpenCode'].includes(appName);
-      const args = ideLike ? ['-a', appName, projectDir] : ['-a', appName];
+    // Full disk resolution here (spotlight) so self-built apps like Hermes,
+    // installed outside /Applications, still open as the desktop app.
+    const found = findDesktopApp(agentId, { spotlight: true });
+    if (found) {
+      const ideLike = ['Antigravity', 'Antigravity IDE', 'OpenCode'].includes(found.name);
+      // Open by full path so apps outside /Applications resolve.
+      const args = ideLike ? ['-a', found.path, projectDir] : [found.path];
       if (!ideLike) clipboard.writeText(prompt);
       return new Promise((resolve) => {
         execFile('open', args, (err) =>
           resolve(err
-            ? { ok: false, error: `could not open ${appName}.app: ${err.message}` }
-            : { ok: true, via: 'desktop', app: appName,
+            ? { ok: false, error: `could not open ${found.name}.app: ${err.message}` }
+            : { ok: true, via: 'desktop', app: found.name,
                 message: ideLike
-                  ? `${appName} opened at the project — the brief is in .vidmyo/session-brief.md.`
-                  : `${appName} opened. The kickoff prompt is on your clipboard — ⌘N for a new chat, then ⌘V.` }));
+                  ? `${found.name} opened at the project — the brief is in .vidmyo/session-brief.md.`
+                  : `${found.name} opened. The kickoff prompt is on your clipboard — start a new session and paste (⌘V).` }));
       });
     }
   }
@@ -158,10 +168,32 @@ async function preferredAgentId() {
   return any ? any.id : null;
 }
 
-function findDesktopApp(agentId) {
+// Spotlight lookup for an <AppName>.app anywhere on disk. Skips dev
+// node_modules copies (Electron.app), prefers release/Applications builds.
+function spotlightApp(fsName) {
+    try {
+        const out = execFileSync('mdfind', [`kMDItemFSName == '${fsName}'`], { timeout: 4000 }).toString();
+        const hits = out.split('\n').filter((p) => p.endsWith('.app') && !p.includes('/node_modules/'));
+        return hits.find((p) => /release|Applications/i.test(p)) || hits[0] || null;
+    } catch { return null; }
+}
+
+// Resolve an agent's desktop app to { name, path } or null. `spotlight` adds
+// the disk-wide fallback (used at launch time, not during fast detection).
+function findDesktopApp(agentId, { spotlight = false } = {}) {
     for (const name of APP_CANDIDATES[agentId] || []) {
         for (const base of ['/Applications', path.join(HOME, 'Applications')]) {
-            if (fs.existsSync(path.join(base, `${name}.app`))) return name;
+            const p = path.join(base, `${name}.app`);
+            if (fs.existsSync(p)) return { name, path: p };
+        }
+    }
+    for (const p of EXTRA_APP_PATHS[agentId] || []) {
+        if (fs.existsSync(p)) return { name: path.basename(p, '.app'), path: p };
+    }
+    if (spotlight) {
+        for (const name of APP_CANDIDATES[agentId] || []) {
+            const hit = spotlightApp(`${name}.app`);
+            if (hit) return { name, path: hit };
         }
     }
     return null;
@@ -310,7 +342,7 @@ async function detectAll() {
       authed: installed ? isAuthed(agent) : false,
       installCmd: agent.installCmd,
       loginCmd: agent.loginCmd,
-      desktopApp: findDesktopApp(agent.id),
+      desktopApp: findDesktopApp(agent.id)?.name || null,
     });
   }
   return out;
