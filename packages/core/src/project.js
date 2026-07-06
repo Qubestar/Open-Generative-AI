@@ -23,6 +23,26 @@ export function sceneIdFor(n) {
   return `s${String(n).padStart(3, '0')}`;
 }
 
+// Filesystem-safe slug from a title (for auto-created project subfolders).
+export function slugify(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^\w\s-]/g, '')
+    .trim()
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 60)
+    .replace(/^-|-$/g, '') || 'untitled';
+}
+
+// Subfolder name matching the pipeline convention: "NN-slug" (e.g. 03-mouse-utopia).
+export function projectSubfolder(videoNum, title) {
+  const n = String(videoNum || '').replace(/\D/g, '');
+  const slug = slugify(title);
+  return n ? `${n.padStart(2, '0')}-${slug}` : slug;
+}
+
 function atomicWriteJson(file, data) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2));

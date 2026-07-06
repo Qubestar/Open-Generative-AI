@@ -152,12 +152,20 @@ export default function StoryStudio() {
   };
 
   const createFromSheetRow = async (row) => {
-    const picked = await window.story.pickDir();
-    if (!picked.ok || !picked.dir) return;
+    // Auto-create a subfolder under the sheet's base folder (chosen once),
+    // matching the pipeline's videos/NN-slug/ convention — no per-video picker.
+    let base = sheet?.base;
+    if (!base) {
+      const set = await window.story.setBase();
+      if (!set.ok) return;
+      base = set.base;
+      setSheet((s) => (s ? { ...s, base } : s));
+    }
     setSheetBusy(true);
-    const res = await window.story.createFromSheet({ dir: picked.dir, row });
+    const res = await window.story.createFromSheet({ row, base });
     setSheetBusy(false);
     if (res.ok) { setSheet(null); rememberRecent(res); apply(res); }
+    else if (res.error === 'no-base') { alert('Pick the base folder for this sheet first.'); }
     else alert(res.error);
   };
   const runStage = async (stage, opts = {}) => {
@@ -239,6 +247,16 @@ export default function StoryStudio() {
 
         {sheet && (
           <div style={card}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 11 }}>
+              <span style={{ color: C.dim }}>Videos folder:</span>
+              <span style={{ color: sheet.base ? C.text : C.accent, flex: 1, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {sheet.base || 'not set — you’ll be asked to pick it on the first video'}
+              </span>
+              <button onClick={async () => { const r = await window.story.setBase(); if (r.ok) setSheet((s) => ({ ...s, base: r.base })); }}
+                      style={{ background: 'none', border: 'none', color: C.accent, fontWeight: 700, cursor: 'pointer', fontSize: 11 }}>
+                {sheet.base ? 'change' : 'set folder…'}
+              </button>
+            </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <span style={{ color: C.dim, fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase' }}>
                 Tracker rows ({sheet.rows.length})

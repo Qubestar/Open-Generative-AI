@@ -322,18 +322,54 @@ function register() {
           topic: r[4] || '',
         }))
         .filter((r) => r.title);
-      return { ok: true, sheetId, via: data.via, rows };
+      const cfg = readConfig();
+      const base = (cfg.sheetBases || {})[sheetId] || null;
+      return { ok: true, sheetId, via: data.via, base, rows };
     } catch (err) { return fail(err); }
   });
 
-  ipcMain.handle('story:create-from-sheet', async (_evt, { dir, row } = {}) => {
+  // Per-sheet base folder: video projects are auto-created as subfolders here
+  // (matching the pipeline's videos/NN-slug/ convention) so the user picks a
+  // location once, not per video.
+  ipcMain.handle('story:get-base', async () => {
+    const cfg = readConfig();
+    const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
+    return { ok: true, sheetId, base: (cfg.sheetBases || {})[sheetId] || null };
+  });
+
+  ipcMain.handle('story:set-base', async () => {
+    const res = await dialog.showOpenDialog({
+      title: 'Choose the folder where video projects are created (each video gets its own subfolder)',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (res.canceled || !res.filePaths[0]) return { ok: false, error: 'cancelled' };
+    const cfg = readConfig();
+    const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
+    cfg.sheetBases = cfg.sheetBases || {};
+    cfg.sheetBases[sheetId] = res.filePaths[0];
+    writeConfig(cfg);
+    return { ok: true, sheetId, base: res.filePaths[0] };
+  });
+
+  ipcMain.handle('story:create-from-sheet', async (_evt, { row, base } = {}) => {
     try {
-      if (!dir || !row) return fail(new Error('dir and row are required'));
-      const sheetId = readConfig().sheetId || DEFAULT_SHEET_ID;
+      if (!row) return fail(new Error('row is required'));
+      const cfg = readConfig();
+      const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
+      const resolvedBase = base || (cfg.sheetBases || {})[sheetId];
+      if (!resolvedBase) return { ok: false, error: 'no-base' }; // renderer prompts set-base
+      if (!fs.existsSync(resolvedBase)) return fail(new Error(`Base folder no longer exists: ${resolvedBase}`));
+
       const data = await readSheetValues(sheetId, `A${row}:E${row}`);
       const r = data.values?.[0];
       if (!r || !r[2]) return fail(new Error(`Sheet row ${row} has no Working Title`));
-      const { Project } = await core();
+
+      const { Project, projectSubfolder } = await core();
+      const dir = path.join(resolvedBase, projectSubfolder(r[1], r[2]));
+      // Idempotent: clicking the same video reopens its existing project.
+      if (fs.existsSync(path.join(dir, 'project.json'))) {
+        return await summarize(Project.load(dir));
+      }
       const project = Project.create(dir, {
         brief: {
           topic: r[2],
