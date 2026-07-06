@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('story', {
     getBase: () => ipcRenderer.invoke('story:get-base'),
     setBase: () => ipcRenderer.invoke('story:set-base'),
     createFromSheet: (opts) => ipcRenderer.invoke('story:create-from-sheet', opts),
+    delegateSheetRow: (opts) => ipcRenderer.invoke('story:delegate-sheet-row', opts),
     get: (dir) => ipcRenderer.invoke('story:get', dir),
     setScript: (dir, text) => ipcRenderer.invoke('story:set-script', dir, text),
     runStage: (dir, stage, opts) => ipcRenderer.invoke('story:run-stage', dir, stage, opts),

@@ -78,10 +78,82 @@ function writeSessionBrief(dir, manifest) {
   return { file, topic: m?.brief?.topic || path.basename(dir) };
 }
 
-function kickoffPrompt(dir, topic, briefFile) {
+function kickoffPrompt(dir, topic, briefFile, { autonomous = false } = {}) {
+  if (autonomous) {
+    return `Vidmyo — ${topic}\n\n`
+      + `Create this ENTIRE faceless doodle video end to end, autonomously, using the vidmyo MCP tools. `
+      + `Do not stop to ask for approval unless something truly blocks you. Steps:\n`
+      + `1. story_open "${dir}" and read ${briefFile}.\n`
+      + `2. Write the full narration script per the channel rules (1,400-1,900 words, strong hook, `
+      + `retention beats with named facts/numbers, CTA) and save it with story_set_script.\n`
+      + `3. story_run_stage stage:"to-scenes".\n`
+      + `4. For each scene: generate the doodle image with Google Flow matching the scene prompt exactly, `
+      + `save it to <dir>/images/<sceneId>.png, story_accept_artifact, then story_approve_scene after a real visual check.\n`
+      + `5. story_run_stage stage:"assemble", then stage:"finalize".\n`
+      + `Report the final MP4 path when done.`;
+  }
   return `Vidmyo — ${topic}\n\nYou are driving the Vidmyo Story pipeline for the project at ${dir}. `
     + `Read ${briefFile} for the current state, then continue the pipeline using the vidmyo MCP tools `
     + `(story_open first). Follow the channel production rules baked into the tool descriptions.`;
+}
+
+// Shared launch used by the IPC handler and by the sheet-delegate flow.
+async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
+  const agent = KNOWN_AGENTS.find((a) => a.id === agentId);
+  if (!agent) return { ok: false, error: 'unknown agent' };
+
+  const projectDir = cwd && fs.existsSync(cwd) ? cwd : HOME;
+  const manifest = readManifest(projectDir);
+  const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest);
+  const prompt = kickoffPrompt(projectDir, topic, briefFile, { autonomous });
+
+  const mode = readAgentsConfig().launchMode || 'desktop';
+  if (mode === 'desktop') {
+    if (agentId === 'claude_code' && findDesktopApp('claude_code')) {
+      const url = `claude://code/new?q=${encodeURIComponent(prompt)}&folder=${encodeURIComponent(projectDir)}`;
+      return new Promise((resolve) => {
+        execFile('open', [url], (err) =>
+          resolve(err
+            ? { ok: false, error: `deep link failed: ${err.message}` }
+            : { ok: true, via: 'claude-code-deeplink', app: 'Claude',
+                message: autonomous
+                  ? `New Claude Code session opened for "${topic}" — press Enter to let it build the whole video.`
+                  : `New Claude Code session opened at "${topic}" — confirm the folder, review the prompt, send.` }));
+      });
+    }
+    const appName = findDesktopApp(agentId);
+    if (appName) {
+      const ideLike = ['Antigravity', 'Antigravity IDE', 'OpenCode'].includes(appName);
+      const args = ideLike ? ['-a', appName, projectDir] : ['-a', appName];
+      if (!ideLike) clipboard.writeText(prompt);
+      return new Promise((resolve) => {
+        execFile('open', args, (err) =>
+          resolve(err
+            ? { ok: false, error: `could not open ${appName}.app: ${err.message}` }
+            : { ok: true, via: 'desktop', app: appName,
+                message: ideLike
+                  ? `${appName} opened at the project — the brief is in .vidmyo/session-brief.md.`
+                  : `${appName} opened. The kickoff prompt is on your clipboard — ⌘N for a new chat, then ⌘V.` }));
+      });
+    }
+  }
+  const cliPath = await resolveCliPath(agent.cli);
+  if (!cliPath) return { ok: false, error: 'not_installed', installCmd: agent.installCmd };
+  const opened = openInTerminal(agent.cli, projectDir);
+  return opened
+    ? { ok: true, via: mode === 'desktop' ? 'terminal-fallback' : 'terminal',
+        message: `Terminal opened at the project — tell the agent to read .vidmyo/session-brief.md.` }
+    : { ok: false, error: 'could not open a terminal' };
+}
+
+// Preferred agent for auto-delegation: Claude Code if installed, else the
+// first installed known agent.
+async function preferredAgentId() {
+  const all = await detectAll();
+  const claude = all.find((a) => a.id === 'claude_code' && a.installed);
+  if (claude) return 'claude_code';
+  const any = all.find((a) => a.installed);
+  return any ? any.id : null;
 }
 
 function findDesktopApp(agentId) {
@@ -271,59 +343,7 @@ function register() {
       : { ok: false, error: 'could not open a terminal' };
   });
 
-  ipcMain.handle('agents:launch', async (_evt, agentId, cwd) => {
-    const agent = KNOWN_AGENTS.find((a) => a.id === agentId);
-    if (!agent) return { ok: false, error: 'unknown agent' };
-
-    const projectDir = cwd && fs.existsSync(cwd) ? cwd : HOME;
-    const manifest = readManifest(projectDir);
-    const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest);
-    const prompt = kickoffPrompt(projectDir, topic, briefFile);
-
-    const mode = readAgentsConfig().launchMode || 'desktop';
-    if (mode === 'desktop') {
-      // Claude Desktop: official deep link opens a NEW Code-tab session at the
-      // project folder with the kickoff prompt prefilled (the app asks you to
-      // confirm the folder; nothing auto-submits).
-      if (agentId === 'claude_code' && findDesktopApp('claude_code')) {
-        const url = `claude://code/new?q=${encodeURIComponent(prompt)}&folder=${encodeURIComponent(projectDir)}`;
-        return new Promise((resolve) => {
-          execFile('open', [url], (err) =>
-            resolve(err
-              ? { ok: false, error: `deep link failed: ${err.message}` }
-              : { ok: true, via: 'claude-code-deeplink', message: `New Claude Code session opened at "${topic}" — confirm the folder, review the prefilled prompt, send.` }));
-        });
-      }
-      const appName = findDesktopApp(agentId);
-      if (appName) {
-        // IDE-style apps take the project folder directly = real context.
-        const ideLike = ['Antigravity', 'Antigravity IDE', 'OpenCode'].includes(appName);
-        const args = ideLike ? ['-a', appName, projectDir] : ['-a', appName];
-        if (!ideLike) clipboard.writeText(prompt);
-        return new Promise((resolve) => {
-          execFile('open', args, (err) =>
-            resolve(err
-              ? { ok: false, error: `could not open ${appName}.app: ${err.message}` }
-              : {
-                  ok: true, via: 'desktop', app: appName,
-                  message: ideLike
-                    ? `${appName} opened at the project folder — the session brief is in .vidmyo/session-brief.md.`
-                    : `${appName} opened. The kickoff prompt is on your clipboard — press ⌘N for a new chat, then ⌘V.`,
-                }));
-        });
-      }
-      // No desktop app installed for this agent — fall through to Terminal.
-    }
-    const cliPath = await resolveCliPath(agent.cli);
-    if (!cliPath) return { ok: false, error: 'not_installed', installCmd: agent.installCmd };
-    const opened = openInTerminal(agent.cli, projectDir);
-    return opened
-      ? {
-          ok: true, via: mode === 'desktop' ? 'terminal-fallback' : 'terminal',
-          message: `Terminal opened at the project — tell the agent to read .vidmyo/session-brief.md.`,
-        }
-      : { ok: false, error: 'could not open a terminal' };
-  });
+  ipcMain.handle('agents:launch', async (_evt, agentId, cwd) => launchAgent(agentId, cwd));
 
   ipcMain.handle('agents:getLaunchConfig', async () => {
     const cfg = readAgentsConfig();
@@ -399,4 +419,4 @@ function register() {
   });
 }
 
-module.exports = { register, KNOWN_AGENTS, detectAll };
+module.exports = { register, KNOWN_AGENTS, detectAll, launchAgent, preferredAgentId };

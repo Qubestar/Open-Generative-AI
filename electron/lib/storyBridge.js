@@ -13,6 +13,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 const { getSecret } = require('./secrets');
+const agentsLib = require('./agents');
 
 let corePromise = null;
 function core() {
@@ -381,6 +382,40 @@ function register() {
         },
       });
       return await summarize(project);
+    } catch (err) { return fail(err); }
+  });
+
+  // Select a tracker row and hand the whole video to a connected agent:
+  // create the subfolder + brief, then launch the preferred agent with an
+  // autonomous kickoff. No manual pipeline steps.
+  ipcMain.handle('story:delegate-sheet-row', async (_evt, { row, base } = {}) => {
+    try {
+      if (!row) return fail(new Error('row is required'));
+      const cfg = readConfig();
+      const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
+      const resolvedBase = base || (cfg.sheetBases || {})[sheetId];
+      if (!resolvedBase) return { ok: false, error: 'no-base' };
+      if (!fs.existsSync(resolvedBase)) return fail(new Error(`Base folder no longer exists: ${resolvedBase}`));
+
+      const data = await readSheetValues(sheetId, `A${row}:E${row}`);
+      const r = data.values?.[0];
+      if (!r || !r[2]) return fail(new Error(`Sheet row ${row} has no Working Title`));
+
+      const { Project, projectSubfolder } = await core();
+      const dir = path.join(resolvedBase, projectSubfolder(r[1], r[2]));
+      if (!fs.existsSync(path.join(dir, 'project.json'))) {
+        Project.create(dir, {
+          brief: { topic: r[2], hook: r[3] || '', angle: r[4] || '', videoNum: r[1] || '', sheetRow: row, sheetId },
+        });
+      }
+
+      const agentId = await agentsLib.preferredAgentId();
+      if (!agentId) {
+        return { ok: false, error: 'no-agent', dir,
+          hint: 'No coding agent detected. Install/connect one in the Agents tab (Claude Code recommended), or open the project to build it manually.' };
+      }
+      const launch = await agentsLib.launchAgent(agentId, dir, { autonomous: true });
+      return { ok: launch.ok, dir, topic: r[2], agent: agentId, launch };
     } catch (err) { return fail(err); }
   });
 

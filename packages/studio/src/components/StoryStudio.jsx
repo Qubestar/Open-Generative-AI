@@ -46,6 +46,7 @@ export default function StoryStudio() {
   const [voice, setVoice] = useState('kokoro');   // kokoro (free) | elevenlabs (paid)
   const [sheet, setSheet] = useState(null);       // { rows } after loading the tracker
   const [sheetBusy, setSheetBusy] = useState(false);
+  const [delegated, setDelegated] = useState([]); // recent hand-offs to agents
   const [thumbs, setThumbs] = useState({});       // sceneId -> blob URL
   const [lightbox, setLightbox] = useState(null); // enlarged image URL
   const [renderUrl, setRenderUrl] = useState(null); // playing render blob URL
@@ -151,22 +152,48 @@ export default function StoryStudio() {
     else alert(res.error);
   };
 
-  const createFromSheetRow = async (row) => {
-    // Auto-create a subfolder under the sheet's base folder (chosen once),
-    // matching the pipeline's videos/NN-slug/ convention — no per-video picker.
+  const ensureBase = async () => {
     let base = sheet?.base;
     if (!base) {
       const set = await window.story.setBase();
-      if (!set.ok) return;
+      if (!set.ok) return null;
       base = set.base;
       setSheet((s) => (s ? { ...s, base } : s));
     }
+    return base;
+  };
+
+  // Default tracker action: hand the whole video to a connected agent. Creates
+  // the subfolder + brief and launches the agent autonomously — no manual steps.
+  const delegateRow = async (row, title) => {
+    const base = await ensureBase();
+    if (!base) return;
+    setSheetBusy(true);
+    const res = await window.story.delegateSheetRow({ row, base });
+    setSheetBusy(false);
+    if (res.ok) {
+      setDelegated((d) => [{ row, title, agent: res.agent, message: res.launch?.message }, ...d].slice(0, 6));
+    } else if (res.error === 'no-base') {
+      alert('Pick the base folder for this sheet first.');
+    } else if (res.error === 'no-agent') {
+      if (confirm(`${res.hint}\n\nOpen the project to build it manually instead?`)) {
+        const opened = await window.story.get(res.dir);
+        if (opened.ok) { setSheet(null); rememberRecent(opened); apply(opened); }
+      }
+    } else {
+      alert(res.error);
+    }
+  };
+
+  // Manual path: open the project in the editor (from a row) without delegating.
+  const openSheetRow = async (row) => {
+    const base = await ensureBase();
+    if (!base) return;
     setSheetBusy(true);
     const res = await window.story.createFromSheet({ row, base });
     setSheetBusy(false);
     if (res.ok) { setSheet(null); rememberRecent(res); apply(res); }
-    else if (res.error === 'no-base') { alert('Pick the base folder for this sheet first.'); }
-    else alert(res.error);
+    else if (res.error !== 'no-base') alert(res.error);
   };
   const runStage = async (stage, opts = {}) => {
     // Pipeline stages spawn the local Python scripts — refuse with a pointer
@@ -273,29 +300,41 @@ export default function StoryStudio() {
               </span>
               {sheet.rows.some((r) => r.status.toLowerCase() === 'planned') && (
                 <button style={btn(true, sheetBusy)} disabled={sheetBusy}
-                        onClick={() => createFromSheetRow(sheet.rows.find((r) => r.status.toLowerCase() === 'planned').row)}>
-                  Next planned →
+                        onClick={() => { const n = sheet.rows.find((r) => r.status.toLowerCase() === 'planned'); delegateRow(n.row, n.title); }}>
+                  {sheetBusy ? 'Handing off…' : 'Next planned → agent'}
                 </button>
               )}
+            </div>
+            <div style={{ color: C.dim, fontSize: 10, marginBottom: 8 }}>
+              Click a row to hand the whole video to your connected agent. Use “edit” to build it manually instead.
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto' }}>
               {sheet.rows.map((r) => {
                 const planned = r.status.toLowerCase() === 'planned';
+                const done = delegated.find((d) => d.row === r.row);
                 return (
                   <div key={r.row}
-                       onClick={() => !sheetBusy && createFromSheetRow(r.row)}
-                       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 8, background: 'rgba(0,0,0,0.25)', cursor: 'pointer' }}>
+                       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 8, background: 'rgba(0,0,0,0.25)', cursor: sheetBusy ? 'default' : 'pointer' }}>
                     <span style={{
                       fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, flexShrink: 0, textTransform: 'uppercase',
                       color: planned ? C.accent : '#3ECF8E',
                       border: `1px solid ${planned ? 'rgba(232,163,61,0.4)' : 'rgba(62,207,142,0.35)'}`,
                     }}>{r.status || '—'}</span>
                     <span style={{ color: C.dim, fontSize: 11, width: 20, flexShrink: 0 }}>#{r.videoNum}</span>
-                    <span style={{ color: C.text, fontSize: 12, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</span>
+                    <span onClick={() => !sheetBusy && delegateRow(r.row, r.title)}
+                          style={{ color: C.text, fontSize: 12, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</span>
+                    {done && <span style={{ color: '#3ECF8E', fontSize: 10, flexShrink: 0 }}>→ {done.agent === 'claude_code' ? 'Claude' : done.agent}</span>}
+                    <button onClick={() => !sheetBusy && openSheetRow(r.row)}
+                            style={{ background: 'none', border: 'none', color: C.dim, fontSize: 10, cursor: 'pointer', flexShrink: 0 }}>edit</button>
                   </div>
                 );
               })}
             </div>
+            {delegated.length > 0 && delegated[0].message && (
+              <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'rgba(62,207,142,0.08)', border: '1px solid rgba(62,207,142,0.3)', color: '#3ECF8E', fontSize: 11 }}>
+                {delegated[0].message}
+              </div>
+            )}
           </div>
         )}
 
