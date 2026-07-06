@@ -132,7 +132,9 @@ async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
     // installed outside /Applications, still open as the desktop app.
     const found = findDesktopApp(agentId, { spotlight: true });
     if (found) {
-      const ideLike = ['Antigravity', 'Antigravity IDE', 'OpenCode'].includes(found.name);
+      // IDE-style apps accept the project folder as an argument. OpenCode's
+      // app is terminal-style and rejects a folder arg, so it's NOT ide-like.
+      const ideLike = ['Antigravity', 'Antigravity IDE'].includes(found.name);
       // Open by full path so apps outside /Applications resolve.
       const args = ideLike ? ['-a', found.path, projectDir] : [found.path];
       if (!ideLike) clipboard.writeText(prompt);
