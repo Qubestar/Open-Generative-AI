@@ -1,16 +1,21 @@
 // Higgsfield Cloud API adapter (image/video) for the core job runner.
 //
-// Built to the OFFICIAL SDK's documented shape (@higgsfield/client v2):
+// Verified against @higgsfield/client v0.2.1 (v2 client, dist/v2/client.js) on
+// 2026-07-09 — read the actual shipped JS, not the README (the README's own
+// example disagrees with its own SDK's code: it shows a `JobSet`/`.isCompleted`
+// wrapper the v2 `subscribe()` never constructs; it just returns the raw
+// V2Response below). Ground truth:
 //   base   https://platform.higgsfield.ai
 //   auth   Authorization: Key KEY_ID:KEY_SECRET   (stored key = "id:secret")
-//   submit POST /v2/<endpoint>  { params: { <input> } }  -> { id | request_id }
-//   poll   GET  /v2/requests/<id>  -> { status, jobs:[{ results:{ raw:{ url }}}] }
+//   submit POST /<endpoint>  { <input flat, NOT wrapped in "params"> }
+//          -> { status, request_id, status_url, cancel_url, images?:[{url}], video?:{url} }
+//   poll   GET  /requests/<request_id>/status  -> same shape as submit response
 //   status queued | in_progress | completed | failed | nsfw
+// (No `/v2/` path prefix — that was the bug: the old adapter posted to
+// `/v2/<endpoint>` and polled `/v2/requests/<id>`, routes that don't exist on
+// the real API and appear to fall through to a generic 401.)
 //
-// ⚠ VERIFY: the raw REST wire format is inferred from the SDK (which abstracts
-// it) and third-party docs disagree. The runner surfaces errors verbatim; one
-// live generation confirms/corrects the exact path + field names. Key always
-// explicit — core never reads key storage.
+// Key always explicit — core never reads key storage.
 
 const BASE = 'https://platform.higgsfield.ai';
 
@@ -19,41 +24,38 @@ const extFromUrl = (url) => {
   return m ? m[1] : '.png';
 };
 
-function findMediaUrl(obj) {
-  // Tolerate schema drift: dig for the first plausible media URL.
-  const j = obj?.jobs?.[0]?.results || obj?.results || obj;
-  return (
-    j?.raw?.url || j?.min?.url || j?.url ||
-    obj?.jobs?.[0]?.result_url || obj?.output?.url || obj?.url || null
-  );
+function findMediaUrl(data) {
+  return data?.images?.[0]?.url || data?.video?.url || null;
 }
 
 export function higgsfieldAdapter({ key, endpoint = 'flux-pro/kontext/max/text-to-image', base = BASE }) {
   if (!key) throw new Error('higgsfieldAdapter requires a key ("KEY_ID:KEY_SECRET")');
   const auth = { Authorization: `Key ${key}`, 'Content-Type': 'application/json' };
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
   return {
     async submit(params, { fetchImpl }) {
-      const res = await fetchImpl(`${base}/v2/${endpoint}`, {
+      const res = await fetchImpl(`${base}${path}`, {
         method: 'POST',
         headers: auth,
-        body: JSON.stringify({ params }),
+        body: JSON.stringify(params),
       });
       const text = await res.text();
       if (!res.ok) throw new Error(`Higgsfield submit ${res.status}: ${text.slice(0, 300)}`);
       let data; try { data = JSON.parse(text); } catch { data = {}; }
-      const id = data.id || data.request_id || data.job_set_id || data.jobs?.[0]?.id;
-      if (!id) throw new Error(`Higgsfield submit: no request id in response — ${text.slice(0, 300)}`);
+      const id = data.request_id;
+      if (!id) throw new Error(`Higgsfield submit: no request_id in response — ${text.slice(0, 300)}`);
       return { id };
     },
 
     async poll(handle, { fetchImpl, log }) {
-      const res = await fetchImpl(`${base}/v2/requests/${handle.id}`, { headers: { Authorization: `Key ${key}` } });
-      if (!res.ok) return { status: 'error', error: `Higgsfield status ${res.status}` };
-      const data = await res.json();
-      const s = String(data.status || data.state || '').toLowerCase();
-      if (s === 'completed' || s === 'succeeded' || s === 'done') return { status: 'done', result: data };
-      if (s === 'failed' || s === 'error' || s === 'nsfw') return { status: 'error', error: `Higgsfield: ${s}` };
+      const res = await fetchImpl(`${base}/requests/${handle.id}/status`, { headers: { Authorization: `Key ${key}` } });
+      const text = await res.text();
+      if (!res.ok) return { status: 'error', error: `Higgsfield status ${res.status}: ${text.slice(0, 300)}` };
+      let data; try { data = JSON.parse(text); } catch { data = {}; }
+      const s = String(data.status || '').toLowerCase();
+      if (s === 'completed') return { status: 'done', result: data };
+      if (s === 'failed' || s === 'nsfw') return { status: 'error', error: `Higgsfield: ${s}` };
       log(`higgsfield: ${s || 'pending'}`);
       return { status: 'pending' };
     },
