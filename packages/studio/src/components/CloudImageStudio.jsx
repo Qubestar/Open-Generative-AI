@@ -12,16 +12,21 @@ const C = {
 
 // Curated, verified fal endpoints (2026-07). fal ids drift — the Custom
 // option accepts any endpoint id from fal.ai/explore/models.
+// Each option carries its provider so the bridge picks the right key + adapter.
 const IMAGE_MODELS = [
-  { id: 'fal-ai/flux/schnell', label: 'FLUX.1 schnell — fast & cheap' },
-  { id: 'fal-ai/flux/dev', label: 'FLUX.1 dev — higher quality' },
-  { id: 'custom', label: 'Custom fal endpoint…' },
+  { id: 'fal-ai/flux/schnell', provider: 'fal', label: 'fal · FLUX.1 schnell — fast & cheap' },
+  { id: 'fal-ai/flux/dev', provider: 'fal', label: 'fal · FLUX.1 dev — higher quality' },
+  { id: 'flux-pro/kontext/max/text-to-image', provider: 'higgsfield', label: 'Higgsfield · Flux Pro Kontext Max (beta — verify)' },
+  { id: 'custom', provider: 'fal', label: 'Custom fal endpoint…' },
 ];
 
 const ASPECTS = [
   ['landscape_16_9', '16:9'], ['portrait_16_9', '9:16'],
   ['square_hd', '1:1'], ['landscape_4_3', '4:3'], ['portrait_4_3', '3:4'],
 ];
+
+// fal's image_size preset → a plain W:H ratio (Higgsfield's aspect_ratio).
+const aspectToRatio = (a) => (ASPECTS.find(([v]) => v === a)?.[1] || '16:9');
 
 const card = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16 };
 const btn = (primary = false, disabled = false) => ({
@@ -48,14 +53,16 @@ export default function CloudImageStudio() {
   useEffect(loadRecent, [loadRecent]);
 
   const generate = async () => {
+    const sel = IMAGE_MODELS.find((m) => m.id === model) || IMAGE_MODELS[0];
+    const provider = sel.provider;
     const endpoint = model === 'custom' ? customModel.trim() : model;
     if (!prompt.trim() || !endpoint) return;
     setBusy(true); setError(null); setResult(null);
-    const res = await window.media.generate({
-      kind: 'image',
-      model: endpoint,
-      params: { prompt: prompt.trim(), image_size: aspect },
-    });
+    // Higgsfield uses aspect_ratio (e.g. "9:16"); fal uses image_size presets.
+    const params = provider === 'higgsfield'
+      ? { prompt: prompt.trim(), aspect_ratio: aspectToRatio(aspect), safety_tolerance: 2 }
+      : { prompt: prompt.trim(), image_size: aspect };
+    const res = await window.media.generate({ kind: 'image', provider, model: endpoint, params });
     setBusy(false);
     if (res.ok) { setResult(res); loadRecent(); }
     else setError(res.error);

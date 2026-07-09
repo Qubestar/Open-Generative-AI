@@ -429,33 +429,49 @@ function register() {
       : { ok: false, error: 'could not open a terminal' };
   });
 
-  // Register the Vidmyo MCP server into an agent's CLI config. One-click for
-  // CLIs with an `mcp add` command; the rest get the command to run manually.
-  ipcMain.handle('agents:installMcp', async (_evt, agentId) => {
+  // Register an MCP server into an agent's CLI config. serverId 'vidmyo'
+  // (local stdio) or 'higgsfield' (hosted http, account OAuth — no key).
+  ipcMain.handle('agents:installMcp', async (_evt, agentId, serverId = 'vidmyo') => {
     const serverPath = path.join(__dirname, '..', '..', 'mcp', 'server.js');
-    const stdioCmd = (bin) => `${bin} mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`;
-    const manual = (hint) => ({
-      ok: false, error: 'manual',
-      command: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
-      hint,
-      serverPath,
-    });
+    const HF_URL = 'https://mcp.higgsfield.ai/mcp';
+
+    // Per-server command builders.
+    const spec = serverId === 'higgsfield'
+      ? {
+          name: 'higgsfield',
+          claude: `claude mcp add --transport http --scope user higgsfield ${HF_URL}`,
+          codex: `codex mcp add higgsfield --transport http ${HF_URL}`,
+          copyCmd: `claude mcp add --transport http --scope user higgsfield ${HF_URL}`,
+          geminiHint: 'Gemini CLI: add to ~/.gemini/settings.json → mcpServers.higgsfield = { httpUrl: "https://mcp.higgsfield.ai/mcp" }, then sign in with your Higgsfield account.',
+          genericHint: 'Register an HTTP MCP server named "higgsfield" at https://mcp.higgsfield.ai/mcp and sign in with your Higgsfield account.',
+          note: 'After adding, run the agent once and complete the Higgsfield sign-in in the browser.',
+        }
+      : {
+          name: 'vidmyo',
+          claude: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
+          codex: `codex mcp add vidmyo -- node ${shellQuote(serverPath)}`,
+          copyCmd: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
+          geminiHint: 'Gemini CLI: add to ~/.gemini/settings.json → mcpServers.vidmyo = { command: "node", args: ["<server path>"] }.',
+          genericHint: 'Register a stdio MCP server named "vidmyo": command node, argument = the server path.',
+          note: 'Restart the agent session to pick it up.',
+        };
+
+    const manual = (hint) => ({ ok: false, error: 'manual', command: spec.copyCmd, hint, serverPath, note: spec.note });
+
     if (agentId === 'claude_code') {
-      const res = await loginShellExec(stdioCmd('claude'), 20000);
+      const res = await loginShellExec(spec.claude, 25000);
       return res.ok
-        ? { ok: true, output: res.stdout.slice(0, 300), serverPath }
-        : { ok: false, error: res.stderr.slice(0, 300) || 'claude mcp add failed', serverPath };
+        ? { ok: true, output: res.stdout.slice(0, 300), serverPath, note: spec.note }
+        : { ok: false, error: res.stderr.slice(0, 300) || `claude mcp add ${spec.name} failed`, serverPath };
     }
     if (agentId === 'codex') {
-      const res = await loginShellExec(`codex mcp add vidmyo -- node ${shellQuote(serverPath)}`, 20000);
+      const res = await loginShellExec(spec.codex, 25000);
       return res.ok
-        ? { ok: true, output: res.stdout.slice(0, 300), serverPath }
-        : manual('Codex: add a stdio MCP server named "vidmyo" in its config (command: node, args: the server path).');
+        ? { ok: true, output: res.stdout.slice(0, 300), serverPath, note: spec.note }
+        : manual(`Codex: add the "${spec.name}" MCP server in its config.`);
     }
-    if (agentId === 'gemini') {
-      return manual('Gemini CLI: add to ~/.gemini/settings.json → mcpServers.vidmyo = { command: "node", args: ["<server path>"] }.');
-    }
-    return manual('Register a stdio MCP server named "vidmyo": command node, argument = the server path.');
+    if (agentId === 'gemini') return manual(spec.geminiHint);
+    return manual(spec.genericHint);
   });
 
   // Open an arbitrary docs/url externally (used by the UI for "Install" links).

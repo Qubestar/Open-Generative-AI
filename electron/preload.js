@@ -88,7 +88,7 @@ contextBridge.exposeInMainWorld('agents', {
     login: (agentId) => ipcRenderer.invoke('agents:login', agentId),
     launch: (agentId, cwd) => ipcRenderer.invoke('agents:launch', agentId, cwd),
     setupMediaSkills: (opts) => ipcRenderer.invoke('agents:setupMediaSkills', opts),
-    installMcp: (agentId) => ipcRenderer.invoke('agents:installMcp', agentId),
+    installMcp: (agentId, serverId) => ipcRenderer.invoke('agents:installMcp', agentId, serverId),
     getLaunchConfig: () => ipcRenderer.invoke('agents:getLaunchConfig'),
     setLaunchConfig: (cfg) => ipcRenderer.invoke('agents:setLaunchConfig', cfg),
     setPreferred: (agentId) => ipcRenderer.invoke('agents:setPreferred', agentId),

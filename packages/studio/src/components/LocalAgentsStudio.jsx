@@ -44,11 +44,11 @@ export default function LocalAgentsStudio() {
     );
   }
 
-  const connect = async (agent) => {
-    setBusyId(agent.id);
-    const res = await window.agents.installMcp(agent.id);
+  const connect = async (agent, serverId = 'vidmyo') => {
+    setBusyId(`${agent.id}:${serverId}`);
+    const res = await window.agents.installMcp(agent.id, serverId);
     setBusyId(null);
-    setResults((r) => ({ ...r, [agent.id]: res }));
+    setResults((r) => ({ ...r, [agent.id]: { ...res, serverId } }));
   };
 
   return (
@@ -64,11 +64,16 @@ export default function LocalAgentsStudio() {
 
         <div style={{ ...card, borderColor: 'rgba(124,58,237,0.35)' }}>
           <div style={{ color: C.accent2, fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
-            Vidmyo MCP server
+            MCP servers you can connect
           </div>
           <div style={{ color: C.dim, fontSize: 12, lineHeight: 1.6 }}>
-            15 tools: {MCP_TOOL_HINT}. Production rules (scene IDs, on-disk artifact checks,
-            script length gate) are built into the tools themselves.
+            <b style={{ color: C.text }}>Vidmyo</b> — 15 local tools: {MCP_TOOL_HINT}. Production rules
+            (scene IDs, on-disk artifact checks, script length gate) baked in.
+          </div>
+          <div style={{ color: C.dim, fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>
+            <b style={{ color: C.text }}>Higgsfield</b> — hosted MCP (mcp.higgsfield.ai): 30+ image/video
+            models (Sora, Veo, Kling, Nano Banana…) on <b>your Higgsfield subscription</b>. Sign in with
+            your Higgsfield account when the agent first uses it — no API key.
           </div>
         </div>
 
@@ -97,8 +102,13 @@ export default function LocalAgentsStudio() {
                 )}
                 {a.installed && (
                   <>
-                    <button style={btn(true, busyId === a.id)} disabled={busyId === a.id} onClick={() => connect(a)}>
-                      {busyId === a.id ? 'Connecting…' : 'Connect Vidmyo MCP'}
+                    <button style={btn(true, busyId === `${a.id}:vidmyo`)} disabled={!!busyId} onClick={() => connect(a, 'vidmyo')}>
+                      {busyId === `${a.id}:vidmyo` ? 'Connecting…' : 'Connect Vidmyo MCP'}
+                    </button>
+                    <button style={btn(false, busyId === `${a.id}:higgsfield`)} disabled={!!busyId}
+                            title="Connect Higgsfield's hosted MCP — 30+ image/video models on your Higgsfield subscription (account sign-in, no API key)"
+                            onClick={() => connect(a, 'higgsfield')}>
+                      {busyId === `${a.id}:higgsfield` ? 'Connecting…' : 'Connect Higgsfield MCP'}
                     </button>
                     <button style={btn()}
                             title={a.desktopApp ? `Opens ${a.desktopApp}.app with the current project brief (change mode in Settings)` : 'Opens in Terminal at the project (no desktop app found)'}
@@ -118,14 +128,13 @@ export default function LocalAgentsStudio() {
               {res && (
                 <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'rgba(0,0,0,0.3)', fontSize: 11, lineHeight: 1.6 }}>
                   {res.ok ? (
-                    <span style={{ color: C.good }}>{res.notice || 'Connected — the “vidmyo” MCP server is registered. Restart the agent session to pick it up.'}</span>
+                    <span style={{ color: C.good }}>{res.notice || `Connected — the “${res.serverId || 'vidmyo'}” MCP server is registered.`}{res.note ? ` ${res.note}` : ''}</span>
                   ) : res.error === 'manual' ? (
                     <>
                       <div style={{ color: C.accent }}>{res.hint}</div>
-                      <div style={{ color: C.dim, marginTop: 4 }}>Server path (copy):</div>
-                      <code style={{ color: C.text, fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all' }}>{res.serverPath}</code>
+                      {res.note && <div style={{ color: C.dim, marginTop: 4 }}>{res.note}</div>}
                       <div style={{ marginTop: 6 }}>
-                        <button style={btn()} onClick={() => navigator.clipboard.writeText(res.command)}>Copy Claude-style command</button>
+                        <button style={btn()} onClick={() => navigator.clipboard.writeText(res.command)}>Copy command</button>
                       </div>
                     </>
                   ) : (

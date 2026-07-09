@@ -42,18 +42,29 @@ function sendProgress(payload) {
 }
 
 function register() {
-  ipcMain.handle('media:generate', async (_evt, { kind = 'image', model, params = {} } = {}) => {
+  ipcMain.handle('media:generate', async (_evt, { kind = 'image', provider = 'fal', model, params = {} } = {}) => {
     try {
       if (!model) return fail(new Error('model endpoint id is required'));
-      const key = getSecret('fal');
-      if (!key) return fail(new Error('No fal.ai key saved — add it in Settings first.'));
+      const mod = await core();
+      const { JobStore, runJob } = mod;
 
-      const { JobStore, runJob, falAdapter } = await core();
+      // Build the adapter for the chosen provider (key from the keychain).
+      let adapter;
+      if (provider === 'higgsfield') {
+        const key = getSecret('higgsfield');
+        if (!key) return fail(new Error('No Higgsfield key saved — add it in Settings (format KEY_ID:KEY_SECRET).'));
+        adapter = mod.higgsfieldAdapter({ key, endpoint: model });
+      } else {
+        const key = getSecret('fal');
+        if (!key) return fail(new Error('No fal.ai key saved — add it in Settings first.'));
+        adapter = mod.falAdapter({ model, key });
+      }
+
       const store = new JobStore();
-      const job = store.create({ type: kind, provider: 'fal', params });
+      const job = store.create({ type: kind, provider, params });
       sendProgress({ jobId: job.id, phase: 'start', model });
 
-      const done = await runJob(store, job.id, falAdapter({ model, key }), {
+      const done = await runJob(store, job.id, adapter, {
         outDir: ARTIFACTS_DIR,
         pollMs: kind === 'video' ? 4000 : 1500,
         maxPolls: kind === 'video' ? 400 : 200,
