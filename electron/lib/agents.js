@@ -440,7 +440,7 @@ function register() {
       ? {
           name: 'higgsfield',
           claude: `claude mcp add --transport http --scope user higgsfield ${HF_URL}`,
-          codex: `codex mcp add higgsfield --transport http ${HF_URL}`,
+          codex: `codex mcp add higgsfield --url ${HF_URL}`,
           copyCmd: `claude mcp add --transport http --scope user higgsfield ${HF_URL}`,
           geminiHint: 'Gemini CLI: add to ~/.gemini/settings.json → mcpServers.higgsfield = { httpUrl: "https://mcp.higgsfield.ai/mcp" }, then sign in with your Higgsfield account.',
           genericHint: 'Register an HTTP MCP server named "higgsfield" at https://mcp.higgsfield.ai/mcp and sign in with your Higgsfield account.',
