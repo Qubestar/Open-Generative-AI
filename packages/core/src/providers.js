@@ -260,7 +260,7 @@ export const PROVIDERS = [
     description: 'Higgsfield Cloud API — image & video (Soul, Flux, Kling, Veo…). Key format: KEY_ID:KEY_SECRET.',
     docsUrl: 'https://cloud.higgsfield.ai/api-keys',
     endpoints: {
-      image: '/v2/flux-pro/kontext/max/text-to-image',
+      image: '/flux-pro/kontext/max/text-to-image',
     },
     studios: ['image', 'video'],
   },

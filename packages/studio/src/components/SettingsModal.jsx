@@ -161,24 +161,29 @@ export default function SettingsModal({ onClose, onCloudKeyChange }) {
                         </div>
                       </div>
                       {open && (
-                        <div className="flex items-center gap-2 px-3.5 pb-3">
-                          <input
-                            type="password" autoFocus
-                            value={drafts[p.id] || ''}
-                            onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === 'Enter') saveKey(p.id, drafts[p.id]); }}
-                            placeholder={`${p.name} API key`}
-                            className="flex-1 bg-black/40 border border-white/10 focus:border-white/25 rounded-md px-3 py-1.5 text-[12px] font-mono text-white outline-none"
-                          />
-                          <button onClick={() => saveKey(p.id, drafts[p.id])}
-                                  className="px-3 py-1.5 rounded-md bg-white text-black text-[11px] font-bold">Save</button>
-                          {(p.affiliateUrl || p.docsUrl) && (
-                            <a href={p.affiliateUrl || p.docsUrl} target="_blank" rel="noreferrer"
-                               title={p.affiliateUrl ? 'Affiliate link — supports Vidmyo at no extra cost to you' : undefined}
-                               className="text-[11px] text-white/40 hover:text-white/70 whitespace-nowrap">
-                              get a key ↗{p.affiliateUrl ? ' · affiliate' : ''}
-                            </a>
+                        <div className="px-3.5 pb-3">
+                          {p.description && (
+                            <div className="text-[11px] text-white/40 mb-1.5 leading-snug">{p.description}</div>
                           )}
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="password" autoFocus
+                              value={drafts[p.id] || ''}
+                              onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === 'Enter') saveKey(p.id, drafts[p.id]); }}
+                              placeholder={`${p.name} API key`}
+                              className="flex-1 bg-black/40 border border-white/10 focus:border-white/25 rounded-md px-3 py-1.5 text-[12px] font-mono text-white outline-none"
+                            />
+                            <button onClick={() => saveKey(p.id, drafts[p.id])}
+                                    className="px-3 py-1.5 rounded-md bg-white text-black text-[11px] font-bold">Save</button>
+                            {(p.affiliateUrl || p.docsUrl) && (
+                              <a href={p.affiliateUrl || p.docsUrl} target="_blank" rel="noreferrer"
+                                 title={p.affiliateUrl ? 'Affiliate link — supports Vidmyo at no extra cost to you' : undefined}
+                                 className="text-[11px] text-white/40 hover:text-white/70 whitespace-nowrap">
+                                get a key ↗{p.affiliateUrl ? ' · affiliate' : ''}
+                              </a>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
