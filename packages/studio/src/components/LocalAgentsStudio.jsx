@@ -70,11 +70,6 @@ export default function LocalAgentsStudio() {
             <b style={{ color: C.text }}>Vidmyo</b> — 15 local tools: {MCP_TOOL_HINT}. Production rules
             (scene IDs, on-disk artifact checks, script length gate) baked in.
           </div>
-          <div style={{ color: C.dim, fontSize: 12, lineHeight: 1.6, marginTop: 6 }}>
-            <b style={{ color: C.text }}>Higgsfield</b> — hosted MCP (mcp.higgsfield.ai): 30+ image/video
-            models (Sora, Veo, Kling, Nano Banana…) on <b>your Higgsfield subscription</b>. Sign in with
-            your Higgsfield account when the agent first uses it — no API key.
-          </div>
         </div>
 
         {agents === null && <div style={{ color: C.dim, fontSize: 12 }}>Detecting installed agents…</div>}
@@ -104,11 +99,6 @@ export default function LocalAgentsStudio() {
                   <>
                     <button style={btn(true, busyId === `${a.id}:vidmyo`)} disabled={!!busyId} onClick={() => connect(a, 'vidmyo')}>
                       {busyId === `${a.id}:vidmyo` ? 'Connecting…' : 'Connect Vidmyo MCP'}
-                    </button>
-                    <button style={btn(false, busyId === `${a.id}:higgsfield`)} disabled={!!busyId}
-                            title="Connect Higgsfield's hosted MCP — 30+ image/video models on your Higgsfield subscription (account sign-in, no API key)"
-                            onClick={() => connect(a, 'higgsfield')}>
-                      {busyId === `${a.id}:higgsfield` ? 'Connecting…' : 'Connect Higgsfield MCP'}
                     </button>
                     <button style={btn()}
                             title={a.desktopApp ? `Opens ${a.desktopApp}.app with the current project brief (change mode in Settings)` : 'Opens in Terminal at the project (no desktop app found)'}

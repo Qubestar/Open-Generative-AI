@@ -49,16 +49,9 @@ function register() {
       const { JobStore, runJob } = mod;
 
       // Build the adapter for the chosen provider (key from the keychain).
-      let adapter;
-      if (provider === 'higgsfield') {
-        const key = getSecret('higgsfield');
-        if (!key) return fail(new Error('No Higgsfield key saved — add it in Settings (format KEY_ID:KEY_SECRET).'));
-        adapter = mod.higgsfieldAdapter({ key, endpoint: model });
-      } else {
-        const key = getSecret('fal');
-        if (!key) return fail(new Error('No fal.ai key saved — add it in Settings first.'));
-        adapter = mod.falAdapter({ model, key });
-      }
+      const key = getSecret('fal');
+      if (!key) return fail(new Error('No fal.ai key saved — add it in Settings first.'));
+      const adapter = mod.falAdapter({ model, key });
 
       const store = new JobStore();
       const job = store.create({ type: kind, provider, params });

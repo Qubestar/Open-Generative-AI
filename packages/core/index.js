@@ -12,4 +12,3 @@ export * from './src/story.js';
 export * from './src/storyRunner.js';
 export { DoodlePipeline, DEFAULT_SCRIPTS_DIR } from './src/pipeline.js';
 export { falAdapter } from './src/adapters/fal.js';
-export { higgsfieldAdapter } from './src/adapters/higgsfield.js';

@@ -429,32 +429,19 @@ function register() {
       : { ok: false, error: 'could not open a terminal' };
   });
 
-  // Register an MCP server into an agent's CLI config. serverId 'vidmyo'
-  // (local stdio) or 'higgsfield' (hosted http, account OAuth — no key).
-  ipcMain.handle('agents:installMcp', async (_evt, agentId, serverId = 'vidmyo') => {
+  // Register the Vidmyo MCP server into an agent's CLI config (local stdio).
+  ipcMain.handle('agents:installMcp', async (_evt, agentId) => {
     const serverPath = path.join(__dirname, '..', '..', 'mcp', 'server.js');
-    const HF_URL = 'https://mcp.higgsfield.ai/mcp';
 
-    // Per-server command builders.
-    const spec = serverId === 'higgsfield'
-      ? {
-          name: 'higgsfield',
-          claude: `claude mcp add --transport http --scope user higgsfield ${HF_URL}`,
-          codex: `codex mcp add higgsfield --url ${HF_URL}`,
-          copyCmd: `claude mcp add --transport http --scope user higgsfield ${HF_URL}`,
-          geminiHint: 'Gemini CLI: add to ~/.gemini/settings.json → mcpServers.higgsfield = { httpUrl: "https://mcp.higgsfield.ai/mcp" }, then sign in with your Higgsfield account.',
-          genericHint: 'Register an HTTP MCP server named "higgsfield" at https://mcp.higgsfield.ai/mcp and sign in with your Higgsfield account.',
-          note: 'After adding, run the agent once and complete the Higgsfield sign-in in the browser.',
-        }
-      : {
-          name: 'vidmyo',
-          claude: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
-          codex: `codex mcp add vidmyo -- node ${shellQuote(serverPath)}`,
-          copyCmd: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
-          geminiHint: 'Gemini CLI: add to ~/.gemini/settings.json → mcpServers.vidmyo = { command: "node", args: ["<server path>"] }.',
-          genericHint: 'Register a stdio MCP server named "vidmyo": command node, argument = the server path.',
-          note: 'Restart the agent session to pick it up.',
-        };
+    const spec = {
+      name: 'vidmyo',
+      claude: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
+      codex: `codex mcp add vidmyo -- node ${shellQuote(serverPath)}`,
+      copyCmd: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
+      geminiHint: 'Gemini CLI: add to ~/.gemini/settings.json → mcpServers.vidmyo = { command: "node", args: ["<server path>"] }.',
+      genericHint: 'Register a stdio MCP server named "vidmyo": command node, argument = the server path.',
+      note: 'Restart the agent session to pick it up.',
+    };
 
     const manual = (hint) => ({ ok: false, error: 'manual', command: spec.copyCmd, hint, serverPath, note: spec.note });
 
