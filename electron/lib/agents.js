@@ -16,6 +16,7 @@ const { execFile, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { pathToFileURL } = require('url');
 const { getAgentPipeline, pipelineInstructions } = require('./agentPipelines');
 
 // ── Launch preferences ──────────────────────────────────────────────────────
@@ -56,7 +57,33 @@ function readManifest(dir) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8')); } catch { return null; }
 }
 
-function writeSessionBrief(dir, manifest, agentId) {
+let corePromise = null;
+function core() {
+  if (!corePromise) {
+    const entry = path.join(__dirname, '..', '..', 'packages', 'core', 'index.js');
+    corePromise = import(pathToFileURL(entry).href);
+  }
+  return corePromise;
+}
+
+// Settings → Story writes the image source into story-config.json (storyBridge
+// owns that file). Read it directly: storyBridge already requires THIS module
+// for launchAgent, so requiring it back would be circular.
+function readStoryConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'story-config.json'), 'utf8')) || {};
+  } catch { return {}; }
+}
+async function resolveImageSource() {
+  try {
+    const { getImageSource } = await core();
+    return getImageSource(readStoryConfig().imageSource);
+  } catch {
+    return null;  // brief falls back to the pipeline's own (Flow) wording
+  }
+}
+
+function writeSessionBrief(dir, manifest, agentId, imageSource = null) {
   const briefDir = path.join(dir, '.vidmyo');
   fs.mkdirSync(briefDir, { recursive: true });
   const m = manifest;
@@ -77,7 +104,7 @@ function writeSessionBrief(dir, manifest, agentId) {
     m ? `- renders: ${m.renders.length}` : null,
     '',
     // Prefer the agent's OWN pipeline (correct venv + image-gen workflow).
-    pipeline ? pipelineInstructions(agentId, readAgentsConfig(), dir) : null,
+    pipeline ? pipelineInstructions(agentId, readAgentsConfig(), dir, imageSource) : null,
     pipeline ? '' : null,
     '## Vidmyo MCP (alternative)',
     'The `vidmyo` MCP server also exposes: story_open → story_set_script → story_run_stage',
@@ -90,18 +117,26 @@ function writeSessionBrief(dir, manifest, agentId) {
   return { file, topic: m?.brief?.topic || path.basename(dir) };
 }
 
-function kickoffPrompt(dir, topic, briefFile, { autonomous = false, pipeline = null } = {}) {
+function kickoffPrompt(dir, topic, briefFile, { autonomous = false, pipeline = null, imageSource = null } = {}) {
   if (autonomous) {
     const via = pipeline
       ? `using YOUR OWN pipeline at ${pipeline.dir} (exact commands and your image-generation `
         + `workflow are in the brief). `
       : `using the vidmyo MCP tools. `;
+    // A cloud image source turns the images stage into a human gate: Vidmyo holds
+    // the key, so the agent writes the prompts and hands off rather than running
+    // its (Flow-only) image workflow.
+    const cloudImages = imageSource && !imageSource.manual;
+    const imagesStep = cloudImages
+      ? `per-scene image PROMPTS only — Vidmyo's image source is ${imageSource.name}, so STOP there and `
+        + `ask Luke to click "${imageSource.name} ⚡" on each scene in Vidmyo (do NOT use Google Flow) → `
+      : `per-scene doodle images via your image workflow (Google Flow · Nano Banana 2, match each prompt exactly) → `;
     return `Vidmyo — ${topic}\n\n`
       + `Create this ENTIRE faceless doodle video end to end, autonomously, ${via}`
       + `Read ${briefFile} first for the project state, brief (hook/angle/tracker row), and your pipeline steps. `
-      + `Do not stop for approval unless something truly blocks you.\n`
-      + `Flow: write the full script per your channel rules → voiceover → beats → per-scene doodle images `
-      + `via your image workflow (Google Flow · Nano Banana 2, match each prompt exactly) → assemble → `
+      + `Do not stop for approval unless something truly blocks you`
+      + (cloudImages ? ` — the images stage below is the one expected stop.\n` : `.\n`)
+      + `Flow: write the full script per your channel rules → voiceover → beats → ${imagesStep}assemble → `
       + `finalize (4K + −14 LUFS). Resolve scenes by explicit sNNN id only, verify each image on disk, and `
       + `report the final MP4 path when done.`;
   }
@@ -117,9 +152,10 @@ async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
 
   const projectDir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const manifest = readManifest(projectDir);
-  const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest, agentId);
+  const imageSource = await resolveImageSource();
+  const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest, agentId, imageSource);
   const pipeline = getAgentPipeline(agentId, readAgentsConfig());
-  const prompt = kickoffPrompt(projectDir, topic, briefFile, { autonomous, pipeline });
+  const prompt = kickoffPrompt(projectDir, topic, briefFile, { autonomous, pipeline, imageSource });
 
   const mode = readAgentsConfig().launchMode || 'desktop';
   if (mode === 'desktop') {

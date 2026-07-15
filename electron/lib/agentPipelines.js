@@ -62,8 +62,23 @@ function getAgentPipeline(agentId, config = {}) {
   return merged;
 }
 
+// The `images:` line for the brief. Each agent's own pipeline is Google-Flow-based
+// (browser + the Curio Flow Queue extension) — correct only while Vidmyo's image
+// source IS Flow. Point it at a cloud source in Settings → Story and that whole
+// workflow is wrong, so say so instead of letting the agent burn a session on it.
+// The agent can't call the API itself: the key is in Vidmyo's keychain and the
+// vidmyo MCP has no image-generation tool, so images route through Vidmyo's ⚡
+// (which is a human gate the pipeline already has).
+function imageInstruction(pipeline, imageSource) {
+  if (!imageSource || imageSource.manual) return pipeline.images;
+  return `Vidmyo's scene-image source is set to ${imageSource.name} (Settings → Story), NOT Google Flow — `
+    + `your Flow/Nano-Banana workflow does NOT apply here. You cannot call ${imageSource.name} yourself `
+    + `(Vidmyo holds the key). Write the prompts, then STOP at the images stage and ask Luke to click `
+    + `"${imageSource.name} ⚡" on each scene in Vidmyo's Story tab (or Attach…). Resume at Approve → assemble.`;
+}
+
 // A ready-to-embed instruction block for the session brief / kickoff prompt.
-function pipelineInstructions(agentId, config = {}, videoDir = '') {
+function pipelineInstructions(agentId, config = {}, videoDir = '', imageSource = null) {
   const p = getAgentPipeline(agentId, config);
   if (!p) return '';
   const py = `${p.pythonPrefix}${p.venv}`;
@@ -76,10 +91,10 @@ function pipelineInstructions(agentId, config = {}, videoDir = '') {
     `- beats: ${py} ${p.dir}/detect_beats.py ${videoDir}/voiceover.wav ${videoDir}/beats.json`,
     `- assemble: ${py} ${p.dir}/assemble.py ${videoDir} --ext jpg`,
     `- finalize (4K + −14 LUFS): ${p.dir}/finalize_video.sh <in.mp4> ${videoDir}/<seo-name>.mp4`,
-    `- images: ${p.images}`,
+    `- images: ${imageInstruction(p, imageSource)}`,
     `- script: ${p.scriptRule}`,
     p.available ? '' : `⚠ Pipeline venv/dir not found at the paths above — run ${p.dir}/setup_env.sh first.`,
   ].filter(Boolean).join('\n');
 }
 
-module.exports = { getAgentPipeline, pipelineInstructions, DEFAULTS };
+module.exports = { getAgentPipeline, pipelineInstructions, imageInstruction, DEFAULTS };
