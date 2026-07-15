@@ -27,6 +27,14 @@ const AGNES_VIDEO_SIZE = {
   '9:16': { width: 720, height: 1280 },
   '1:1': { width: 960, height: 960 },
 };
+const AGNES_FRAME_RATE = 24;
+
+// "auto" = provider default (omit the field — this is what fal-ai/veo3 was
+// live-verified against, so leaving Duration untouched can't regress it).
+// The 4–15s range matches fal's Seedance 2.0 schema (confirmed field name
+// and range from fal's own docs); veo3's own schema page didn't expose a
+// duration field, so it's unverified there — try it and see what it accepts.
+const DURATIONS = ['auto', '4', '6', '8', '10', '12', '15'];
 
 const card = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16 };
 const btn = (primary = false, disabled = false) => ({
@@ -42,6 +50,7 @@ export default function CloudVideoStudio() {
   const [model, setModel] = useState(VIDEO_MODELS[0].id);
   const [customModel, setCustomModel] = useState('');
   const [aspect, setAspect] = useState('16:9');
+  const [duration, setDuration] = useState('auto');
   const [busy, setBusy] = useState(false);
   const [videoUrl, setVideoUrl] = useState(null);  // blob URL
   const [resultPath, setResultPath] = useState(null);
@@ -68,8 +77,13 @@ export default function CloudVideoStudio() {
     if (!prompt.trim() || !endpoint) return;
     setBusy(true); setError(null);
     const params = provider === 'agnes'
-      ? { prompt: prompt.trim(), ...(AGNES_VIDEO_SIZE[aspect] || AGNES_VIDEO_SIZE['16:9']), num_frames: 121, frame_rate: 24 }
-      : { prompt: prompt.trim(), aspect_ratio: aspect };
+      ? {
+          prompt: prompt.trim(),
+          ...(AGNES_VIDEO_SIZE[aspect] || AGNES_VIDEO_SIZE['16:9']),
+          frame_rate: AGNES_FRAME_RATE,
+          num_frames: duration === 'auto' ? 121 : Math.round(Number(duration) * AGNES_FRAME_RATE),
+        }
+      : { prompt: prompt.trim(), aspect_ratio: aspect, ...(duration !== 'auto' ? { duration } : {}) };
     const res = await window.media.generate({ kind: 'video', provider, model: endpoint, params });
     setBusy(false);
     if (res.ok) { await showVideo(res.path); loadRecent(); }
@@ -116,6 +130,11 @@ export default function CloudVideoStudio() {
           <select value={aspect} onChange={(e) => setAspect(e.target.value)}
                   style={{ background: '#0d0d10', border: `1px solid ${C.line}`, borderRadius: 9, padding: '8px 10px', fontSize: 12, color: C.text }}>
             {['16:9', '9:16', '1:1'].map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <select value={duration} onChange={(e) => setDuration(e.target.value)}
+                  title="Video length in seconds (Auto = provider default)"
+                  style={{ background: '#0d0d10', border: `1px solid ${C.line}`, borderRadius: 9, padding: '8px 10px', fontSize: 12, color: C.text }}>
+            {DURATIONS.map((d) => <option key={d} value={d}>{d === 'auto' ? 'Auto length' : `${d}s`}</option>)}
           </select>
           <div style={{ flex: 1 }} />
           <button style={btn(true, busy || !prompt.trim())} disabled={busy || !prompt.trim()} onClick={generate}>
