@@ -38,6 +38,17 @@ test('studio filtering includes muapi for image and video', () => {
   assert.ok(video.includes('fal'));
 });
 
+test('agnes is registered for both image and video studios', () => {
+  const agnes = getProviderById('agnes');
+  assert.equal(agnes.category, 'aggregator');
+  assert.equal(agnes.authHeader, 'Authorization');
+  assert.equal(agnes.authPrefix, 'Bearer ');
+  const image = getProvidersForStudio('image').map(p => p.id);
+  const video = getProvidersForStudio('video').map(p => p.id);
+  assert.ok(image.includes('agnes'));
+  assert.ok(video.includes('agnes'));
+});
+
 test('integration category lists the five agents', () => {
   const agents = getProvidersByCategory('integration').map(p => p.id);
   assert.deepEqual(agents.sort(), ['claude_code', 'codex', 'gemini', 'hermes', 'opencode']);

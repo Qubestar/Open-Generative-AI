@@ -49,9 +49,16 @@ function register() {
       const { JobStore, runJob } = mod;
 
       // Build the adapter for the chosen provider (key from the keychain).
-      const key = getSecret('fal');
-      if (!key) return fail(new Error('No fal.ai key saved — add it in Settings first.'));
-      const adapter = mod.falAdapter({ model, key });
+      let adapter;
+      if (provider === 'agnes') {
+        const key = getSecret('agnes');
+        if (!key) return fail(new Error('No Agnes AI key saved — add it in Settings first.'));
+        adapter = mod.agnesAdapter({ key, model, kind });
+      } else {
+        const key = getSecret('fal');
+        if (!key) return fail(new Error('No fal.ai key saved — add it in Settings first.'));
+        adapter = mod.falAdapter({ model, key });
+      }
 
       const store = new JobStore();
       const job = store.create({ type: kind, provider, params });

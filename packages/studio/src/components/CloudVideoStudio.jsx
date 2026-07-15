@@ -1,21 +1,32 @@
 import { useState, useEffect, useCallback } from 'react';
 
-// Cloud Video studio — fal.ai video models through the core job runner
-// (window.media → electron/lib/mediaBridge.js, keychain fal key). Async
-// durable jobs; renders can take minutes and survive an app restart in
-// ~/.vidmyo/jobs.
+// Cloud Video studio — fal.ai or Agnes AI video models through the core job
+// runner (window.media → electron/lib/mediaBridge.js, keychain key per
+// provider). Async durable jobs; renders can take minutes and survive an
+// app restart in ~/.vidmyo/jobs.
 
 const C = {
   card: '#16161A', line: '#26262C', text: '#F5F1E8', dim: '#9A9AA2',
   accent: '#E8A33D', bad: '#ff6b6b',
 };
 
-// Verified fal endpoints (2026-07); ids drift, so Custom accepts anything
-// from fal.ai/explore/models.
+// fal-ai/veo3 is verified (2026-07, live-tested). The others are curated from
+// fal's current model listing but NOT live-tested here — try them and expect
+// to iterate; fal ids also drift over time, hence Custom.
 const VIDEO_MODELS = [
-  { id: 'fal-ai/veo3', label: 'Veo 3 — text-to-video with audio' },
-  { id: 'custom', label: 'Custom fal endpoint…' },
+  { id: 'fal-ai/veo3', provider: 'fal', label: 'fal · Veo 3 — text-to-video with audio' },
+  { id: 'bytedance/seedance-2.0/text-to-video', provider: 'fal', label: 'fal · Seedance 2.0 — cinematic, native audio (unverified — verify live)' },
+  { id: 'xai/grok-imagine-video/text-to-video', provider: 'fal', label: 'fal · Grok Imagine Video (unverified — verify live)' },
+  { id: 'agnes-video-v2.0', provider: 'agnes', label: 'Agnes · Video v2.0 (unverified — verify live)' },
+  { id: 'custom', provider: 'fal', label: 'Custom fal endpoint…' },
 ];
+
+// Agnes takes explicit width/height + frame count instead of an aspect ratio string.
+const AGNES_VIDEO_SIZE = {
+  '16:9': { width: 1280, height: 720 },
+  '9:16': { width: 720, height: 1280 },
+  '1:1': { width: 960, height: 960 },
+};
 
 const card = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16 };
 const btn = (primary = false, disabled = false) => ({
@@ -51,14 +62,15 @@ export default function CloudVideoStudio() {
   };
 
   const generate = async () => {
+    const sel = VIDEO_MODELS.find((m) => m.id === model) || VIDEO_MODELS[0];
+    const provider = sel.provider;
     const endpoint = model === 'custom' ? customModel.trim() : model;
     if (!prompt.trim() || !endpoint) return;
     setBusy(true); setError(null);
-    const res = await window.media.generate({
-      kind: 'video',
-      model: endpoint,
-      params: { prompt: prompt.trim(), aspect_ratio: aspect },
-    });
+    const params = provider === 'agnes'
+      ? { prompt: prompt.trim(), ...(AGNES_VIDEO_SIZE[aspect] || AGNES_VIDEO_SIZE['16:9']), num_frames: 121, frame_rate: 24 }
+      : { prompt: prompt.trim(), aspect_ratio: aspect };
+    const res = await window.media.generate({ kind: 'video', provider, model: endpoint, params });
     setBusy(false);
     if (res.ok) { await showVideo(res.path); loadRecent(); }
     else setError(res.error);
@@ -69,8 +81,8 @@ export default function CloudVideoStudio() {
       <div style={{ maxWidth: 560, margin: '80px auto', textAlign: 'center', color: C.dim }}>
         <h2 style={{ color: C.text, fontSize: 22, fontWeight: 900, marginBottom: 10 }}>Video</h2>
         <p style={{ fontSize: 13, lineHeight: 1.6 }}>
-          Cloud video generation runs inside the Vidmyo desktop window (your fal.ai key is kept in
-          the macOS keychain). Launch with “Start Vidmyo + Video Delta”.
+          Cloud video generation runs inside the Vidmyo desktop window (your provider keys are kept
+          in the macOS keychain). Launch with “Start Vidmyo + Video Delta”.
         </p>
       </div>
     );
@@ -81,7 +93,7 @@ export default function CloudVideoStudio() {
       <div>
         <h2 style={{ color: C.text, fontSize: 20, fontWeight: 900 }}>Video</h2>
         <div style={{ color: C.dim, fontSize: 11, marginTop: 2 }}>
-          fal.ai · bring-your-own-key · renders take minutes and are billed per clip by fal
+          fal.ai / Agnes AI · bring-your-own-key · renders take minutes and are billed per clip by the provider
         </div>
       </div>
 

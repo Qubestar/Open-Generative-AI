@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 
-// Cloud Image studio — fal.ai through the core job runner in the Electron
-// main process (window.media → electron/lib/mediaBridge.js). Your fal key
-// lives in the macOS keychain (Settings). Every generation is a durable job
-// in ~/.vidmyo/jobs with its artifact in ~/.vidmyo/artifacts.
+// Cloud Image studio — fal.ai or Agnes AI through the core job runner in the
+// Electron main process (window.media → electron/lib/mediaBridge.js). Keys
+// live in the macOS keychain (Settings), one per provider. Every generation
+// is a durable job in ~/.vidmyo/jobs with its artifact in ~/.vidmyo/artifacts.
 
 const C = {
   card: '#16161A', line: '#26262C', text: '#F5F1E8', dim: '#9A9AA2',
@@ -16,6 +16,8 @@ const C = {
 const IMAGE_MODELS = [
   { id: 'fal-ai/flux/schnell', provider: 'fal', label: 'fal · FLUX.1 schnell — fast & cheap' },
   { id: 'fal-ai/flux/dev', provider: 'fal', label: 'fal · FLUX.1 dev — higher quality' },
+  { id: 'agnes-image-2.0-flash', provider: 'agnes', label: 'Agnes · Image 2.0 Flash (unverified — verify live)' },
+  { id: 'agnes-image-2.1-flash', provider: 'agnes', label: 'Agnes · Image 2.1 Flash (unverified — verify live)' },
   { id: 'custom', provider: 'fal', label: 'Custom fal endpoint…' },
 ];
 
@@ -23,6 +25,12 @@ const ASPECTS = [
   ['landscape_16_9', '16:9'], ['portrait_16_9', '9:16'],
   ['square_hd', '1:1'], ['landscape_4_3', '4:3'], ['portrait_4_3', '3:4'],
 ];
+
+// Agnes takes a literal "WxH" pixel size instead of fal's named presets.
+const AGNES_SIZE = {
+  landscape_16_9: '1024x576', portrait_16_9: '576x1024', square_hd: '1024x1024',
+  landscape_4_3: '1024x768', portrait_4_3: '768x1024',
+};
 
 const card = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16 };
 const btn = (primary = false, disabled = false) => ({
@@ -54,7 +62,9 @@ export default function CloudImageStudio() {
     const endpoint = model === 'custom' ? customModel.trim() : model;
     if (!prompt.trim() || !endpoint) return;
     setBusy(true); setError(null); setResult(null);
-    const params = { prompt: prompt.trim(), image_size: aspect };
+    const params = provider === 'agnes'
+      ? { prompt: prompt.trim(), size: AGNES_SIZE[aspect] || '1024x1024', extra_body: { response_format: 'url' } }
+      : { prompt: prompt.trim(), image_size: aspect };
     const res = await window.media.generate({ kind: 'image', provider, model: endpoint, params });
     setBusy(false);
     if (res.ok) { setResult(res); loadRecent(); }
@@ -66,8 +76,8 @@ export default function CloudImageStudio() {
       <div style={{ maxWidth: 560, margin: '80px auto', textAlign: 'center', color: C.dim }}>
         <h2 style={{ color: C.text, fontSize: 22, fontWeight: 900, marginBottom: 10 }}>Image</h2>
         <p style={{ fontSize: 13, lineHeight: 1.6 }}>
-          Cloud image generation runs inside the Vidmyo desktop window (your fal.ai key is kept in
-          the macOS keychain). Launch with “Start Vidmyo + Video Delta”.
+          Cloud image generation runs inside the Vidmyo desktop window (your provider keys are kept
+          in the macOS keychain). Launch with “Start Vidmyo + Video Delta”.
         </p>
       </div>
     );
@@ -77,7 +87,7 @@ export default function CloudImageStudio() {
     <div style={{ maxWidth: 860, margin: '0 auto', padding: '24px 20px 60px', display: 'flex', flexDirection: 'column', gap: 14, overflowY: 'auto', height: '100%' }}>
       <div>
         <h2 style={{ color: C.text, fontSize: 20, fontWeight: 900 }}>Image</h2>
-        <div style={{ color: C.dim, fontSize: 11, marginTop: 2 }}>fal.ai · bring-your-own-key · saved to ~/.vidmyo/artifacts</div>
+        <div style={{ color: C.dim, fontSize: 11, marginTop: 2 }}>fal.ai / Agnes AI · bring-your-own-key · saved to ~/.vidmyo/artifacts</div>
       </div>
 
       <div style={card}>
