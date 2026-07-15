@@ -185,31 +185,77 @@ function register() {
     } catch (err) { return fail(err); }
   });
 
-  // Generate one scene image through a PAID cloud provider (fal, user's key).
-  // The free default path remains Google Flow via agent/manual attach — this
-  // is the in-product alternative for users who prefer paying per image.
+  // Which source the Story tab's scene-image ⚡ uses. Default (Google Flow) is
+  // free but manual — the app can't generate, so ⚡ is hidden and you Attach.
+  ipcMain.handle('story:get-image-config', async () => {
+    try {
+      const { getImageSource, resolveImageModel } = await core();
+      const cfg = readConfig();
+      const source = getImageSource(cfg.imageSource);
+      return {
+        ok: true,
+        imageSource: source.id,
+        imageModel: resolveImageModel(source.id, cfg.imageModel),
+      };
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('story:set-image-config', async (_evt, { imageSource, imageModel = null } = {}) => {
+    try {
+      const { IMAGE_SOURCES, resolveImageModel } = await core();
+      // Strict on write (unlike the tolerant read): never persist a source id
+      // that no longer exists, or the Story tab silently falls back forever.
+      const source = IMAGE_SOURCES.find((s) => s.id === imageSource);
+      if (!source) return fail(new Error(`unknown image source "${imageSource}"`));
+      const model = resolveImageModel(source.id, imageModel);
+      const cfg = readConfig();
+      cfg.imageSource = source.id;
+      cfg.imageModel = model;
+      writeConfig(cfg);
+      return { ok: true, imageSource: source.id, imageModel: model };
+    } catch (err) { return fail(err); }
+  });
+
+  // Generate one scene image through the configured PAID cloud source (the
+  // user's own key). The free default path remains Google Flow via
+  // agent/manual attach — this is the in-product alternative for users who
+  // prefer paying per image.
   ipcMain.handle('story:generate-scene', async (_evt, dir, sceneId, { model = null } = {}) => {
     try {
-      const { JobStore, runJob, falAdapter } = await core();
+      const { JobStore, runJob, falAdapter, agnesAdapter, getImageSource, resolveImageModel } = await core();
       const project = await openProject(dir);
       const scene = project.getScene(sceneId);
       if (!scene.prompt) return fail(new Error(`${sceneId} has no image prompt yet`));
-      const key = getSecret('fal');
-      if (!key) return fail(new Error('No fal.ai key saved — add it in Settings → Providers, or attach an image manually (Google Flow is the free path).'));
 
       const cfg = readConfig();
-      const falModel = model || cfg.imageModel || 'fal-ai/flux/schnell';
+      const source = getImageSource(cfg.imageSource);
+      if (source.manual) {
+        return fail(new Error(`Story image source is "${source.name}", which has no API — generate there and use Attach…, or pick a cloud source in Settings → Story.`));
+      }
+      const key = getSecret(source.provider);
+      if (!key) return fail(new Error(`No ${source.name} key saved — add it in Settings → Providers, or attach an image manually (Google Flow is the free path).`));
+
+      const imageModel = resolveImageModel(source.id, model || cfg.imageModel);
+      // The doodle style locks 16:9. fal takes a named preset; Agnes wants
+      // literal pixels and only hands back a url when asked.
+      const params = source.id === 'agnes'
+        ? { prompt: scene.prompt, size: '1024x576', extra_body: { response_format: 'url' } }
+        : { prompt: scene.prompt, image_size: 'landscape_16_9' };
+      const adapter = source.id === 'agnes'
+        ? agnesAdapter({ key, model: imageModel, kind: 'image' })
+        : falAdapter({ model: imageModel, key });
+
       const store = new JobStore();
       const job = store.create({
         type: 'image',
-        provider: 'fal',
+        provider: source.id,
         project: project.manifest.id,
-        params: { prompt: scene.prompt, image_size: 'landscape_16_9' },
+        params,
       });
-      sendProgress({ stage: `image:${sceneId}`, phase: 'start', message: falModel });
-      const done = await runJob(store, job.id, falAdapter({ model: falModel, key }), {
+      sendProgress({ stage: `image:${sceneId}`, phase: 'start', message: `${source.name} · ${imageModel}` });
+      const done = await runJob(store, job.id, adapter, {
         outDir: path.join(dir, 'images'),
-        pollMs: 1500,
+        pollMs: adapter.pollMs || 1500,
       });
       if (done.state !== 'done') {
         sendProgress({ stage: `image:${sceneId}`, phase: 'error', message: done.error });

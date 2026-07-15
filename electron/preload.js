@@ -68,6 +68,8 @@ contextBridge.exposeInMainWorld('story', {
     approveScene: (dir, sceneId) => ipcRenderer.invoke('story:approve-scene', dir, sceneId),
     attachImage: (dir, sceneId) => ipcRenderer.invoke('story:attach-image', dir, sceneId),
     generateScene: (dir, sceneId, opts) => ipcRenderer.invoke('story:generate-scene', dir, sceneId, opts),
+    getImageConfig: () => ipcRenderer.invoke('story:get-image-config'),
+    setImageConfig: (cfg) => ipcRenderer.invoke('story:set-image-config', cfg),
     readFile: (dir, filePath) => ipcRenderer.invoke('story:read-file', dir, filePath),
     readiness: () => ipcRenderer.invoke('story:readiness'),
     setVenv: (venvPython) => ipcRenderer.invoke('story:set-venv', venvPython),

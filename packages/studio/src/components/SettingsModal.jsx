@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { PROVIDERS, PROVIDER_CATEGORIES } from '../../../core/src/providers.js';
+import { IMAGE_SOURCES } from '../../../core/src/story.js';
 
 // Settings — provider API keys over the canonical @vidmyo/core catalog.
 // Desktop app: keys are encrypted into the macOS keychain via
@@ -41,6 +42,65 @@ function AgentLaunchSection() {
           <option value="desktop">Desktop app</option>
           <option value="terminal">Terminal</option>
         </select>
+      </div>
+    </div>
+  );
+}
+
+// Where the Story tab's scene-image ⚡ generates from. Default (Google Flow) is
+// free but manual, so it has no model choice — you Attach instead.
+function StoryImageSection({ savedKeys }) {
+  const hasStory = typeof window !== 'undefined' && !!window.story?.isElectron && !!window.story.getImageConfig;
+  const [cfg, setCfg] = useState(null);   // {imageSource, imageModel}
+  useEffect(() => {
+    if (hasStory) window.story.getImageConfig().then((r) => r?.ok && setCfg(r));
+  }, [hasStory]);
+  if (!hasStory || !cfg) return null;
+
+  const source = IMAGE_SOURCES.find((s) => s.id === cfg.imageSource) || IMAGE_SOURCES[0];
+  const save = async (next) => {
+    const r = await window.story.setImageConfig(next);
+    if (r?.ok) setCfg(r);
+  };
+  // A paid source with no key can't generate — say so here rather than at click time.
+  const missingKey = !source.manual && !savedKeys[source.provider];
+
+  return (
+    <div>
+      <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Story</div>
+      <div className="bg-white/[0.03] border border-white/[0.05] rounded-lg px-3.5 py-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold text-white">Scene image source</div>
+            <div className="text-[11px] text-white/40">{source.note}</div>
+          </div>
+          <select
+            value={source.id}
+            onChange={(e) => save({ imageSource: e.target.value })}
+            className="bg-black/40 border border-white/10 rounded-md px-2.5 py-1.5 text-[12px] text-white outline-none shrink-0"
+          >
+            {IMAGE_SOURCES.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+
+        {source.models.length > 0 && (
+          <div className="flex items-center justify-between gap-3 mt-2.5 pt-2.5 border-t border-white/[0.05]">
+            <div className="text-[12px] text-white/60">Model</div>
+            <select
+              value={cfg.imageModel || ''}
+              onChange={(e) => save({ imageSource: source.id, imageModel: e.target.value })}
+              className="bg-black/40 border border-white/10 rounded-md px-2.5 py-1.5 text-[12px] text-white outline-none shrink-0"
+            >
+              {source.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+          </div>
+        )}
+
+        {missingKey && (
+          <div className="text-[11px] text-amber-400/80 mt-2">
+            No {source.name} key saved yet — add one below, or scene images will fail to generate.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -126,6 +186,7 @@ export default function SettingsModal({ onClose, onCloudKeyChange }) {
 
         <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-5">
           <AgentLaunchSection />
+          <StoryImageSection savedKeys={keys} />
           {grouped.map((cat) => (
             <div key={cat.id}>
               <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">{cat.label}</div>

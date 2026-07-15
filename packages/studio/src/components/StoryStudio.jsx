@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getImageSource } from '../../../core/src/story.js';
 
 // Story Studio — the flagship faceless-doodle workflow, rendered in the
 // Next.js dev shell that Luke's launcher opens inside Electron. All pipeline
@@ -53,6 +54,9 @@ export default function StoryStudio() {
   const [lightbox, setLightbox] = useState(null); // enlarged image URL
   const [renderUrl, setRenderUrl] = useState(null); // playing render blob URL
   const [renderLabel, setRenderLabel] = useState('');
+  const [imageCfg, setImageCfg] = useState(null);  // {imageSource, imageModel} — Settings → Story
+  // null until loaded, so ⚡ doesn't flash the wrong provider's name on mount.
+  const imageSource = imageCfg ? getImageSource(imageCfg.imageSource) : null;
 
   const apply = useCallback((res) => {
     if (res?.ok) {
@@ -73,6 +77,17 @@ export default function StoryStudio() {
     if (last) window.story.get(last).then((res) => { if (res.ok) apply(res); });
     return unsub;
   }, [hasBridge, apply]);
+
+  // Settings → Story owns the image source; re-read on focus so a change made in
+  // the modal shows up here without a reload. Only the ⚡ label depends on this —
+  // the generate itself always reads the config fresh in the main process.
+  useEffect(() => {
+    if (!hasBridge || !window.story.getImageConfig) return;
+    const load = () => window.story.getImageConfig().then((r) => r?.ok && setImageCfg(r));
+    load();
+    window.addEventListener('focus', load);
+    return () => window.removeEventListener('focus', load);
+  }, [hasBridge]);
 
   // Scene thumbnails — the approval gate needs eyes on the actual image.
   useEffect(() => {
@@ -479,7 +494,9 @@ export default function StoryStudio() {
                 <span style={{ color: done ? C.text : C.dim, fontSize: 13, fontWeight: 700 }}>{label}</span>
                 {isNext && <span style={{ color: C.accent, fontSize: 9, fontWeight: 900, letterSpacing: 1.5 }}>NEXT</span>}
                 {isNext && stage === 'images' && (
-                  <span style={{ color: C.dim, fontSize: 11 }}>↓ use the Scenes list below: fal ⚡ or Attach each image, then Approve</span>
+                  <span style={{ color: C.dim, fontSize: 11 }}>
+                    ↓ use the Scenes list below: {imageSource && !imageSource.manual ? `${imageSource.name} ⚡ or ` : ''}Attach each image, then Approve
+                  </span>
                 )}
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -549,15 +566,18 @@ export default function StoryStudio() {
                   <button style={smallBtn} title="Copy the image prompt (paste into Google Flow — the free path)"
                           onClick={() => navigator.clipboard.writeText(s.prompt || '')}>Prompt</button>
                   <button style={smallBtn} onClick={async () => apply(await window.story.attachImage(dir, s.id))}>Attach…</button>
-                  {!s.image.artifact && (
-                    <button style={smallBtn} title="Generate with your fal.ai key — paid per image"
+                  {/* Google Flow (the default) has no API — there is nothing to
+                      click, so ⚡ only appears for a source that can generate. */}
+                  {!s.image.artifact && imageSource && !imageSource.manual && (
+                    <button style={smallBtn}
+                            title={`Generate with your ${imageSource.name} key — paid per image (change in Settings → Story)`}
                             disabled={!!busy}
                             onClick={async () => {
                               setBusy(`image:${s.id}`);
                               apply(await window.story.generateScene(dir, s.id));
                               setBusy(null);
                             }}>
-                      {busy === `image:${s.id}` ? '…' : 'fal ⚡'}
+                      {busy === `image:${s.id}` ? '…' : `${imageSource.name} ⚡`}
                     </button>
                   )}
                   {s.image.artifact && !s.image.approved && (

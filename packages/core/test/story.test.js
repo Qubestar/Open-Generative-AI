@@ -4,9 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Project } from '../src/project.js';
+import { PROVIDERS } from '../src/providers.js';
 import {
   DOODLE_STYLE, getStyle, buildImagePrompt, validateScript,
   importBeats, scaffoldPrompts, stageStatus,
+  IMAGE_SOURCES, getImageSource, resolveImageModel,
 } from '../src/story.js';
 
 const tmpProject = () =>
@@ -105,4 +107,39 @@ test('stageStatus walks the pipeline in order', () => {
   p.manifest.renders[0].finalized = true;
   p.save();
   assert.equal(stageStatus(p).nextStage, null);
+});
+
+// ── Scene image sources (Settings → Story) ──────────────────────────────────
+
+test('the default image source is Google Flow, and it is manual (no API to call)', () => {
+  const source = getImageSource(DOODLE_STYLE.imageSourceDefault);
+  assert.equal(source.id, 'flow');
+  assert.equal(source.manual, true);
+  assert.equal(source.models.length, 0, 'a manual source has no model to pick');
+});
+
+test('unknown or missing source ids fall back to the default instead of throwing', () => {
+  // A stale/hand-edited story-config.json must not break the Story tab.
+  assert.equal(getImageSource(undefined).id, 'flow');
+  assert.equal(getImageSource('deleted-provider').id, 'flow');
+});
+
+test('every generating source names a provider that actually exists in the catalog', () => {
+  // The provider id is the keychain id AND the Settings row id — a typo here
+  // means getSecret() silently finds nothing and the key can never be entered.
+  const known = new Set(PROVIDERS.map((p) => p.id));
+  for (const source of IMAGE_SOURCES.filter((s) => !s.manual)) {
+    assert.ok(known.has(source.provider), `${source.id} names unknown provider "${source.provider}"`);
+    assert.ok(source.models.length > 0, `${source.id} must offer a model`);
+  }
+});
+
+test('switching source drops a model that belongs to the other provider', () => {
+  // The bug this prevents: keeping "fal-ai/flux/dev" after switching to Agnes.
+  assert.equal(resolveImageModel('agnes', 'fal-ai/flux/dev'), 'agnes-image-2.0-flash');
+  assert.equal(resolveImageModel('fal', 'agnes-image-2.0-flash'), 'fal-ai/flux/schnell');
+  // A model the source really has is kept.
+  assert.equal(resolveImageModel('fal', 'fal-ai/flux/dev'), 'fal-ai/flux/dev');
+  // Manual sources have no model at all.
+  assert.equal(resolveImageModel('flow', 'fal-ai/flux/dev'), null);
 });

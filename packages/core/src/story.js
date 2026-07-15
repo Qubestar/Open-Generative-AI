@@ -40,6 +40,61 @@ export function getStyle(id) {
   return style;
 }
 
+// Where scene images come from. `flow` is the default and the quality bar:
+// free, but manual — you generate in Google Flow and Attach each scene, so
+// there is nothing for the app to call. The rest generate in-app from the
+// user's key for that provider (Settings → Story picks one).
+// Model ids mirror the Image tab's verified list; keep them in sync.
+export const IMAGE_SOURCES = [
+  {
+    id: 'flow',
+    name: 'Google Flow',
+    manual: true,          // no API — the app can't generate, only accept an Attach
+    provider: null,
+    note: 'Free · generate in Flow (incl. Nano Banana 2), then Attach each scene.',
+    models: [],
+  },
+  {
+    id: 'fal',
+    name: 'fal.ai',
+    manual: false,
+    provider: 'fal',       // keychain id + providers.js id
+    note: 'Paid per image · uses your fal.ai key.',
+    models: [
+      { id: 'fal-ai/flux/schnell', label: 'FLUX.1 schnell — fast & cheap' },
+      { id: 'fal-ai/flux/dev', label: 'FLUX.1 dev — higher quality' },
+    ],
+  },
+  {
+    id: 'agnes',
+    name: 'Agnes AI',
+    manual: false,
+    provider: 'agnes',
+    note: 'Paid per image · uses your Agnes AI key.',
+    models: [
+      { id: 'agnes-image-2.0-flash', label: 'Image 2.0 Flash' },
+      { id: 'agnes-image-2.1-flash', label: 'Image 2.1 Flash' },
+    ],
+  },
+];
+
+// Unknown ids fall back to the default source, mirroring getProviderById's
+// tolerance — a stale config must not break the Story tab.
+export function getImageSource(id) {
+  return IMAGE_SOURCES.find((s) => s.id === id)
+    || IMAGE_SOURCES.find((s) => s.id === DOODLE_STYLE.imageSourceDefault)
+    || IMAGE_SOURCES[0];
+}
+
+// The model to use for a source: the caller's choice if that source actually
+// offers it, else that source's first model (switching source must not carry a
+// stale model id across — "fal-ai/flux/dev" is meaningless to Agnes).
+export function resolveImageModel(sourceId, modelId) {
+  const source = getImageSource(sourceId);
+  const known = source.models.some((m) => m.id === modelId);
+  return known ? modelId : (source.models[0]?.id || null);
+}
+
 // Compose the full image prompt for a scene: anchor + scene + lock.
 export function buildImagePrompt(sceneText, style = DOODLE_STYLE) {
   const scene = String(sceneText || '').trim();
