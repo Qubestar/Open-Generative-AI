@@ -34,6 +34,14 @@ export function agnesAdapter({ key, model, kind = 'image', base = BASE, pollBase
   const isVideo = kind === 'video';
 
   return {
+    // Agnes rate-limits VIDEO endpoints (status queries included) to 2 allowed / 1
+    // effective RPM on the free tier, 6/5 on the Token Plan (their tokenplan.md).
+    // The runner's generic 4s video default is ~15 RPM — far over even the paid tier,
+    // which is what produced "429: video status query rate limit exceeded" live.
+    // 30s sits at the free tier's *allowed* ceiling; the poll() above tolerates the
+    // 429s the stricter *effective* limit may still produce.
+    pollMs: isVideo ? 30000 : undefined,
+
     async submit(params, { fetchImpl }) {
       if (isVideo) {
         const res = await fetchImpl(`${base}/videos`, {
@@ -66,6 +74,14 @@ export function agnesAdapter({ key, model, kind = 'image', base = BASE, pollBase
         headers: { Authorization: `Bearer ${key}` },
       });
       const text = await res.text();
+      // A throttled or hiccuping STATUS QUERY says nothing about the render — the job
+      // is still running on their side. Killing the job here just orphans a video the
+      // user already paid for, so keep waiting instead. (429 = "video status query
+      // rate limit exceeded"; 5xx = their 500/503 "server error"/"service overloaded".)
+      if (res.status === 429 || res.status >= 500) {
+        log(`agnes: status query throttled (${res.status}) — still waiting`);
+        return { status: 'pending' };
+      }
       if (!res.ok) return { status: 'error', error: `Agnes video status ${res.status}: ${text.slice(0, 300)}` };
       let data; try { data = JSON.parse(text); } catch { data = {}; }
       const s = String(data.status || '').toLowerCase();

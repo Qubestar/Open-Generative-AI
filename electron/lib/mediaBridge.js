@@ -64,10 +64,15 @@ function register() {
       const job = store.create({ type: kind, provider, params });
       sendProgress({ jobId: job.id, phase: 'start', model });
 
+      // An adapter may declare its own poll interval when the provider's rate limits
+      // demand one (Agnes throttles video status queries hard); otherwise use the
+      // generic defaults. maxPolls scales with the interval so a slower poll doesn't
+      // shorten the wall-clock timeout.
+      const pollMs = adapter.pollMs || (kind === 'video' ? 4000 : 1500);
       const done = await runJob(store, job.id, adapter, {
         outDir: ARTIFACTS_DIR,
-        pollMs: kind === 'video' ? 4000 : 1500,
-        maxPolls: kind === 'video' ? 400 : 200,
+        pollMs,
+        maxPolls: Math.ceil((kind === 'video' ? 1600000 : 300000) / pollMs),
       });
       if (done.state !== 'done') {
         sendProgress({ jobId: job.id, phase: 'error', message: done.error });

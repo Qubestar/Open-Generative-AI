@@ -76,6 +76,38 @@ test('runJob drives an Agnes video job through queued -> completed polling', asy
   assert.equal(done.checkpoints.handle.videoId, 'video_1');
 });
 
+test('a 429 on the video status query keeps waiting instead of killing the render', async () => {
+  const store = new JobStore(tmp('vidmyo-run-'));
+  const outDir = tmp('vidmyo-out-');
+  const job = store.create({ type: 'video', provider: 'agnes', params: { prompt: 'a fox' } });
+
+  const mediaUrl = 'https://cdn.agnes.test/out.mp4';
+  let polls = 0;
+  const fetchImpl = async (url, opts = {}) => {
+    if (opts.method === 'POST') return json({ video_id: 'video_1', status: 'queued' });
+    if (String(url).includes('/agnesapi?video_id=video_1')) {
+      polls += 1;
+      // Agnes throttles video status queries; the render is still running.
+      if (polls === 1) return json({ error: { code: 429, message: 'video status query rate limit exceeded' } }, false, 429);
+      if (polls === 2) return json({ error: 'service overloaded' }, false, 503);
+      return json({ status: 'completed', url: mediaUrl });
+    }
+    if (url === mediaUrl) return json({});
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const done = await runJob(store, job.id, videoAdapter(), { outDir, fetchImpl, sleep: noSleep });
+
+  assert.equal(done.state, 'done', `expected the throttled job to survive, got: ${done.error}`);
+  assert.equal(done.artifacts.length, 1);
+  assert.equal(polls, 3);  // 429 -> 503 -> completed, all polled through
+});
+
+test('the video adapter declares a rate-limit-safe poll interval; the sync image path needs none', () => {
+  assert.equal(videoAdapter().pollMs, 30000);
+  assert.equal(imageAdapter().pollMs, undefined);
+});
+
 test('a failed Agnes video job lands in error state', async () => {
   const store = new JobStore(tmp('vidmyo-run-'));
   const job = store.create({ type: 'video', provider: 'agnes', params: { prompt: 'a fox' } });
