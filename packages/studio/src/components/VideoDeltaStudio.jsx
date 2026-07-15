@@ -29,6 +29,7 @@ export default function VideoDeltaStudio() {
   const [title, setTitle] = useState('');
   const [narrate, setNarrate] = useState('');
   const [aspect, setAspect] = useState('16:9');   // 16:9 | 9:16 | 1:1
+  const [heroSource, setHeroSource] = useState('local');   // local | openai | fal | agnes
   const [job, setJob] = useState(null);               // {id,status,out,error}
   const [elapsed, setElapsed] = useState(0);
   const [resultUrl, setResultUrl] = useState(null);
@@ -46,20 +47,38 @@ export default function VideoDeltaStudio() {
     t0Ref.current = Date.now();
     setElapsed(0);
     try {
+      // hero_source=null keeps the engine's own default (VIDEODELTA_HERO env var /
+      // local chain) exactly as before. A specific source needs its key out of the
+      // keychain — never hardcoded, and only fetched when actually needed.
+      let heroFields = {};
+      if (heroSource !== 'local') {
+        if (!window.secureKeys?.isElectron) {
+          throw new Error(`${heroSource} hero source needs the Vidmyo desktop window (keychain access).`);
+        }
+        const { ok, keys } = await window.secureKeys.getAll();
+        const key = ok && keys[heroSource];
+        if (!key) throw new Error(`No ${heroSource} key saved — add it in Settings first.`);
+        heroFields = { hero_source: heroSource, hero_api_key: key };
+      }
+
       let res;
       if (mode === 'film') {
         res = await fetch(`${API}/film`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             brief: prompt, shots: Number(shots), duration: Number(duration) * Number(shots),
-            motion, title: title || null, narrate: narrate || null, aspect,
+            motion, title: title || null, narrate: narrate || null, aspect, ...heroFields,
           }),
         });
       } else {
         res = await fetch(`${API}/create`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, motion, duration: Number(duration), aspect }),
+          body: JSON.stringify({ prompt, motion, duration: Number(duration), aspect, ...heroFields }),
         });
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `${res.status} ${res.statusText}`);
       }
       const { job_id } = await res.json();
       setJob({ id: job_id, status: 'queued' });
@@ -80,7 +99,7 @@ export default function VideoDeltaStudio() {
     } catch (e) {
       setJob({ status: 'error', error: String(e.message || e) });
     }
-  }, [mode, motion, prompt, duration, shots, title, narrate, aspect]);
+  }, [mode, motion, prompt, duration, shots, title, narrate, aspect, heroSource]);
 
   const busy = job && ['submitting', 'queued', 'running'].includes(job.status);
   const lbl = { display: 'block', color: C.dim, fontSize: 12, margin: '14px 0 5px' };
@@ -145,6 +164,27 @@ export default function VideoDeltaStudio() {
               </div>
             ))}
           </div>
+
+          <label style={lbl}>Hero image source</label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {[
+              ['local', 'Local (free)'],
+              ['openai', 'OpenAI gpt-image'],
+              ['fal', 'fal.ai'],
+              ['agnes', 'Agnes AI'],
+            ].map(([v, label]) => (
+              <div key={v} style={{ ...seg(heroSource === v), flex: '0 1 auto', padding: '8px 12px' }}
+                   onClick={() => setHeroSource(v)}>
+                {label}
+              </div>
+            ))}
+          </div>
+          {heroSource !== 'local' && (
+            <p style={{ color: C.dim, fontSize: 11, marginTop: 4 }}>
+              The one expensive hero frame is generated via your {heroSource} key (Settings) —
+              everything after that stays local and free.
+            </p>
+          )}
 
           <div style={{ display: 'flex', gap: 12 }}>
             <div style={{ flex: 1 }}>
