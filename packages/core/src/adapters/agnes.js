@@ -35,12 +35,15 @@ export function agnesAdapter({ key, model, kind = 'image', base = BASE, pollBase
 
   return {
     // Agnes rate-limits VIDEO endpoints (status queries included) to 2 allowed / 1
-    // effective RPM on the free tier, 6/5 on the Token Plan (their tokenplan.md).
-    // The runner's generic 4s video default is ~15 RPM — far over even the paid tier,
-    // which is what produced "429: video status query rate limit exceeded" live.
-    // 30s sits at the free tier's *allowed* ceiling; the poll() above tolerates the
-    // 429s the stricter *effective* limit may still produce.
-    pollMs: isVideo ? 30000 : undefined,
+    // EFFECTIVE RPM on the free tier — 6/5 on the Token Plan (their tokenplan.md).
+    // 60s == the free tier's effective budget exactly, so a poll shouldn't throttle
+    // at all; poll() still tolerates a 429 rather than trusting that. The cost is up
+    // to 60s of lag between the render finishing and us noticing.
+    // TOKEN PLAN: 5 effective RPM allows 12000 here — worth changing when Luke
+    // upgrades, but do NOT drop below 60s while the account is on the free tier.
+    // (The generic 4s video default is ~15 RPM, ~15x over free — that produced the
+    // live "429: video status query rate limit exceeded".)
+    pollMs: isVideo ? 60000 : undefined,
 
     async submit(params, { fetchImpl }) {
       if (isVideo) {

@@ -103,8 +103,8 @@ test('a 429 on the video status query keeps waiting instead of killing the rende
   assert.equal(polls, 3);  // 429 -> 503 -> completed, all polled through
 });
 
-test('the video adapter declares a rate-limit-safe poll interval; the sync image path needs none', () => {
-  assert.equal(videoAdapter().pollMs, 30000);
+test('the video adapter polls within the free tier\'s 1 effective RPM; the sync image path needs no interval', () => {
+  assert.ok(videoAdapter().pollMs >= 60000, 'faster than 1/min would throttle on the free tier');
   assert.equal(imageAdapter().pollMs, undefined);
 });
 
