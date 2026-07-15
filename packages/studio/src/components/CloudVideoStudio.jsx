@@ -13,11 +13,23 @@ const C = {
 // fal-ai/veo3 is verified (2026-07, live-tested). The others are curated from
 // fal's current model listing but NOT live-tested here — try them and expect
 // to iterate; fal ids also drift over time, hence Custom.
-const VIDEO_MODELS = [
+const VIDEO_MODELS_T2V = [
   { id: 'fal-ai/veo3', provider: 'fal', label: 'fal · Veo 3 — text-to-video with audio' },
   { id: 'bytedance/seedance-2.0/text-to-video', provider: 'fal', label: 'fal · Seedance 2.0 — cinematic, native audio (unverified — verify live)' },
   { id: 'xai/grok-imagine-video/text-to-video', provider: 'fal', label: 'fal · Grok Imagine Video (unverified — verify live)' },
   { id: 'agnes-video-v2.0', provider: 'agnes', label: 'Agnes · Video v2.0 (unverified — verify live)' },
+  { id: 'custom', provider: 'fal', label: 'Custom fal endpoint…' },
+];
+
+// fal uses separate model ids for image-to-video (a different marketplace
+// listing than the text-to-video ones above) — none of these are live-tested.
+// Agnes's video model is unchanged: it takes the same "animate" request with
+// an optional `image` field added, no separate model id needed.
+const VIDEO_MODELS_I2V = [
+  { id: 'fal-ai/kling-video/v3/pro/image-to-video', provider: 'fal', label: 'fal · Kling 3.0 Pro — cinematic + native audio (unverified — verify live)' },
+  { id: 'bytedance/seedance-2.0/image-to-video', provider: 'fal', label: 'fal · Seedance 2.0 — image-to-video (unverified — verify live)' },
+  { id: 'fal-ai/pixverse/v6/image-to-video', provider: 'fal', label: 'fal · PixVerse V6 — image-to-video (unverified — verify live)' },
+  { id: 'agnes-video-v2.0', provider: 'agnes', label: 'Agnes · Video v2.0 — animate image (unverified — verify live)' },
   { id: 'custom', provider: 'fal', label: 'Custom fal endpoint…' },
 ];
 
@@ -46,8 +58,11 @@ const btn = (primary = false, disabled = false) => ({
 
 export default function CloudVideoStudio() {
   const hasBridge = typeof window !== 'undefined' && !!window.media?.isElectron;
+  const [animate, setAnimate] = useState(false);   // text-to-video vs animate-an-image
+  const [sourceImage, setSourceImage] = useState(null);  // {path, dataUrl}
+  const MODELS = animate ? VIDEO_MODELS_I2V : VIDEO_MODELS_T2V;
   const [prompt, setPrompt] = useState('');
-  const [model, setModel] = useState(VIDEO_MODELS[0].id);
+  const [model, setModel] = useState(MODELS[0].id);
   const [customModel, setCustomModel] = useState('');
   const [aspect, setAspect] = useState('16:9');
   const [duration, setDuration] = useState('auto');
@@ -62,6 +77,19 @@ export default function CloudVideoStudio() {
   }, [hasBridge]);
   useEffect(loadRecent, [loadRecent]);
 
+  const toggleAnimate = (next) => {
+    setAnimate(next);
+    const list = next ? VIDEO_MODELS_I2V : VIDEO_MODELS_T2V;
+    setModel(list[0].id);
+    if (!next) setSourceImage(null);
+  };
+
+  const chooseImage = async () => {
+    const res = await window.media.pickImage();
+    if (res.ok) setSourceImage({ path: res.path, dataUrl: res.dataUrl });
+    else if (!res.canceled) setError(res.error);
+  };
+
   const showVideo = async (p) => {
     const res = await window.media.readFile(p);
     if (!res.ok) { setError(res.error); return; }
@@ -71,10 +99,11 @@ export default function CloudVideoStudio() {
   };
 
   const generate = async () => {
-    const sel = VIDEO_MODELS.find((m) => m.id === model) || VIDEO_MODELS[0];
+    const sel = MODELS.find((m) => m.id === model) || MODELS[0];
     const provider = sel.provider;
     const endpoint = model === 'custom' ? customModel.trim() : model;
     if (!prompt.trim() || !endpoint) return;
+    if (animate && !sourceImage) { setError('Choose an image to animate first.'); return; }
     setBusy(true); setError(null);
     const params = provider === 'agnes'
       ? {
@@ -82,8 +111,14 @@ export default function CloudVideoStudio() {
           ...(AGNES_VIDEO_SIZE[aspect] || AGNES_VIDEO_SIZE['16:9']),
           frame_rate: AGNES_FRAME_RATE,
           num_frames: duration === 'auto' ? 121 : Math.round(Number(duration) * AGNES_FRAME_RATE),
+          ...(animate ? { image: sourceImage.dataUrl } : {}),
         }
-      : { prompt: prompt.trim(), aspect_ratio: aspect, ...(duration !== 'auto' ? { duration } : {}) };
+      : {
+          prompt: prompt.trim(), aspect_ratio: aspect, ...(duration !== 'auto' ? { duration } : {}),
+          // `image_url` is fal's common field name for image-to-video across most of
+          // its catalog — unverified for these specific (also-unverified) models.
+          ...(animate ? { image_url: sourceImage.dataUrl } : {}),
+        };
     const res = await window.media.generate({ kind: 'video', provider, model: endpoint, params });
     setBusy(false);
     if (res.ok) { await showVideo(res.path); loadRecent(); }
@@ -112,15 +147,30 @@ export default function CloudVideoStudio() {
       </div>
 
       <div style={card}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <button style={btn(!animate)} onClick={() => toggleAnimate(false)}>Text to video</button>
+          <button style={btn(animate)} onClick={() => toggleAnimate(true)}>Animate an image</button>
+        </div>
+
+        {animate && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            {sourceImage
+              ? <img src={sourceImage.dataUrl} alt="source" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8, border: `1px solid ${C.line}` }} />
+              : <div style={{ width: 56, height: 56, borderRadius: 8, border: `1px dashed ${C.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.dim, fontSize: 10 }}>none</div>}
+            <button style={btn()} onClick={chooseImage}>{sourceImage ? 'Change image…' : 'Choose image…'}</button>
+            {sourceImage && <span style={{ color: C.dim, fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>{sourceImage.path.split('/').pop()}</span>}
+          </div>
+        )}
+
         <textarea
           rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Describe the clip…"
+          placeholder={animate ? 'Describe how the image should move…' : 'Describe the clip…'}
           style={{ width: '100%', background: 'rgba(0,0,0,0.3)', border: `1px solid ${C.line}`, borderRadius: 11, padding: 12, fontSize: 13, lineHeight: 1.6, color: C.text, outline: 'none', resize: 'vertical' }}
         />
         <div style={{ display: 'flex', gap: 10, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <select value={model} onChange={(e) => setModel(e.target.value)}
                   style={{ background: '#0d0d10', border: `1px solid ${C.line}`, borderRadius: 9, padding: '8px 10px', fontSize: 12, color: C.text }}>
-            {VIDEO_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            {MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
           </select>
           {model === 'custom' && (
             <input value={customModel} onChange={(e) => setCustomModel(e.target.value)}

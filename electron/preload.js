@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('media', {
     readFile: (p) => ipcRenderer.invoke('media:read-file', p),
     recent: (opts) => ipcRenderer.invoke('media:recent', opts),
     reveal: (p) => ipcRenderer.invoke('media:reveal', p),
+    pickImage: () => ipcRenderer.invoke('media:pick-image'),
     onProgress: (callback) => {
         const listener = (_, data) => callback(data);
         ipcRenderer.on('media:progress', listener);

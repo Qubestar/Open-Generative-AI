@@ -4,7 +4,7 @@
 // the narrow media:* IPC surface. Artifacts land in ~/.vidmyo/artifacts and
 // job records in ~/.vidmyo/jobs — the same stores the CLI/MCP will read.
 
-const { ipcMain, shell, BrowserWindow } = require('electron');
+const { ipcMain, shell, dialog, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -111,6 +111,25 @@ function register() {
         endedAt: j.endedAt,
       }));
       return { ok: true, jobs };
+    } catch (err) {
+      return fail(err);
+    }
+  });
+
+  // Native file picker for "animate an image" — the user explicitly chooses a
+  // file via the system dialog, so reading it isn't bound by insideArtifacts().
+  ipcMain.handle('media:pick-image', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow();
+      const res = await dialog.showOpenDialog(win, {
+        properties: ['openFile'],
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+      });
+      if (res.canceled || !res.filePaths[0]) return { ok: false, canceled: true };
+      const p = res.filePaths[0];
+      const ext = path.extname(p).toLowerCase();
+      const dataUrl = `data:${MIME[ext] || 'image/png'};base64,${fs.readFileSync(p).toString('base64')}`;
+      return { ok: true, path: p, dataUrl };
     } catch (err) {
       return fail(err);
     }
