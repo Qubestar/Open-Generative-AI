@@ -18,6 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const { pathToFileURL } = require('url');
 const { getAgentPipeline, pipelineInstructions } = require('./agentPipelines');
+const mcpHost = require('./mcpHost');
 
 // ── Launch preferences ──────────────────────────────────────────────────────
 // How "Launch" opens an agent: its desktop app (default, Luke's preference)
@@ -465,18 +466,44 @@ function register() {
       : { ok: false, error: 'could not open a terminal' };
   });
 
-  // Register the Vidmyo MCP server into an agent's CLI config (local stdio).
+  // Register the Vidmyo MCP into an agent's CLI config.
+  //
+  // Prefer the HTTP server Vidmyo hosts (mcpHost.js): it runs in this process, so
+  // its tools can generate images with the keychain key — the stdio server can't
+  // (plain node, no safeStorage). Cost: it only answers while Vidmyo is open.
+  // Falls back to stdio when the host didn't start, so the button always does
+  // something useful.
   ipcMain.handle('agents:installMcp', async (_evt, agentId) => {
     const serverPath = path.join(__dirname, '..', '..', 'mcp', 'server.js');
+    const host = mcpHost.info();
 
-    const spec = {
+    const spec = host.running ? {
       name: 'vidmyo',
+      transport: 'http',
+      claude: `claude mcp add --transport http --scope user vidmyo ${shellQuote(host.url)} `
+        + `--header ${shellQuote(`Authorization: Bearer ${host.token}`)}`,
+      // Codex has no literal-header flag — only --bearer-token-env-var, which reads
+      // the token from ITS environment at run time. Registering it here would look
+      // like success and then 401 for a user who never exported that var, so hand
+      // Codex the stdio server (which works unattended) and say why.
+      codex: `codex mcp add vidmyo -- node ${shellQuote(serverPath)}`,
+      copyCmd: `claude mcp add --transport http --scope user vidmyo ${shellQuote(host.url)} `
+        + `--header ${shellQuote(`Authorization: Bearer ${host.token}`)}`,
+      geminiHint: `Gemini CLI: add to ~/.gemini/settings.json → mcpServers.vidmyo = { httpUrl: "${host.url}", `
+        + `headers: { "Authorization": "Bearer <token from Vidmyo>" } }.`,
+      genericHint: `Register an HTTP MCP server named "vidmyo" at ${host.url} with an `
+        + `"Authorization: Bearer <token>" header.`,
+      note: 'Vidmyo must stay open — this MCP is served by the app (that is what lets it use your saved API keys).',
+    } : {
+      name: 'vidmyo',
+      transport: 'stdio',
       claude: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
       codex: `codex mcp add vidmyo -- node ${shellQuote(serverPath)}`,
       copyCmd: `claude mcp add --transport stdio vidmyo -- node ${shellQuote(serverPath)}`,
       geminiHint: 'Gemini CLI: add to ~/.gemini/settings.json → mcpServers.vidmyo = { command: "node", args: ["<server path>"] }.',
       genericHint: 'Register a stdio MCP server named "vidmyo": command node, argument = the server path.',
-      note: 'Restart the agent session to pick it up.',
+      note: 'Vidmyo\'s in-app MCP is not running, so this is the standalone server — it works with Vidmyo closed, '
+        + 'but cannot use your saved API keys (set FAL_KEY / AGNES_API_KEY in its environment for image generation).',
     };
 
     const manual = (hint) => ({ ok: false, error: 'manual', command: spec.copyCmd, hint, serverPath, note: spec.note });
@@ -489,8 +516,15 @@ function register() {
     }
     if (agentId === 'codex') {
       const res = await loginShellExec(spec.codex, 25000);
+      // spec.codex is the stdio server even in http mode (see above), so don't
+      // hand Codex the "Vidmyo must stay open" note — it isn't true for it.
+      const note = spec.transport === 'http'
+        ? 'Codex got the standalone server: its CLI reads an HTTP bearer token only from an env var, '
+          + 'not a header, so Vidmyo\'s in-app MCP would 401. This one runs with Vidmyo closed, but '
+          + 'cannot use your saved keys — set FAL_KEY / AGNES_API_KEY in its environment to generate images.'
+        : spec.note;
       return res.ok
-        ? { ok: true, output: res.stdout.slice(0, 300), serverPath, note: spec.note }
+        ? { ok: true, output: res.stdout.slice(0, 300), serverPath, note }
         : manual(`Codex: add the "${spec.name}" MCP server in its config.`);
     }
     if (agentId === 'gemini') return manual(spec.geminiHint);

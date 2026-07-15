@@ -8,6 +8,7 @@ const { register: registerSecrets } = require('./lib/secrets');
 const { register: registerNetProxy } = require('./lib/netProxy');
 const { register: registerStory } = require('./lib/storyBridge');
 const { register: registerMedia } = require('./lib/mediaBridge');
+const mcpHost = require('./lib/mcpHost');
 
 // Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1 which
 // blocks Chromium's user namespace sandbox. The .deb package ships an AppArmor
@@ -82,6 +83,11 @@ app.whenReady().then(() => {
     registerNetProxy();
     registerStory();
     registerMedia();
+    // Loopback MCP so agents can use keychain keys (image generation) while
+    // Vidmyo is open. Best-effort: a failure here must never block the app.
+    mcpHost.start().then((r) => {
+        if (!r.ok) console.error('[mcp-host] not started:', r.error);
+    });
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -89,6 +95,8 @@ app.whenReady().then(() => {
         }
     });
 });
+
+app.on('will-quit', () => { mcpHost.stop(); });
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
