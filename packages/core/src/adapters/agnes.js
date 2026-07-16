@@ -27,23 +27,22 @@ const extFromUrl = (url) => {
   return m ? m[1] : '.bin';
 };
 
-export function agnesAdapter({ key, model, kind = 'image', base = BASE, pollBase = POLL_BASE }) {
+export function agnesAdapter({ key, model, kind = 'image', base = BASE, pollBase = POLL_BASE, pollMs = null }) {
   if (!key) throw new Error('agnesAdapter requires an API key');
   if (!model) throw new Error('agnesAdapter requires a model id (e.g. agnes-image-2.0-flash)');
   const headers = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
   const isVideo = kind === 'video';
 
   return {
-    // Agnes rate-limits VIDEO endpoints (status queries included) to 2 allowed / 1
-    // EFFECTIVE RPM on the free tier — 6/5 on the Token Plan (their tokenplan.md).
-    // 60s == the free tier's effective budget exactly, so a poll shouldn't throttle
-    // at all; poll() still tolerates a 429 rather than trusting that. The cost is up
-    // to 60s of lag between the render finishing and us noticing.
-    // TOKEN PLAN: 5 effective RPM allows 12000 here — worth changing when Luke
-    // upgrades, but do NOT drop below 60s while the account is on the free tier.
-    // (The generic 4s video default is ~15 RPM, ~15x over free — that produced the
-    // live "429: video status query rate limit exceeded".)
-    pollMs: isVideo ? 60000 : undefined,
+    // Agnes rate-limits VIDEO endpoints (status queries included) BY PLAN — free
+    // tier: 2 allowed / 1 EFFECTIVE RPM; Token Plan: 6/5 (their tokenplan.md).
+    // The default is the free tier's effective budget exactly (60s), so a poll
+    // shouldn't throttle at all; poll() still tolerates a 429 rather than trusting
+    // that. Callers pass pollMs for a paid plan — generation.js's AGNES_PLANS is
+    // the plan → interval table (Token Plan = 12000). Do NOT default below 60s:
+    // the generic 4s video default is ~15 RPM, ~15x over free — that produced the
+    // live "429: video status query rate limit exceeded".
+    pollMs: isVideo ? (pollMs || 60000) : undefined,
 
     async submit(params, { fetchImpl }) {
       if (isVideo) {

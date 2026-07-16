@@ -4,6 +4,8 @@
 // testable: prompt composition, beat→scene import, script validation, and
 // stage derivation.
 //
+import { GENERATION_SOURCES } from './generation.js';
+
 // Style template #1 is the production-proven faceless doodle look
 // (pipelines/doodle/references/style-spec.md). New styles are data, not code.
 
@@ -42,9 +44,9 @@ export function getStyle(id) {
 
 // Where scene images come from. `flow` is the default and the quality bar:
 // free, but manual — you generate in Google Flow and Attach each scene, so
-// there is nothing for the app to call. The rest generate in-app from the
-// user's key for that provider (Settings → Story picks one).
-// Model ids mirror the Image tab's verified list; keep them in sync.
+// there is nothing for the app to call. The generating sources are DERIVED
+// from generation.js's catalog (the single source of truth for cloud
+// sources/models), so Story and the generic MCP tools can't drift apart.
 export const IMAGE_SOURCES = [
   {
     id: 'flow',
@@ -54,28 +56,14 @@ export const IMAGE_SOURCES = [
     note: 'Free · generate in Flow (incl. Nano Banana 2), then Attach each scene.',
     models: [],
   },
-  {
-    id: 'fal',
-    name: 'fal.ai',
+  ...GENERATION_SOURCES.filter((s) => s.models.image.length > 0).map((s) => ({
+    id: s.id,
+    name: s.name,
     manual: false,
-    provider: 'fal',       // keychain id + providers.js id
-    note: 'Paid per image · uses your fal.ai key.',
-    models: [
-      { id: 'fal-ai/flux/schnell', label: 'FLUX.1 schnell — fast & cheap' },
-      { id: 'fal-ai/flux/dev', label: 'FLUX.1 dev — higher quality' },
-    ],
-  },
-  {
-    id: 'agnes',
-    name: 'Agnes AI',
-    manual: false,
-    provider: 'agnes',
-    note: 'Paid per image · uses your Agnes AI key.',
-    models: [
-      { id: 'agnes-image-2.0-flash', label: 'Image 2.0 Flash' },
-      { id: 'agnes-image-2.1-flash', label: 'Image 2.1 Flash' },
-    ],
-  },
+    provider: s.provider,
+    note: `Paid per image · uses your ${s.name} key.`,
+    models: s.models.image,
+  })),
 ];
 
 // Unknown ids fall back to the default source, mirroring getProviderById's

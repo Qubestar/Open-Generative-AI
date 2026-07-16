@@ -9,6 +9,7 @@
 import { z } from 'zod';
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,7 +17,9 @@ import { videoDelta } from './videoDelta.js';
 import {
   Project, DoodlePipeline, stageVoiceover, stageBeats, stageAssemble, stageFinalize,
   stageStatus, validateScript, getStyle, readSheetValues, trackerRows, sheetIdFromInput,
-  getImageSource, resolveImageModel, JobStore, runJob, falAdapter, agnesAdapter,
+  getImageSource, resolveImageModel, JobStore, runJob,
+  GENERATION_SOURCES, getGenerationSource, resolveGenerationModel,
+  buildGenerationParams, makeGenerationAdapter,
 } from '../../packages/core/index.js';
 
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
@@ -364,14 +367,9 @@ export function registerTools(server, ctx = {}) {
         if (!key) throw new Error(`No ${source.name} key available — add it in ${keyHint}.`);
 
         const imageModel = resolveImageModel(source.id, model || cfg.imageModel);
-        // The doodle style locks 16:9. fal takes a named preset; Agnes wants literal
-        // pixels and only returns a url when asked. (Mirrors electron/lib/storyBridge.js.)
-        const params = source.id === 'agnes'
-          ? { prompt: scene.prompt, size: '1024x576', extra_body: { response_format: 'url' } }
-          : { prompt: scene.prompt, image_size: 'landscape_16_9' };
-        const adapter = source.id === 'agnes'
-          ? agnesAdapter({ key, model: imageModel, kind: 'image' })
-          : falAdapter({ model: imageModel, key });
+        // The doodle style locks 16:9; each provider's dialect lives in core/generation.js.
+        const params = buildGenerationParams(source.id, 'image', { prompt: scene.prompt, aspect: '16:9' });
+        const adapter = makeGenerationAdapter(source.id, { key, model: imageModel, kind: 'image' });
 
         const store = new JobStore();
         const job = store.create({
@@ -392,6 +390,144 @@ export function registerTools(server, ctx = {}) {
           scene: storySummary(project).scenes.find((s) => s.id === scene_id),
           generated_with: { source: source.id, model: imageModel },
           status: stageStatus(project),
+        });
+      } catch (e) { return fail(e); }
+    },
+  );
+
+  // ── Generic cloud generation (v0.3) ───────────────────────────────────────
+  // Provider-backed generate tools with no Story project required: "make me an
+  // image/video of X". Cloud (the user's own fal/Agnes key) — the local free
+  // path stays create_video/create_film (Video Delta).
+
+  // Which source a generic call uses when the agent didn't say: the Settings →
+  // Story source if it can generate AND has a key (Flow is a story-workflow
+  // choice with no API — skip it here), else the first catalog source with a
+  // key. An explicit `source` always wins; a missing key on an explicit source
+  // is an error, never a silent fallback to a different provider's bill.
+  const resolveGenerationRequest = (kind, requestedSource) => {
+    if (requestedSource) {
+      const s = getGenerationSource(requestedSource);
+      if (!s) throw new Error(`unknown source "${requestedSource}" (have: ${GENERATION_SOURCES.map((x) => x.id).join(', ')})`);
+      const key = secrets(s.provider);
+      if (!key) throw new Error(`No ${s.name} key available — add it in ${keyHint}.`);
+      return { source: s, key };
+    }
+    if (kind === 'image') {
+      const cfg = getGenerationSource(imageConfig().imageSource);
+      const key = cfg && secrets(cfg.provider);
+      if (key) return { source: cfg, key };
+    }
+    for (const s of GENERATION_SOURCES) {
+      const key = secrets(s.provider);
+      if (key) return { source: s, key };
+    }
+    throw new Error(`No cloud ${kind} source has an API key — add a fal.ai or Agnes AI key in ${keyHint}.`);
+  };
+
+  const ARTIFACTS = path.join(os.homedir(), '.vidmyo', 'artifacts');
+
+  const readImageAsDataUrl = (p) => {
+    const ext = path.extname(p).slice(1).toLowerCase() || 'png';
+    const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[ext] || 'image/png';
+    return `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
+  };
+
+  server.tool(
+    'generate_image',
+    'Generate ONE image from a text prompt via the user\'s cloud provider (fal.ai or Agnes '
+    + 'AI, their stored key). BLOCKS until the image is ready (seconds) and returns the '
+    + 'absolute file path. Paid per image — never retry blindly on a content/validation '
+    + 'error. For Story scene images prefer story_generate_scene (it attaches the result '
+    + 'to the project).',
+    {
+      prompt: z.string().describe('what to draw'),
+      source: z.enum(['fal', 'agnes']).optional().describe('omit = the user\'s configured/default source'),
+      model: z.string().optional().describe('override the source\'s default model'),
+      aspect: z.enum(['16:9', '9:16', '1:1', '4:3', '3:4']).default('16:9'),
+      out_dir: z.string().optional().describe('absolute directory for the file (default ~/.vidmyo/artifacts)'),
+    },
+    async ({ prompt, source: requestedSource, model, aspect, out_dir }) => {
+      try {
+        const { source, key } = resolveGenerationRequest('image', requestedSource);
+        const resolvedModel = resolveGenerationModel(source.id, 'image', model);
+        const params = buildGenerationParams(source.id, 'image', { prompt, aspect });
+        const adapter = makeGenerationAdapter(source.id, { key, model: resolvedModel, kind: 'image' });
+        const store = new JobStore();
+        const job = store.create({ type: 'image', provider: source.id, params });
+        const done = await runJob(store, job.id, adapter, {
+          outDir: out_dir || ARTIFACTS,
+          pollMs: adapter.pollMs || 1500,
+        });
+        if (done.state !== 'done') throw new Error(done.error || `job ended in state ${done.state}`);
+        return ok({ path: done.artifacts[0].path, job_id: job.id, source: source.id, model: resolvedModel });
+      } catch (e) { return fail(e); }
+    },
+  );
+
+  server.tool(
+    'generate_video',
+    'Start ONE cloud video generation from a text prompt — optionally animating an input '
+    + 'image — via the user\'s provider (fal.ai or Agnes AI, their stored key). Returns a '
+    + 'job_id IMMEDIATELY; renders take minutes, so poll get_generation_job. On Agnes\'s '
+    + 'free plan status advances at most once per minute — poll patiently, and NEVER '
+    + 're-submit because a poll looked slow (each submit is paid). This is the CLOUD path; '
+    + 'create_video/create_film run the free local Video Delta engine instead.',
+    {
+      prompt: z.string().describe('what happens in the clip'),
+      source: z.enum(['fal', 'agnes']).optional().describe('omit = the default source with a key'),
+      model: z.string().optional().describe('override the source\'s default model'),
+      aspect: z.enum(['16:9', '9:16', '1:1']).default('16:9'),
+      duration_seconds: z.number().optional().describe('omit = provider default'),
+      image_path: z.string().optional().describe('absolute path to an image to ANIMATE (image-to-video)'),
+    },
+    async ({ prompt, source: requestedSource, model, aspect, duration_seconds, image_path }) => {
+      try {
+        const { source, key } = resolveGenerationRequest('video', requestedSource);
+        const hasImage = !!image_path;
+        if (hasImage && !fs.existsSync(image_path)) throw new Error(`image_path not found: ${image_path}`);
+        const resolvedModel = resolveGenerationModel(source.id, 'video', model, { hasImage });
+        const params = buildGenerationParams(source.id, 'video', {
+          prompt, aspect, durationSeconds: duration_seconds || null,
+          image: hasImage ? readImageAsDataUrl(image_path) : null,
+        });
+        const adapter = makeGenerationAdapter(source.id, { key, model: resolvedModel, kind: 'video' });
+        const store = new JobStore();
+        const job = store.create({ type: 'video', provider: source.id, params });
+        // Fire-and-forget: the render outlives this request. runJob checkpoints every
+        // transition into ~/.vidmyo/jobs on disk, which is what get_generation_job
+        // reads — so polling works even from a different MCP request/process.
+        runJob(store, job.id, adapter, {
+          outDir: ARTIFACTS,
+          pollMs: adapter.pollMs || 4000,
+          maxPolls: Math.ceil(1600000 / (adapter.pollMs || 4000)),
+        }).catch(() => { /* runJob records its own error state in the store */ });
+        return ok({
+          job_id: job.id, state: 'queued', source: source.id, model: resolvedModel,
+          poll_with: 'get_generation_job',
+          ...(source.id === 'agnes' ? { note: 'Agnes free plan: status advances at most once per minute — wait 60s+ between polls.' } : {}),
+        });
+      } catch (e) { return fail(e); }
+    },
+  );
+
+  server.tool(
+    'get_generation_job',
+    'Poll a CLOUD generation started by generate_video (generate_image job ids work too). '
+    + 'Distinct from get_job, which polls the local Video Delta engine. When state is '
+    + '"done", artifact is the absolute path to the file on disk.',
+    { job_id: z.string() },
+    async ({ job_id }) => {
+      try {
+        const job = new JobStore().get(job_id);
+        if (!job) throw new Error(`unknown generation job: ${job_id}`);
+        return ok({
+          job_id,
+          state: job.state,
+          provider: job.provider,
+          artifact: job.artifacts?.[0]?.path || null,
+          error: job.error || null,
+          log_tail: (job.logs || []).slice(-3),
         });
       } catch (e) { return fail(e); }
     },

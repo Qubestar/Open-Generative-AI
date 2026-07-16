@@ -222,7 +222,7 @@ function register() {
   // prefer paying per image.
   ipcMain.handle('story:generate-scene', async (_evt, dir, sceneId, { model = null } = {}) => {
     try {
-      const { JobStore, runJob, falAdapter, agnesAdapter, getImageSource, resolveImageModel } = await core();
+      const { JobStore, runJob, getImageSource, resolveImageModel, buildGenerationParams, makeGenerationAdapter } = await core();
       const project = await openProject(dir);
       const scene = project.getScene(sceneId);
       if (!scene.prompt) return fail(new Error(`${sceneId} has no image prompt yet`));
@@ -236,14 +236,9 @@ function register() {
       if (!key) return fail(new Error(`No ${source.name} key saved — add it in Settings → Providers, or attach an image manually (Google Flow is the free path).`));
 
       const imageModel = resolveImageModel(source.id, model || cfg.imageModel);
-      // The doodle style locks 16:9. fal takes a named preset; Agnes wants
-      // literal pixels and only hands back a url when asked.
-      const params = source.id === 'agnes'
-        ? { prompt: scene.prompt, size: '1024x576', extra_body: { response_format: 'url' } }
-        : { prompt: scene.prompt, image_size: 'landscape_16_9' };
-      const adapter = source.id === 'agnes'
-        ? agnesAdapter({ key, model: imageModel, kind: 'image' })
-        : falAdapter({ model: imageModel, key });
+      // The doodle style locks 16:9; each provider's dialect lives in core/generation.js.
+      const params = buildGenerationParams(source.id, 'image', { prompt: scene.prompt, aspect: '16:9' });
+      const adapter = makeGenerationAdapter(source.id, { key, model: imageModel, kind: 'image' });
 
       const store = new JobStore();
       const job = store.create({
