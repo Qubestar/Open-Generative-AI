@@ -24,7 +24,7 @@ export default function VideoDeltaStudio() {
   const [mode, setMode] = useState('clip');           // clip | film
   const [motion, setMotion] = useState('ltx');        // ltx | composite
   const [prompt, setPrompt] = useState('a red fox trots across fresh snow at golden hour');
-  const [duration, setDuration] = useState(3);
+  const [duration, setDuration] = useState(2);  // LTX budget: short shots render sharp; long ones go soft
   const [shots, setShots] = useState(2);
   const [title, setTitle] = useState('');
   const [narrate, setNarrate] = useState('');
