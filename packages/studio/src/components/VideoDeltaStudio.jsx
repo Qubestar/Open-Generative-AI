@@ -33,16 +33,81 @@ export default function VideoDeltaStudio() {
   const [job, setJob] = useState(null);               // {id,status,out,error}
   const [elapsed, setElapsed] = useState(0);
   const [resultUrl, setResultUrl] = useState(null);
+  const [isFs, setIsFs] = useState(false);            // our own fullscreen (has an X)
   const pollRef = useRef(null);
   const t0Ref = useRef(0);
+  const videoWrapRef = useRef(null);
+
+  // The shell unmounts this component on every tab switch, so a running job must
+  // survive OUTSIDE component state: we persist {id, t0} and resume on mount.
+  const JOB_KEY = 'videodelta.activeJob';
+
+  const startPolling = useCallback((jobId) => {
+    clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      setElapsed(Math.round((Date.now() - t0Ref.current) / 1000));
+      try {
+        const r = await fetch(`${API}/jobs/${jobId}`);
+        if (r.status === 404) {           // engine restarted; the job is gone
+          clearInterval(pollRef.current);
+          localStorage.removeItem(JOB_KEY);
+          setJob({ status: 'error', error: 'The engine was restarted and lost this job. Submit again.' });
+          return;
+        }
+        const j = await r.json();
+        setJob(j);
+        if (j.status === 'done') {
+          clearInterval(pollRef.current);
+          // Keep the id (marked done) so the finished video is restored after a tab
+          // switch too; it's only cleared when a NEW render is submitted.
+          localStorage.setItem(JOB_KEY, JSON.stringify({ id: jobId, t0: t0Ref.current, done: true }));
+          setResultUrl(`${API}/jobs/${jobId}/file?t=${Date.now()}`);
+        } else if (j.status === 'error') {
+          clearInterval(pollRef.current);
+          localStorage.removeItem(JOB_KEY);
+        }
+      } catch { /* keep polling */ }
+    }, 2000);
+  }, []);
 
   useEffect(() => {
     fetch(`${API}/health`).then((r) => setHealth(r.ok ? 'up' : 'down')).catch(() => setHealth('down'));
-    return () => clearInterval(pollRef.current);
+    // Resume a job started before a tab switch (or show its finished result).
+    try {
+      const saved = JSON.parse(localStorage.getItem(JOB_KEY) || 'null');
+      if (saved?.id && saved.done) {
+        // A finished render from before a tab switch — restore it without polling.
+        setJob({ id: saved.id, status: 'done' });
+        setResultUrl(`${API}/jobs/${saved.id}/file?t=${Date.now()}`);
+      } else if (saved?.id) {
+        t0Ref.current = saved.t0 || Date.now();
+        setElapsed(Math.round((Date.now() - t0Ref.current) / 1000));
+        setJob({ id: saved.id, status: 'running' });
+        startPolling(saved.id);
+      }
+    } catch { /* corrupted state — ignore */ }
+    const onFs = () => setIsFs(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFs);
+    document.addEventListener('webkitfullscreenchange', onFs);
+    return () => {
+      clearInterval(pollRef.current);
+      document.removeEventListener('fullscreenchange', onFs);
+      document.removeEventListener('webkitfullscreenchange', onFs);
+    };
+  }, [startPolling]);
+
+  const enterFs = useCallback(() => {
+    const el = videoWrapRef.current;
+    if (!el) return;
+    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+  }, []);
+  const exitFs = useCallback(() => {
+    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
   }, []);
 
   const submit = useCallback(async () => {
     setResultUrl(null);
+    localStorage.removeItem(JOB_KEY);   // drop any previous finished render
     setJob({ status: 'submitting' });
     t0Ref.current = Date.now();
     setElapsed(0);
@@ -82,24 +147,13 @@ export default function VideoDeltaStudio() {
       }
       const { job_id } = await res.json();
       setJob({ id: job_id, status: 'queued' });
-      clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        setElapsed(Math.round((Date.now() - t0Ref.current) / 1000));
-        try {
-          const j = await (await fetch(`${API}/jobs/${job_id}`)).json();
-          setJob(j);
-          if (j.status === 'done') {
-            clearInterval(pollRef.current);
-            setResultUrl(`${API}/jobs/${job_id}/file?t=${Date.now()}`);
-          } else if (j.status === 'error') {
-            clearInterval(pollRef.current);
-          }
-        } catch { /* keep polling */ }
-      }, 2000);
+      // Persist so the render survives a tab switch (this component unmounts).
+      localStorage.setItem(JOB_KEY, JSON.stringify({ id: job_id, t0: t0Ref.current }));
+      startPolling(job_id);
     } catch (e) {
       setJob({ status: 'error', error: String(e.message || e) });
     }
-  }, [mode, motion, prompt, duration, shots, title, narrate, aspect, heroSource]);
+  }, [mode, motion, prompt, duration, shots, title, narrate, aspect, heroSource, startPolling]);
 
   const busy = job && ['submitting', 'queued', 'running'].includes(job.status);
   const lbl = { display: 'block', color: C.dim, fontSize: 12, margin: '14px 0 5px' };
@@ -228,14 +282,30 @@ export default function VideoDeltaStudio() {
 
         {/* Result — height-bounded so the video + its controls always fit on screen */}
         <div style={{ flex: '1 1 380px', minWidth: 300, maxWidth: 620 }}>
-          <div style={{ width: '100%', height: 'min(62vh, 560px)', background: C.card,
-                        border: `1px solid ${C.line}`, borderRadius: 14, display: 'flex',
+          <div ref={videoWrapRef}
+               style={{ position: 'relative', width: '100%',
+                        height: isFs ? '100vh' : 'min(62vh, 560px)', background: C.card,
+                        border: isFs ? 'none' : `1px solid ${C.line}`,
+                        borderRadius: isFs ? 0 : 14, display: 'flex',
                         alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
                         padding: 8, boxSizing: 'border-box' }}>
             {resultUrl ? (
-              <video key={resultUrl} src={resultUrl} controls autoPlay loop playsInline
-                     style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
-                              borderRadius: 8 }} />
+              <>
+                <video key={resultUrl} src={resultUrl} controls autoPlay loop playsInline
+                       style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
+                                borderRadius: isFs ? 0 : 8 }} />
+                {/* Our own fullscreen toggle: the native one has no visible way out in the
+                    embedded window, so we drive the Fullscreen API and always show an X. */}
+                <button onClick={isFs ? exitFs : enterFs}
+                        title={isFs ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+                        style={{ position: 'absolute', top: 14, right: 14, width: 40, height: 40,
+                                 borderRadius: 999, border: 'none', cursor: 'pointer',
+                                 background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 20,
+                                 lineHeight: '40px', textAlign: 'center', zIndex: 5,
+                                 backdropFilter: 'blur(4px)' }}>
+                  {isFs ? '✕' : '⤢'}
+                </button>
+              </>
             ) : (
               <div style={{ color: C.dim, fontSize: 13, textAlign: 'center', padding: 24 }}>
                 {job?.status === 'error'
