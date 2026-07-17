@@ -19,17 +19,30 @@ const AFFILIATES = [
   { name: 'Kling', blurb: 'premium cloud video', url: 'https://klingai.com/?ref=YOUR_CODE' },
 ];
 
+// Last-used form settings survive tab switches (the shell unmounts this component).
+const SETTINGS_KEY = 'videodelta.settings';
+const DEFAULT_SETTINGS = {
+  mode: 'clip', motion: 'ltx',
+  prompt: 'a red fox trots across fresh snow at golden hour',
+  duration: 2, shots: 2, title: '', narrate: '', aspect: '16:9', heroSource: 'local',
+};
+const loadSettings = () => {
+  try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+  catch { return { ...DEFAULT_SETTINGS }; }
+};
+
 export default function VideoDeltaStudio() {
+  const saved0 = loadSettings();   // read once for lazy initial values
   const [health, setHealth] = useState('checking');   // checking | up | down
-  const [mode, setMode] = useState('clip');           // clip | film
-  const [motion, setMotion] = useState('ltx');        // ltx | composite
-  const [prompt, setPrompt] = useState('a red fox trots across fresh snow at golden hour');
-  const [duration, setDuration] = useState(2);  // LTX budget: short shots render sharp; long ones go soft
-  const [shots, setShots] = useState(2);
-  const [title, setTitle] = useState('');
-  const [narrate, setNarrate] = useState('');
-  const [aspect, setAspect] = useState('16:9');   // 16:9 | 9:16 | 1:1
-  const [heroSource, setHeroSource] = useState('local');   // local | openai | fal | agnes
+  const [mode, setMode] = useState(saved0.mode);      // clip | film
+  const [motion, setMotion] = useState(saved0.motion); // ltx | composite
+  const [prompt, setPrompt] = useState(saved0.prompt);
+  const [duration, setDuration] = useState(saved0.duration);  // LTX budget: short shots render sharp
+  const [shots, setShots] = useState(saved0.shots);
+  const [title, setTitle] = useState(saved0.title);
+  const [narrate, setNarrate] = useState(saved0.narrate);
+  const [aspect, setAspect] = useState(saved0.aspect);   // 16:9 | 9:16 | 1:1
+  const [heroSource, setHeroSource] = useState(saved0.heroSource);   // local | openai | fal | agnes
   const [job, setJob] = useState(null);               // {id,status,out,error}
   const [elapsed, setElapsed] = useState(0);
   const [resultUrl, setResultUrl] = useState(null);
@@ -37,6 +50,15 @@ export default function VideoDeltaStudio() {
   const pollRef = useRef(null);
   const t0Ref = useRef(0);
   const videoWrapRef = useRef(null);
+
+  // Remember the last-used form settings across tab switches.
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        mode, motion, prompt, duration, shots, title, narrate, aspect, heroSource,
+      }));
+    } catch { /* storage full / unavailable — non-fatal */ }
+  }, [mode, motion, prompt, duration, shots, title, narrate, aspect, heroSource]);
 
   // The shell unmounts this component on every tab switch, so a running job must
   // survive OUTSIDE component state: we persist {id, t0} and resume on mount.
@@ -86,24 +108,21 @@ export default function VideoDeltaStudio() {
         startPolling(saved.id);
       }
     } catch { /* corrupted state — ignore */ }
-    const onFs = () => setIsFs(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', onFs);
-    document.addEventListener('webkitfullscreenchange', onFs);
+    // Esc closes our CSS-overlay fullscreen (mirrors the native fullscreen habit).
+    const onKey = (e) => { if (e.key === 'Escape') setIsFs(false); };
+    document.addEventListener('keydown', onKey);
     return () => {
       clearInterval(pollRef.current);
-      document.removeEventListener('fullscreenchange', onFs);
-      document.removeEventListener('webkitfullscreenchange', onFs);
+      document.removeEventListener('keydown', onKey);
     };
   }, [startPolling]);
 
-  const enterFs = useCallback(() => {
-    const el = videoWrapRef.current;
-    if (!el) return;
-    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
-  }, []);
-  const exitFs = useCallback(() => {
-    (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
-  }, []);
+  // Our own "fullscreen" is a CSS overlay (position:fixed), NOT the browser Fullscreen
+  // API: the API needs a trusted gesture and is blocked inside sandboxed/embedded windows
+  // (exactly where Luke got stuck), and its exit control can be invisible. A fixed overlay
+  // with an always-visible ✕ works everywhere and can never trap the user.
+  const enterFs = useCallback(() => setIsFs(true), []);
+  const exitFs = useCallback(() => setIsFs(false), []);
 
   const submit = useCallback(async () => {
     setResultUrl(null);
@@ -283,26 +302,29 @@ export default function VideoDeltaStudio() {
         {/* Result — height-bounded so the video + its controls always fit on screen */}
         <div style={{ flex: '1 1 380px', minWidth: 300, maxWidth: 620 }}>
           <div ref={videoWrapRef}
-               style={{ position: 'relative', width: '100%',
-                        height: isFs ? '100vh' : 'min(62vh, 560px)', background: C.card,
-                        border: isFs ? 'none' : `1px solid ${C.line}`,
-                        borderRadius: isFs ? 0 : 14, display: 'flex',
-                        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-                        padding: 8, boxSizing: 'border-box' }}>
+               style={isFs
+                 ? { position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.94)',
+                     display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+                     boxSizing: 'border-box' }
+                 : { position: 'relative', width: '100%', height: 'min(62vh, 560px)',
+                     background: C.card, border: `1px solid ${C.line}`, borderRadius: 14,
+                     display: 'flex', alignItems: 'center', justifyContent: 'center',
+                     overflow: 'hidden', padding: 8, boxSizing: 'border-box' }}>
             {resultUrl ? (
               <>
                 <video key={resultUrl} src={resultUrl} controls autoPlay loop playsInline
                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
                                 borderRadius: isFs ? 0 : 8 }} />
-                {/* Our own fullscreen toggle: the native one has no visible way out in the
-                    embedded window, so we drive the Fullscreen API and always show an X. */}
+                {/* Our own overlay-fullscreen toggle (⤢) and, in fullscreen, a big always-
+                    visible close (✕). Deliberately NOT the browser Fullscreen API — see enterFs. */}
                 <button onClick={isFs ? exitFs : enterFs}
-                        title={isFs ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
-                        style={{ position: 'absolute', top: 14, right: 14, width: 40, height: 40,
+                        title={isFs ? 'Close (Esc)' : 'Fullscreen'}
+                        style={{ position: isFs ? 'fixed' : 'absolute', top: isFs ? 20 : 14,
+                                 right: isFs ? 24 : 14, width: isFs ? 48 : 40, height: isFs ? 48 : 40,
                                  borderRadius: 999, border: 'none', cursor: 'pointer',
-                                 background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 20,
-                                 lineHeight: '40px', textAlign: 'center', zIndex: 5,
-                                 backdropFilter: 'blur(4px)' }}>
+                                 background: 'rgba(0,0,0,0.6)', color: '#fff',
+                                 fontSize: isFs ? 26 : 20, lineHeight: `${isFs ? 48 : 40}px`,
+                                 textAlign: 'center', zIndex: 10000, backdropFilter: 'blur(4px)' }}>
                   {isFs ? '✕' : '⤢'}
                 </button>
               </>
