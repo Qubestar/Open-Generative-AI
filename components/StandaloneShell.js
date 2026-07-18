@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { StoryStudio, VideoDeltaStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
+import { StoryStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
 import axios from 'axios';
 
 // The five cloud generation studios (Image/Video/Lip Sync/Cinema/Marketing) are muapi-backed,
@@ -12,7 +12,6 @@ const TABS = [
   { id: 'story', label: 'Story' },
   { id: 'image', label: 'Image' },
   { id: 'video', label: 'Video' },
-  { id: 'videodelta', label: 'Video Delta' },
   { id: 'workflows', label: 'Workflows' },
   { id: 'agents', label: 'Agents' },
   { id: 'apps', label: 'Explore Apps' },
@@ -49,7 +48,7 @@ export default function StandaloneShell() {
     if (slug.includes('apps')) return 'apps';
     const firstSegment = slug[0];
     if (firstSegment && TABS.find(t => t.id === firstSegment)) return firstSegment;
-    return 'videodelta';  // open on the free, local engine — no API key required
+    return 'story';  // Story is the entry point (was 'videodelta' before that tab was removed)
   };
   
   const [apiKey, setApiKey] = useState(null);
@@ -298,7 +297,6 @@ export default function StandaloneShell() {
         {activeTab === 'image'   && <CloudImageStudio />}
         {activeTab === 'video'   && <CloudVideoStudio />}
         {activeTab === 'story' && <StoryStudio />}
-        {activeTab === 'videodelta' && <VideoDeltaStudio />}
         {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
         {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
         {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}

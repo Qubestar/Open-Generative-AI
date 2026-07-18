@@ -3,7 +3,6 @@
 export { default as ImageStudio } from './components/ImageStudio';
 export { default as StoryStudio } from './components/StoryStudio';
 export { default as VideoStudio } from './components/VideoStudio';
-export { default as VideoDeltaStudio } from './components/VideoDeltaStudio';
 export { default as LipSyncStudio } from './components/LipSyncStudio';
 export { default as CinemaStudio } from './components/CinemaStudio';
 export { default as MarketingStudio } from './components/MarketingStudio';
