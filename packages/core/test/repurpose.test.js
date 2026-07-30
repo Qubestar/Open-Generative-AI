@@ -24,6 +24,42 @@ const loadJsonl = name => fs.readFileSync(path.join(fixtures, name), 'utf8')
   .filter(Boolean)
   .map(line => JSON.parse(line));
 
+const sha256 = char => `sha256:${char.repeat(64)}`;
+const ingestArtifact = ({ sourcePath = '/videos/source.mp4', fingerprint = sha256('a') } = {}) => ({
+  artifact_version: 1,
+  engine_version: '0.1.0',
+  source: { path: sourcePath, byte_size: 123, fingerprint },
+  container: { format_names: ['mov', 'mp4'], format_long_name: 'MP4', duration_seconds: 30 },
+  video: {
+    codec_name: 'h264', width: 1920, height: 1080,
+    average_frame_rate: 29.97, real_frame_rate: 30, duration_seconds: null,
+  },
+  audio: {
+    codec_name: 'aac', sample_rate_hz: 48000, channels: 2,
+    channel_layout: 'stereo', duration_seconds: null,
+  },
+});
+
+function seedCompletedDownstream(project, fingerprint = sha256('a')) {
+  project.manifest.source.fingerprint = fingerprint;
+  for (const stage of REPURPOSE_STAGES) {
+    project.manifest.stages[stage] = {
+      state: 'completed', artifact: `${stage}.json`, error: stage === 'rank' ? 'old error' : null,
+    };
+  }
+  project.manifest.candidates = [{
+    id: 'clip_001',
+    decision: 'approved',
+    selected: true,
+    proposed_start_sec: 1,
+    proposed_end_sec: 20,
+    metadata: { score: 0.9 },
+  }];
+  project.manifest.outputs = ['outputs/clip_001.mp4'];
+  project.save();
+  return structuredClone(project.manifest);
+}
+
 test('shared version-1 request and manifest fixtures are accepted', () => {
   assert.equal(validateWorkerRequest(loadFixture('valid-worker-request.json')).protocol_version, 1);
   assert.equal(validateRepurposeManifest(loadFixture('valid-project-manifest.json')).version, 1);
@@ -138,6 +174,86 @@ test('render defaults keep future caption style and translation fields without i
     crop_mode: 'blurred_background',
     captions: { enabled: true, style: 'bold', translation_target_language: 'pl' },
   });
+});
+
+test('same ingest fingerprint updates source metadata and preserves downstream cache and decisions', () => {
+  const project = RepurposeProject.create(tempDir(), {
+    source: { type: 'local_file', uri: '/videos/original-name.mp4' },
+  });
+  const before = seedCompletedDownstream(project);
+  const result = project.applyIngestArtifact(
+    ingestArtifact({ sourcePath: '/renamed/source.mp4', fingerprint: sha256('a') }),
+  );
+  assert.equal(result.sourceChanged, false);
+  assert.equal(project.manifest.source.uri, path.normalize('/renamed/source.mp4'));
+  assert.equal(project.manifest.source.fingerprint, sha256('a'));
+  assert.equal(project.manifest.engine_version, '0.1.0');
+  assert.deepEqual(project.manifest.stages.transcribe, before.stages.transcribe);
+  assert.deepEqual(project.manifest.stages.rank, before.stages.rank);
+  assert.deepEqual(project.manifest.candidates, before.candidates);
+  assert.deepEqual(project.manifest.outputs, before.outputs);
+  assert.deepEqual(project.manifest.stages.ingest, {
+    state: 'completed', artifact: 'artifacts/ingest-artifact.v1.json', error: null,
+  });
+});
+
+test('changed ingest fingerprint clears every downstream artifact, error, decision, and output', () => {
+  const project = RepurposeProject.create(tempDir(), {
+    source: { type: 'local_file', uri: '/videos/source.mp4' },
+  });
+  seedCompletedDownstream(project);
+  const result = project.applyIngestArtifact(
+    ingestArtifact({ sourcePath: '/videos/source.mp4', fingerprint: sha256('b') }),
+    { artifactPath: 'artifacts/new-ingest.json' },
+  );
+  assert.equal(result.sourceChanged, true);
+  assert.equal(project.manifest.source.fingerprint, sha256('b'));
+  assert.deepEqual(project.manifest.stages.ingest, {
+    state: 'completed', artifact: 'artifacts/new-ingest.json', error: null,
+  });
+  for (const stage of REPURPOSE_STAGES.slice(1)) {
+    assert.deepEqual(project.manifest.stages[stage], {
+      state: 'pending', artifact: null, error: null,
+    });
+  }
+  assert.deepEqual(project.manifest.candidates, []);
+  assert.deepEqual(project.manifest.outputs, []);
+  assert.equal(project.canRender(), false);
+  assert.deepEqual(RepurposeProject.load(project.dir).manifest, project.manifest);
+});
+
+test('first ingest invalidates any stale downstream state and URL projects reject local artifacts', () => {
+  const project = RepurposeProject.create(tempDir(), {
+    source: { type: 'local_file', uri: '/videos/source.mp4' },
+  });
+  project.manifest.candidates = [{
+    id: 'clip_001', decision: 'approved', selected: true,
+    proposed_start_sec: 1, proposed_end_sec: 2, metadata: {},
+  }];
+  project.manifest.outputs = ['stale.mp4'];
+  project.save();
+  assert.equal(project.applyIngestArtifact(ingestArtifact()).sourceChanged, true);
+  assert.deepEqual(project.manifest.candidates, []);
+  assert.deepEqual(project.manifest.outputs, []);
+
+  const url = RepurposeProject.create(tempDir(), {
+    source: { type: 'url', uri: 'https://example.com/video' },
+  });
+  assert.throws(() => url.applyIngestArtifact(ingestArtifact()), /non-local source/);
+});
+
+test('malformed ingest artifacts are rejected before the manifest changes', () => {
+  const project = RepurposeProject.create(tempDir(), {
+    source: { type: 'local_file', uri: '/videos/source.mp4' },
+  });
+  const before = structuredClone(project.manifest);
+  const invalid = ingestArtifact();
+  invalid.source.fingerprint = 'sha256:not-valid';
+  assert.throws(
+    () => project.applyIngestArtifact(invalid),
+    /ingest_artifact\.source\.fingerprint/,
+  );
+  assert.deepEqual(project.manifest, before);
 });
 
 test('top-level core export exposes RepurposeProject', async () => {
