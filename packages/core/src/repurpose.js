@@ -30,6 +30,9 @@ const JOB_ID_RE = /^job_[A-Za-z0-9_-]+$/;
 const CLIP_ID_RE = /^clip_\d{3,}$/;
 const SOURCE_TYPES = ['local_file', 'url'];
 const EVENT_TYPES = ['accepted', 'progress', 'artifact', 'completed', 'error'];
+const SHA256_FINGERPRINT_RE = /^sha256:[0-9a-f]{64}$/;
+const INGEST_ARTIFACT_VERSION = 1;
+const DEFAULT_INGEST_ARTIFACT = 'artifacts/ingest-artifact.v1.json';
 
 const TOP_LEVEL_KEYS = [
   'id', 'version', 'protocol_version', 'engine_version', 'source',
@@ -235,6 +238,34 @@ function validateCandidates(candidates) {
   }
 }
 
+function validateIngestArtifact(artifact) {
+  requireKeys(
+    artifact,
+    ['artifact_version', 'engine_version', 'source', 'container', 'video', 'audio'],
+    'ingest_artifact',
+  );
+  if (artifact.artifact_version !== INGEST_ARTIFACT_VERSION) {
+    contractError('ingest_artifact.artifact_version', `expected ${INGEST_ARTIFACT_VERSION}`);
+  }
+  requireNonEmptyString(artifact.engine_version, 'ingest_artifact.engine_version');
+  requireKeys(artifact.source, ['path', 'byte_size', 'fingerprint'], 'ingest_artifact.source');
+  requireNonEmptyString(artifact.source.path, 'ingest_artifact.source.path');
+  if (!path.isAbsolute(artifact.source.path)) {
+    contractError('ingest_artifact.source.path', 'must be an absolute path');
+  }
+  if (!Number.isInteger(artifact.source.byte_size) || artifact.source.byte_size < 0) {
+    contractError('ingest_artifact.source.byte_size', 'must be a non-negative integer');
+  }
+  if (typeof artifact.source.fingerprint !== 'string'
+    || !SHA256_FINGERPRINT_RE.test(artifact.source.fingerprint)) {
+    contractError('ingest_artifact.source.fingerprint', 'must be a sha256:<hex> fingerprint');
+  }
+  for (const section of ['container', 'video', 'audio']) {
+    requireObject(artifact[section], `ingest_artifact.${section}`);
+  }
+  return artifact;
+}
+
 export function validateRepurposeManifest(manifest) {
   requireKeys(manifest, TOP_LEVEL_KEYS, 'manifest');
   if (typeof manifest.id !== 'string' || !PROJECT_ID_RE.test(manifest.id)) {
@@ -398,6 +429,35 @@ export class RepurposeProject {
     record.error = String(error);
     this.save();
     return record;
+  }
+
+  applyIngestArtifact(artifact, { artifactPath = DEFAULT_INGEST_ARTIFACT } = {}) {
+    validateIngestArtifact(artifact);
+    requireNonEmptyString(artifactPath, 'artifact_path');
+    if (this.manifest.source.type !== 'local_file') {
+      throw new Error('Cannot apply a local ingest artifact to a non-local source');
+    }
+
+    const previousFingerprint = this.manifest.source.fingerprint;
+    const sourceChanged = previousFingerprint !== artifact.source.fingerprint;
+    this.manifest.source.uri = path.normalize(artifact.source.path);
+    this.manifest.source.fingerprint = artifact.source.fingerprint;
+    this.manifest.engine_version = artifact.engine_version;
+    this.manifest.stages.ingest = {
+      state: 'completed',
+      artifact: artifactPath,
+      error: null,
+    };
+
+    if (sourceChanged) {
+      for (const stage of REPURPOSE_STAGES.slice(1)) {
+        this.manifest.stages[stage] = { state: 'pending', artifact: null, error: null };
+      }
+      this.manifest.candidates = [];
+      this.manifest.outputs = [];
+    }
+    this.save();
+    return { sourceChanged, manifest: this.manifest };
   }
 
   addCandidate({ proposedStartSec = null, proposedEndSec = null, metadata = {} } = {}) {

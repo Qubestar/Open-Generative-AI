@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 PROTOCOL_VERSION = 1
 MANIFEST_VERSION = 1
+INGEST_ARTIFACT_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -25,6 +26,7 @@ _SCHEMA_FILES = {
     "request": "worker-request.v1.schema.json",
     "event": "worker-event.v1.schema.json",
     "manifest": "project-manifest.v1.schema.json",
+    "ingest_artifact": "ingest-artifact.v1.schema.json",
 }
 
 

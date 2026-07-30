@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/ingest-artifact.v1.schema.json",
+  "title": "Vidmyo Repurpose ingest artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_version",
+    "engine_version",
+    "source",
+    "container",
+    "video",
+    "audio"
+  ],
+  "$defs": {
+    "nullableNumber": { "type": ["number", "null"] },
+    "nullableString": { "type": ["string", "null"] }
+  },
+  "properties": {
+    "artifact_version": { "const": 1 },
+    "engine_version": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "byte_size", "fingerprint"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "byte_size": { "type": "integer", "minimum": 0 },
+        "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format_names", "format_long_name", "duration_seconds"],
+      "properties": {
+        "format_names": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "format_long_name": { "$ref": "#/$defs/nullableString" },
+        "duration_seconds": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "video": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codec_name",
+        "width",
+        "height",
+        "average_frame_rate",
+        "real_frame_rate",
+        "duration_seconds"
+      ],
+      "properties": {
+        "codec_name": { "$ref": "#/$defs/nullableString" },
+        "width": { "type": ["integer", "null"], "minimum": 1 },
+        "height": { "type": ["integer", "null"], "minimum": 1 },
+        "average_frame_rate": { "$ref": "#/$defs/nullableNumber" },
+        "real_frame_rate": { "$ref": "#/$defs/nullableNumber" },
+        "duration_seconds": { "$ref": "#/$defs/nullableNumber" }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codec_name",
+        "sample_rate_hz",
+        "channels",
+        "channel_layout",
+        "duration_seconds"
+      ],
+      "properties": {
+        "codec_name": { "$ref": "#/$defs/nullableString" },
+        "sample_rate_hz": { "type": ["integer", "null"], "minimum": 1 },
+        "channels": { "type": ["integer", "null"], "minimum": 1 },
+        "channel_layout": { "$ref": "#/$defs/nullableString" },
+        "duration_seconds": { "$ref": "#/$defs/nullableNumber" }
+      }
+    }
+  }
+}

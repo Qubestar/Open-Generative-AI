@@ -3,6 +3,7 @@
 from .contracts import (
     MANIFEST_VERSION,
     PROTOCOL_VERSION,
+    INGEST_ARTIFACT_VERSION,
     ContractValidationError,
     load_schema,
     validate_document,
@@ -12,6 +13,7 @@ from .contracts import (
 __all__ = [
     "MANIFEST_VERSION",
     "PROTOCOL_VERSION",
+    "INGEST_ARTIFACT_VERSION",
     "ContractValidationError",
     "load_schema",
     "validate_document",
