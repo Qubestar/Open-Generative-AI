@@ -44,3 +44,7 @@ graphify-out/
 .tmp/
 .claude/
 skill-creator/
+
+# Local Vidmyo runtime and generated media (never commit)
+.vidmyo/
+videos/
