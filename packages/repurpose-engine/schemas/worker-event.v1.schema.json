@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/worker-event.v1.schema.json",
+  "title": "Vidmyo Repurpose worker event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "job_id",
+    "sequence",
+    "event",
+    "stage",
+    "timestamp",
+    "payload"
+  ],
+  "properties": {
+    "protocol_version": { "const": 1 },
+    "job_id": { "type": "string", "pattern": "^job_[A-Za-z0-9_-]+$" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "event": { "enum": ["accepted", "progress", "artifact", "completed", "error"] },
+    "stage": {
+      "enum": [
+        "ingest",
+        "transcribe",
+        "generate_candidates",
+        "rank",
+        "repair_boundaries",
+        "reframe",
+        "render"
+      ]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

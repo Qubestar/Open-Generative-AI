@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/project-manifest.v1.schema.json",
+  "title": "Vidmyo Repurpose project manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "protocol_version",
+    "engine_version",
+    "source",
+    "requested_clip_count",
+    "content_type",
+    "target_platforms",
+    "render_mode",
+    "render_defaults",
+    "stages",
+    "candidates",
+    "outputs",
+    "created_at",
+    "updated_at"
+  ],
+  "$defs": {
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "artifact", "error"],
+      "properties": {
+        "state": { "enum": ["pending", "running", "completed", "failed"] },
+        "artifact": { "type": ["string", "null"] },
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "decision",
+        "selected",
+        "proposed_start_sec",
+        "proposed_end_sec",
+        "metadata"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^clip_[0-9]{3,}$" },
+        "decision": { "enum": ["pending", "approved", "rejected"] },
+        "selected": { "type": "boolean" },
+        "proposed_start_sec": { "type": ["number", "null"], "minimum": 0 },
+        "proposed_end_sec": { "type": ["number", "null"], "minimum": 0 },
+        "metadata": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "selected": { "const": true } } },
+          "then": { "properties": { "decision": { "const": "approved" } } }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "id": { "type": "string", "pattern": "^repurpose_[A-Za-z0-9_-]+$" },
+    "version": { "const": 1 },
+    "protocol_version": { "const": 1 },
+    "engine_version": { "type": ["string", "null"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri", "fingerprint"],
+      "properties": {
+        "type": { "enum": ["local_file", "url"] },
+        "uri": { "type": "string", "minLength": 1 },
+        "fingerprint": { "type": ["string", "null"] }
+      }
+    },
+    "requested_clip_count": { "type": "integer", "minimum": 1 },
+    "content_type": { "type": "string", "minLength": 1 },
+    "target_platforms": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "render_mode": { "const": "manual_approval" },
+    "render_defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aspect_ratio", "crop_mode", "captions"],
+      "properties": {
+        "aspect_ratio": { "type": "string", "minLength": 1 },
+        "crop_mode": { "type": "string", "minLength": 1 },
+        "captions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "style", "translation_target_language"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "style": { "type": "string", "minLength": 1 },
+            "translation_target_language": { "type": ["string", "null"], "minLength": 2 }
+          }
+        }
+      }
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ingest",
+        "transcribe",
+        "generate_candidates",
+        "rank",
+        "repair_boundaries",
+        "reframe",
+        "render"
+      ],
+      "properties": {
+        "ingest": { "$ref": "#/$defs/stage" },
+        "transcribe": { "$ref": "#/$defs/stage" },
+        "generate_candidates": { "$ref": "#/$defs/stage" },
+        "rank": { "$ref": "#/$defs/stage" },
+        "repair_boundaries": { "$ref": "#/$defs/stage" },
+        "reframe": { "$ref": "#/$defs/stage" },
+        "render": { "$ref": "#/$defs/stage" }
+      }
+    },
+    "candidates": { "type": "array", "items": { "$ref": "#/$defs/candidate" } },
+    "outputs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

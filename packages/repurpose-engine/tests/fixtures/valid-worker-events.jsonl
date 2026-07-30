@@ -1,0 +1,3 @@
+{"protocol_version":1,"job_id":"job_contract_smoke","sequence":1,"event":"accepted","stage":"ingest","timestamp":"2026-07-30T10:00:00Z","payload":{"message":"request accepted"}}
+{"protocol_version":1,"job_id":"job_contract_smoke","sequence":2,"event":"progress","stage":"ingest","timestamp":"2026-07-30T10:00:01Z","payload":{"fraction":1.0}}
+{"protocol_version":1,"job_id":"job_contract_smoke","sequence":3,"event":"completed","stage":"ingest","timestamp":"2026-07-30T10:00:02Z","payload":{"artifacts":[]}}

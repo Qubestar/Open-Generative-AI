@@ -45,6 +45,13 @@ graphify-out/
 .claude/
 skill-creator/
 
+# Python package build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+packages/repurpose-engine/build/
+
 # Local Vidmyo runtime and generated media (never commit)
 .vidmyo/
 videos/
