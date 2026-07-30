@@ -1,0 +1,46 @@
+{
+  "id": "repurpose_fixture_001",
+  "version": 1,
+  "protocol_version": 1,
+  "engine_version": null,
+  "source": {
+    "type": "local_file",
+    "uri": "/tmp/source.mp4",
+    "fingerprint": null
+  },
+  "requested_clip_count": 5,
+  "content_type": "auto",
+  "target_platforms": ["youtube_shorts"],
+  "render_mode": "manual_approval",
+  "render_defaults": {
+    "aspect_ratio": "9:16",
+    "crop_mode": "auto",
+    "captions": {
+      "enabled": true,
+      "style": "clean",
+      "translation_target_language": null
+    }
+  },
+  "stages": {
+    "ingest": { "state": "pending", "artifact": null, "error": null },
+    "transcribe": { "state": "pending", "artifact": null, "error": null },
+    "generate_candidates": { "state": "pending", "artifact": null, "error": null },
+    "rank": { "state": "pending", "artifact": null, "error": null },
+    "repair_boundaries": { "state": "pending", "artifact": null, "error": null },
+    "reframe": { "state": "pending", "artifact": null, "error": null },
+    "render": { "state": "pending", "artifact": null, "error": null }
+  },
+  "candidates": [
+    {
+      "id": "clip_001",
+      "decision": "approved",
+      "selected": true,
+      "proposed_start_sec": 10.5,
+      "proposed_end_sec": 42.0,
+      "metadata": {}
+    }
+  ],
+  "outputs": [],
+  "created_at": "2026-07-30T10:00:00Z",
+  "updated_at": "2026-07-30T10:00:00Z"
+}

@@ -1,0 +1,38 @@
+{
+  "id": "repurpose_fixture_001",
+  "version": 1,
+  "protocol_version": 1,
+  "engine_version": null,
+  "source": { "type": "url", "uri": "https://example.com/video", "fingerprint": null },
+  "requested_clip_count": 3,
+  "content_type": "interview",
+  "target_platforms": ["tiktok"],
+  "render_mode": "manual_approval",
+  "render_defaults": {
+    "aspect_ratio": "9:16",
+    "crop_mode": "auto",
+    "captions": { "enabled": true, "style": "bold", "translation_target_language": "pl" }
+  },
+  "stages": {
+    "ingest": { "state": "completed", "artifact": "ingest.json", "error": null },
+    "transcribe": { "state": "completed", "artifact": "transcript.json", "error": null },
+    "generate_candidates": { "state": "completed", "artifact": "candidates.json", "error": null },
+    "rank": { "state": "completed", "artifact": "ranked.json", "error": null },
+    "repair_boundaries": { "state": "pending", "artifact": null, "error": null },
+    "reframe": { "state": "pending", "artifact": null, "error": null },
+    "render": { "state": "pending", "artifact": null, "error": null }
+  },
+  "candidates": [
+    {
+      "id": "candidate-one",
+      "decision": "pending",
+      "selected": false,
+      "proposed_start_sec": 1.0,
+      "proposed_end_sec": 30.0,
+      "metadata": {}
+    }
+  ],
+  "outputs": [],
+  "created_at": "2026-07-30T10:00:00Z",
+  "updated_at": "2026-07-30T10:00:00Z"
+}
