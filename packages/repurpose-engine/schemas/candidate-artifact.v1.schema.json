@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/candidate-artifact.v1.schema.json",
+  "title": "Vidmyo Repurpose candidate artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_version", "engine_version", "created_at", "versions", "source",
+    "provider", "generation_settings", "cache_key", "classification", "windows",
+    "outcome", "candidates"
+  ],
+  "$defs": {
+    "wordId": { "type": "string", "pattern": "^word_[0-9]{6}$" },
+    "time": { "type": "number", "minimum": 0 },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first_word_id", "last_word_id", "start_seconds", "end_seconds", "text"
+      ],
+      "properties": {
+        "first_word_id": { "$ref": "#/$defs/wordId" },
+        "last_word_id": { "$ref": "#/$defs/wordId" },
+        "start_seconds": { "$ref": "#/$defs/time" },
+        "end_seconds": { "$ref": "#/$defs/time" },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "properties": {
+    "artifact_version": { "const": 1 },
+    "engine_version": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "prompt", "classification", "windowing"],
+      "properties": {
+        "schema": { "const": "candidate-artifact.v1" },
+        "prompt": { "const": "candidate-prompt.v1" },
+        "classification": { "const": "content-classification.v1" },
+        "windowing": { "const": "transcript-windowing.v1" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "transcript_cache_key"],
+      "properties": {
+        "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "transcript_cache_key": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "model"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 }
+      }
+    },
+    "generation_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_clip_count", "content_type", "minimum_duration_seconds",
+        "maximum_duration_seconds", "target_window_words", "overlap_words",
+        "max_suggestions_per_window", "temperature", "structured_output", "streaming"
+      ],
+      "properties": {
+        "requested_clip_count": { "type": "integer", "minimum": 1 },
+        "content_type": { "type": "string", "minLength": 1 },
+        "minimum_duration_seconds": { "const": 20.0 },
+        "maximum_duration_seconds": { "const": 120.0 },
+        "target_window_words": { "const": 1500 },
+        "overlap_words": { "const": 300 },
+        "max_suggestions_per_window": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "temperature": { "const": 0.0 },
+        "structured_output": { "const": true },
+        "streaming": { "const": false }
+      }
+    },
+    "cache_key": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_type", "source", "evidence_word_ids", "reason"],
+      "properties": {
+        "content_type": {
+          "enum": [
+            "podcast", "interview", "lecture", "webinar", "commentary",
+            "talking_head", "general_speech"
+          ]
+        },
+        "source": { "enum": ["auto", "project_override", "project_fallback"] },
+        "evidence_word_ids": {
+          "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/wordId" }
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "windows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "segment_ids", "first_word_id", "last_word_id", "word_count",
+          "start_seconds", "end_seconds"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^window_[0-9]{6}$" },
+          "segment_ids": {
+            "type": "array", "minItems": 1, "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^segment_[0-9]{6}$" }
+          },
+          "first_word_id": { "$ref": "#/$defs/wordId" },
+          "last_word_id": { "$ref": "#/$defs/wordId" },
+          "word_count": { "type": "integer", "minimum": 1 },
+          "start_seconds": { "$ref": "#/$defs/time" },
+          "end_seconds": { "$ref": "#/$defs/time" }
+        }
+      }
+    },
+    "outcome": { "enum": ["candidates_generated", "no_candidates_found"] },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "provider_suggestion_id", "window_id", "title", "hook", "summary",
+          "selection_reason", "signal_types", "proposed_span", "evidence_spans"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^clip_[0-9]{3,}$" },
+          "provider_suggestion_id": { "type": "string", "minLength": 1 },
+          "window_id": { "type": "string", "pattern": "^window_[0-9]{6}$" },
+          "title": { "type": "string", "minLength": 1 },
+          "hook": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 },
+          "selection_reason": { "type": "string", "minLength": 1 },
+          "signal_types": {
+            "type": "array", "minItems": 1, "uniqueItems": true,
+            "items": {
+              "enum": ["story", "claim", "tip", "conflict", "revelation", "quote", "payoff"]
+            }
+          },
+          "proposed_span": { "$ref": "#/$defs/span" },
+          "evidence_spans": {
+            "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/span" }
+          }
+        }
+      }
+    }
+  }
+}

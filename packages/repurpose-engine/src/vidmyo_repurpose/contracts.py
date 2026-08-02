@@ -13,6 +13,7 @@ PROTOCOL_VERSION = 1
 MANIFEST_VERSION = 1
 INGEST_ARTIFACT_VERSION = 1
 TRANSCRIPT_ARTIFACT_VERSION = 1
+CANDIDATE_ARTIFACT_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -29,6 +30,7 @@ _SCHEMA_FILES = {
     "manifest": "project-manifest.v1.schema.json",
     "ingest_artifact": "ingest-artifact.v1.schema.json",
     "transcript_artifact": "transcript-artifact.v1.schema.json",
+    "candidate_artifact": "candidate-artifact.v1.schema.json",
 }
 
 
@@ -73,6 +75,8 @@ def validate_document(kind: str, document: Any) -> Any:
         _validate_manifest_semantics(document)
     elif kind == "transcript_artifact":
         _validate_transcript_semantics(document)
+    elif kind == "candidate_artifact":
+        _validate_candidate_semantics(document)
     return document
 
 
@@ -159,6 +163,47 @@ def _validate_manifest_semantics(manifest: dict[str, Any]) -> None:
     candidate_ids = [candidate["id"] for candidate in manifest["candidates"]]
     if len(candidate_ids) != len(set(candidate_ids)):
         raise ContractValidationError("candidates.id: candidate ids must be unique")
+
+
+def _validate_candidate_semantics(artifact: dict[str, Any]) -> None:
+    windows = artifact["windows"]
+    expected_window_ids = [f"window_{index:06d}" for index in range(1, len(windows) + 1)]
+    if [window["id"] for window in windows] != expected_window_ids:
+        raise ContractValidationError("windows.id: ids must be unique, sequential, and ordered")
+    window_ids = set(expected_window_ids)
+    expected_candidate_ids = [
+        f"clip_{index:03d}" for index in range(1, len(artifact["candidates"]) + 1)
+    ]
+    candidates = artifact["candidates"]
+    if [candidate["id"] for candidate in candidates] != expected_candidate_ids:
+        raise ContractValidationError("candidates.id: ids must be unique, sequential, and ordered")
+    provider_ids = [candidate["provider_suggestion_id"] for candidate in candidates]
+    if len(provider_ids) != len(set(provider_ids)):
+        raise ContractValidationError("candidates.provider_suggestion_id: ids must be unique")
+    for index, candidate in enumerate(candidates):
+        if candidate["window_id"] not in window_ids:
+            raise ContractValidationError(f"candidates.{index}.window_id: dangling window reference")
+        proposed = candidate["proposed_span"]
+        if proposed["end_seconds"] < proposed["start_seconds"]:
+            raise ContractValidationError(f"candidates.{index}.proposed_span: reversed timestamps")
+        duration = proposed["end_seconds"] - proposed["start_seconds"]
+        if duration < 20 or duration > 120:
+            raise ContractValidationError(
+                f"candidates.{index}.proposed_span: duration must be between 20 and 120 seconds"
+            )
+        for evidence_index, evidence in enumerate(candidate["evidence_spans"]):
+            if (
+                evidence["start_seconds"] < proposed["start_seconds"]
+                or evidence["end_seconds"] > proposed["end_seconds"]
+                or evidence["end_seconds"] < evidence["start_seconds"]
+            ):
+                raise ContractValidationError(
+                    f"candidates.{index}.evidence_spans.{evidence_index}: outside proposed span"
+                )
+    if artifact["outcome"] == "no_candidates_found" and candidates:
+        raise ContractValidationError("outcome: no_candidates_found requires an empty candidate list")
+    if artifact["outcome"] == "candidates_generated" and not candidates:
+        raise ContractValidationError("outcome: candidates_generated requires candidates")
 
 
 def validate_event_stream(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
