@@ -11,11 +11,17 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .contracts import (
+    CANDIDATE_ARTIFACT_VERSION,
     INGEST_ARTIFACT_VERSION,
     TRANSCRIPT_ARTIFACT_VERSION,
     ContractValidationError,
     validate_document,
     validate_event_stream,
+)
+from .candidates import (
+    CANDIDATE_ARTIFACT_RELATIVE_PATH,
+    CandidateGenerationError,
+    generate_candidates,
 )
 from .ingest import INGEST_ARTIFACT_RELATIVE_PATH, IngestError, ingest_project
 from .transcribe import (
@@ -234,6 +240,81 @@ def _transcribe(args: argparse.Namespace) -> int:
             signal.signal(signum, handler)
 
 
+def _candidates(args: argparse.Namespace) -> int:
+    request = validate_document("request", _read_json(args.request))
+    if request["stage"] != "generate_candidates":
+        raise ContractValidationError(
+            "stage: candidates command requires stage 'generate_candidates'"
+        )
+    sequence = 1
+    _emit(_event(request, sequence, "accepted", {
+        "message": "candidate generation request accepted",
+    }))
+    sequence += 1
+    cancellation = {"requested": False}
+    previous_handlers: dict[int, Any] = {}
+
+    def handle_signal(_signum: int, _frame: Any) -> None:
+        cancellation["requested"] = True
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, handle_signal)
+
+    def emit_progress(payload: dict[str, Any]) -> None:
+        nonlocal sequence
+        _emit(_event(request, sequence, "progress", payload))
+        sequence += 1
+
+    try:
+        result = generate_candidates(
+            request,
+            progress=emit_progress,
+            cancelled=lambda: cancellation["requested"],
+        )
+        outcome = result.artifact["outcome"]
+        _emit(_event(request, sequence, "artifact", {
+            "kind": "candidate_artifact",
+            "version": CANDIDATE_ARTIFACT_VERSION,
+            "path": result.path.relative_to(
+                Path(request["project_dir"]).expanduser().resolve()
+            ).as_posix(),
+            "cache_key": result.artifact["cache_key"],
+            "cache_hit": result.cache_hit,
+            "outcome": outcome,
+            "candidate_count": len(result.artifact["candidates"]),
+        }))
+        sequence += 1
+        _emit(_event(request, sequence, "completed", {
+            "artifacts": [{
+                "kind": "candidate_artifact",
+                "version": CANDIDATE_ARTIFACT_VERSION,
+                "path": CANDIDATE_ARTIFACT_RELATIVE_PATH.as_posix(),
+            }],
+            "cache_hit": result.cache_hit,
+            "outcome": outcome,
+        }))
+        return 0
+    except CandidateGenerationError as exc:
+        _emit(_event(request, sequence, "error", exc.payload()))
+        return 1
+    except ContractValidationError as exc:
+        failure = CandidateGenerationError(
+            code="candidate_request_invalid",
+            message=f"The candidate request or normalized output is invalid: {exc}.",
+            preserved=(
+                "The completed transcript, validated window caches, and any earlier valid "
+                "candidate artifact were preserved."
+            ),
+            next_action="Correct the version-1 request or input artifact and retry.",
+        )
+        _emit(_event(request, sequence, "error", failure.payload()))
+        return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vidmyo-repurpose")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -241,7 +322,10 @@ def build_parser() -> argparse.ArgumentParser:
     validate = commands.add_parser("validate", help="validate a versioned JSON document")
     validate.add_argument(
         "--kind",
-        choices=("request", "manifest", "ingest_artifact", "transcript_artifact"),
+        choices=(
+            "request", "manifest", "ingest_artifact", "transcript_artifact",
+            "candidate_artifact",
+        ),
         required=True,
     )
     validate.add_argument("path")
@@ -260,6 +344,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     transcribe.add_argument("--request", required=True)
     transcribe.set_defaults(handler=_transcribe)
+
+    candidates = commands.add_parser(
+        "generate-candidates",
+        help="create or reuse transcript-grounded candidate suggestions",
+    )
+    candidates.add_argument("--request", required=True)
+    candidates.set_defaults(handler=_candidates)
 
     doctor = commands.add_parser("doctor", help="read-only transcription model readiness")
     doctor.add_argument("--model", default=DEFAULT_MODEL)

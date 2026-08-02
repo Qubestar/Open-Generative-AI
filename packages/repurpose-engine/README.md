@@ -88,3 +88,59 @@ valid transcript remain intact. No-speech input completes with
 
 Automated tests inject all model/download/inference boundaries. They do not
 download models, access the network, require a GPU, or transcribe real media.
+
+## Transcript-grounded candidate suggestions
+
+After a completed version-1 transcript, submit a `generate_candidates` worker
+request naming `artifacts/transcript-artifact.v1.json` and an explicit
+OpenRouter model:
+
+```json
+{
+  "protocol_version": 1,
+  "job_id": "job_candidates_001",
+  "project_dir": "/path/to/repurpose-project",
+  "stage": "generate_candidates",
+  "input_artifacts": [{
+    "kind": "transcript_artifact",
+    "path": "artifacts/transcript-artifact.v1.json",
+    "version": 1
+  }],
+  "options": {"provider": "openrouter", "model": "openai/gpt-4.1-mini"}
+}
+```
+
+Set `OPENROUTER_API_KEY` only in the worker environment, then run:
+
+```bash
+vidmyo-repurpose generate-candidates --request /path/to/request.json
+```
+
+The key is sent only in the OpenRouter authorization header. It is never
+written to the request, project, candidate artifact, project-local cache,
+progress stream, or bounded error detail. The adapter is non-streaming and
+requires strict JSON Schema support from the explicitly selected model and
+route; it never switches to another provider or paid model.
+
+Candidate generation uses deterministic 1,500-word, segment-aligned windows
+with a segment-expanded 300-word overlap. `auto` content type classifies
+deterministic beginning/middle/ending transcript samples; explicit podcast,
+interview, lecture, webinar, commentary, and talking-head settings skip that
+call, while uncertain or unsupported speech uses `general_speech`. Proposed
+spans must reference exact transcript words and span 20–120 seconds. Evidence
+text and timestamps are reconstructed locally rather than trusted from model
+text.
+
+Each structured call has one attempt and at most two fixed-delay retries.
+Validated classification/window results are atomically cached under the
+project so a corrected retry can preserve earlier paid work. A matching final
+artifact is a no-call, no-rewrite cache hit. Cancellation preserves the
+transcript, completed window caches, and any earlier valid candidate artifact.
+A speech transcript with no worthwhile suggestions completes with
+`no_candidates_found`; a no-speech transcript stops with
+`candidate_no_speech` before provider construction.
+
+The artifact contains proposed candidates only. It does not score, rank,
+deduplicate, repair boundaries, approve, select, extract, render, or publish.
+Automated candidate tests use injected providers and HTTP boundaries and never
+use an API key or network request.

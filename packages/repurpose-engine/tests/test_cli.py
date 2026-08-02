@@ -9,6 +9,10 @@ from argparse import Namespace
 from pathlib import Path
 
 import vidmyo_repurpose.cli as cli
+from vidmyo_repurpose.candidates import (
+    CandidateGenerationError,
+    CandidateResult,
+)
 from vidmyo_repurpose.contracts import validate_event_stream
 from vidmyo_repurpose.transcribe import (
     TranscriptionResult,
@@ -257,4 +261,63 @@ def test_transcribe_cli_signal_cancellation_is_terminal(
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [event["event"] for event in events] == ["accepted", "progress", "error"]
     assert events[-1]["payload"]["code"] == "transcription_cancelled"
+    assert validate_event_stream(events) == events
+
+
+def test_candidates_cli_emits_ordered_artifact_and_no_candidates_outcome(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_candidates",
+        "project_dir": str(tmp_path), "stage": "generate_candidates",
+        "input_artifacts": [], "options": {"model": "openai/gpt-test"},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    artifact_path = tmp_path / "artifacts" / "candidate-artifact.v1.json"
+
+    def runner(_request, *, progress, cancelled):
+        assert cancelled() is False
+        progress({
+            "phase": "input_validation", "fraction": 0.1, "percent": 10,
+            "cache_hit": False, "message": "valid",
+        })
+        return CandidateResult({
+            "cache_key": "sha256:" + "a" * 64,
+            "outcome": "no_candidates_found", "candidates": [],
+        }, artifact_path, False)
+
+    monkeypatch.setattr(cli, "generate_candidates", runner)
+    assert cli._candidates(Namespace(request=str(request_path))) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == [
+        "accepted", "progress", "artifact", "completed",
+    ]
+    assert events[-1]["payload"]["outcome"] == "no_candidates_found"
+    assert events[-2]["payload"]["candidate_count"] == 0
+    assert validate_event_stream(events) == events
+
+
+def test_candidates_cli_cancellation_is_terminal_without_false_completion(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_candidates_cancel",
+        "project_dir": str(tmp_path), "stage": "generate_candidates",
+        "input_artifacts": [], "options": {"model": "openai/gpt-test"},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    def runner(_request, *, progress, cancelled):
+        progress({"phase": "input_validation", "message": "valid"})
+        raise CandidateGenerationError(
+            "candidate_generation_cancelled", "cancelled", "preserved", "retry",
+        )
+
+    monkeypatch.setattr(cli, "generate_candidates", runner)
+    assert cli._candidates(Namespace(request=str(request_path))) != 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "error"]
+    assert events[-1]["payload"]["code"] == "candidate_generation_cancelled"
     assert validate_event_stream(events) == events

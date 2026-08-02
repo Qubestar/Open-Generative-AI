@@ -29,7 +29,10 @@ def load_jsonl(name: str):
 
 
 @pytest.mark.parametrize(
-    "kind", ["request", "event", "manifest", "ingest_artifact", "transcript_artifact"]
+    "kind", [
+        "request", "event", "manifest", "ingest_artifact", "transcript_artifact",
+        "candidate_artifact",
+    ]
 )
 def test_schemas_are_valid_draft_2020_12(kind: str):
     Draft202012Validator.check_schema(load_schema(kind))
