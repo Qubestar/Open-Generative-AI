@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 PROTOCOL_VERSION = 1
 MANIFEST_VERSION = 1
 INGEST_ARTIFACT_VERSION = 1
+TRANSCRIPT_ARTIFACT_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -27,6 +28,7 @@ _SCHEMA_FILES = {
     "event": "worker-event.v1.schema.json",
     "manifest": "project-manifest.v1.schema.json",
     "ingest_artifact": "ingest-artifact.v1.schema.json",
+    "transcript_artifact": "transcript-artifact.v1.schema.json",
 }
 
 
@@ -69,7 +71,79 @@ def validate_document(kind: str, document: Any) -> Any:
         raise ContractValidationError(_format_error(errors[0]))
     if kind == "manifest":
         _validate_manifest_semantics(document)
+    elif kind == "transcript_artifact":
+        _validate_transcript_semantics(document)
     return document
+
+
+def _finite_time(value: Any, field: str) -> float:
+    import math
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ContractValidationError(f"{field}: must be a finite number")
+    return float(value)
+
+
+def _validate_transcript_semantics(artifact: dict[str, Any]) -> None:
+    duration = _finite_time(artifact["duration_seconds"], "duration_seconds")
+    segments = artifact["segments"]
+    words = artifact["words"]
+    expected_segment_ids = [f"segment_{index:06d}" for index in range(1, len(segments) + 1)]
+    expected_word_ids = [f"word_{index:06d}" for index in range(1, len(words) + 1)]
+    segment_ids = [segment["id"] for segment in segments]
+    word_ids = [word["id"] for word in words]
+    if segment_ids != expected_segment_ids:
+        raise ContractValidationError("segments.id: ids must be unique, sequential, and ordered")
+    if word_ids != expected_word_ids:
+        raise ContractValidationError("words.id: ids must be unique, sequential, and ordered")
+
+    previous_start = -1.0
+    previous_end = -1.0
+    segment_by_id: dict[str, dict[str, Any]] = {}
+    for index, segment in enumerate(segments):
+        root = f"segments.{index}"
+        start = _finite_time(segment["start_seconds"], f"{root}.start_seconds")
+        end = _finite_time(segment["end_seconds"], f"{root}.end_seconds")
+        if end < start:
+            raise ContractValidationError(f"{root}.end_seconds: cannot precede start_seconds")
+        if start < previous_start or end < previous_end:
+            raise ContractValidationError(f"{root}: timestamps must be ordered")
+        if end > duration:
+            raise ContractValidationError(f"{root}.end_seconds: exceeds source duration")
+        previous_start, previous_end = start, end
+        segment_by_id[segment["id"]] = segment
+
+    previous_start = -1.0
+    previous_end = -1.0
+    words_by_segment: dict[str, list[str]] = {segment_id: [] for segment_id in segment_ids}
+    for index, word in enumerate(words):
+        root = f"words.{index}"
+        start = _finite_time(word["start_seconds"], f"{root}.start_seconds")
+        end = _finite_time(word["end_seconds"], f"{root}.end_seconds")
+        if end < start:
+            raise ContractValidationError(f"{root}.end_seconds: cannot precede start_seconds")
+        if start < previous_start or end < previous_end:
+            raise ContractValidationError(f"{root}: timestamps must be ordered")
+        if end > duration:
+            raise ContractValidationError(f"{root}.end_seconds: exceeds source duration")
+        segment_id = word["segment_id"]
+        if segment_id not in segment_by_id:
+            raise ContractValidationError(f"{root}.segment_id: dangling segment reference")
+        segment = segment_by_id[segment_id]
+        if start < segment["start_seconds"] or end > segment["end_seconds"]:
+            raise ContractValidationError(f"{root}: timestamp lies outside its segment")
+        previous_start, previous_end = start, end
+        words_by_segment[segment_id].append(word["id"])
+
+    for index, segment in enumerate(segments):
+        if segment["word_ids"] != words_by_segment[segment["id"]]:
+            raise ContractValidationError(
+                f"segments.{index}.word_ids: references must exactly match ordered segment words"
+            )
+    if artifact["speech_detected"] != bool(segments or words):
+        raise ContractValidationError(
+            "speech_detected: must be true exactly when usable segments or words exist"
+        )
 
 
 def _validate_manifest_semantics(manifest: dict[str, Any]) -> None:

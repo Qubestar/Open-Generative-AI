@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/transcript-artifact.v1.schema.json",
+  "title": "Vidmyo Repurpose transcript artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_version", "engine_version", "created_at", "source", "cache_key",
+    "transcription", "duration_seconds", "speech_detected", "segments", "words"
+  ],
+  "$defs": {
+    "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "language": { "type": ["string", "null"], "minLength": 2 },
+    "time": { "type": "number", "minimum": 0 }
+  },
+  "properties": {
+    "artifact_version": { "const": 1 },
+    "engine_version": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "fingerprint"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "cache_key": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "transcription": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine", "library_version", "model", "device", "compute_type",
+        "word_timestamps", "requested_language", "detected_language",
+        "language_confidence"
+      ],
+      "properties": {
+        "engine": { "const": "faster-whisper" },
+        "library_version": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "device": { "type": "string", "minLength": 1 },
+        "compute_type": { "type": "string", "minLength": 1 },
+        "word_timestamps": { "const": true },
+        "requested_language": { "$ref": "#/$defs/language" },
+        "detected_language": { "$ref": "#/$defs/language" },
+        "language_confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "duration_seconds": { "type": "number", "exclusiveMinimum": 0 },
+    "speech_detected": { "type": "boolean" },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "start_seconds", "end_seconds", "text", "confidence", "word_ids"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^segment_[0-9]{6}$" },
+          "start_seconds": { "$ref": "#/$defs/time" },
+          "end_seconds": { "$ref": "#/$defs/time" },
+          "text": { "type": "string", "minLength": 1 },
+          "confidence": { "$ref": "#/$defs/confidence" },
+          "word_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^word_[0-9]{6}$" }
+          }
+        }
+      }
+    },
+    "words": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "segment_id", "start_seconds", "end_seconds", "text", "confidence"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^word_[0-9]{6}$" },
+          "segment_id": { "type": "string", "pattern": "^segment_[0-9]{6}$" },
+          "start_seconds": { "$ref": "#/$defs/time" },
+          "end_seconds": { "$ref": "#/$defs/time" },
+          "text": { "type": "string", "minLength": 1 },
+          "confidence": { "$ref": "#/$defs/confidence" }
+        }
+      }
+    }
+  }
+}

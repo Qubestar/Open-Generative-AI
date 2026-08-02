@@ -2,9 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
+
+import vidmyo_repurpose.cli as cli
+from vidmyo_repurpose.contracts import validate_event_stream
+from vidmyo_repurpose.transcribe import (
+    TranscriptionResult,
+    cancellation_error,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -173,3 +182,79 @@ def test_reserved_url_ingest_fails_without_invoking_any_binary(tmp_path: Path):
     assert events[-1]["payload"]["code"] == "url_ingest_not_implemented"
     assert "local file" in events[-1]["payload"]["next_action"].lower()
     assert not (tmp_path / "artifacts").exists()
+
+
+def test_doctor_empty_cache_is_machine_readable_read_only_and_defaults_small(tmp_path: Path):
+    cache = tmp_path / "empty-model-cache"
+    result = run_cli("doctor", "--model-cache", str(cache))
+    assert result.returncode != 0
+    document = json.loads(result.stdout)
+    assert document["model"] == "small"
+    assert document["model_ready"] is False
+    assert document["setup_command"] in document["message"]
+    assert not cache.exists()
+
+
+def test_transcribe_cli_emits_ordered_schema_valid_success_events(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1,
+        "job_id": "job_cli_transcribe",
+        "project_dir": str(tmp_path),
+        "stage": "transcribe",
+        "input_artifacts": [],
+        "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    artifact_path = tmp_path / "artifacts" / "transcript-artifact.v1.json"
+
+    def runner(_request, *, progress, cancelled):
+        assert cancelled() is False
+        progress({
+            "phase": "input_validation", "fraction": 0.1, "percent": 10,
+            "processed_seconds": 0, "total_seconds": 5, "cache_hit": False,
+            "message": "valid",
+        })
+        return TranscriptionResult({"cache_key": "sha256:" + "a" * 64}, artifact_path, False)
+
+    monkeypatch.setattr(cli, "transcribe_project", runner)
+    assert cli._transcribe(Namespace(request=str(request_path))) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == [
+        "accepted", "progress", "artifact", "completed",
+    ]
+    assert validate_event_stream(events) == events
+
+
+def test_transcribe_cli_signal_cancellation_is_terminal(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1,
+        "job_id": "job_cli_cancel",
+        "project_dir": str(tmp_path),
+        "stage": "transcribe",
+        "input_artifacts": [],
+        "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    def runner(_request, *, progress, cancelled):
+        progress({
+            "phase": "input_validation", "fraction": 0.1, "percent": 10,
+            "processed_seconds": 0, "total_seconds": 5, "cache_hit": False,
+            "message": "valid",
+        })
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert cancelled() is True
+        raise cancellation_error()
+
+    monkeypatch.setattr(cli, "transcribe_project", runner)
+    assert cli._transcribe(Namespace(request=str(request_path))) != 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "error"]
+    assert events[-1]["payload"]["code"] == "transcription_cancelled"
+    assert validate_event_stream(events) == events
