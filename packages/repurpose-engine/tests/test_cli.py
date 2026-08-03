@@ -14,6 +14,7 @@ from vidmyo_repurpose.candidates import (
     CandidateResult,
 )
 from vidmyo_repurpose.contracts import validate_event_stream
+from vidmyo_repurpose.ranking import RankingError, RankingResult
 from vidmyo_repurpose.transcribe import (
     TranscriptionResult,
     cancellation_error,
@@ -320,4 +321,55 @@ def test_candidates_cli_cancellation_is_terminal_without_false_completion(
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [event["event"] for event in events] == ["accepted", "progress", "error"]
     assert events[-1]["payload"]["code"] == "candidate_generation_cancelled"
+    assert validate_event_stream(events) == events
+
+
+def test_rank_cli_emits_ordered_artifact_and_completed_events(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_rank", "project_dir": str(tmp_path),
+        "stage": "rank", "input_artifacts": [], "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    artifact_path = tmp_path / "artifacts" / "ranking-artifact.v1.json"
+
+    def runner(_request, *, progress, cancelled):
+        assert cancelled() is False
+        progress({"phase": "validating_inputs", "fraction": 0.1, "cache_hit": False, "message": "valid"})
+        return RankingResult({
+            "cache_key": "sha256:" + "a" * 64,
+            "candidates": [{"candidate": {"id": "clip_001"}}],
+            "shortlist_candidate_ids": ["clip_001"],
+        }, artifact_path, False)
+
+    monkeypatch.setattr(cli, "rank_candidates", runner)
+    assert cli._rank(Namespace(request=str(request_path))) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "artifact", "completed"]
+    assert events[-2]["payload"]["kind"] == "ranking_artifact"
+    assert events[-2]["payload"]["shortlist_count"] == 1
+    assert validate_event_stream(events) == events
+
+
+def test_rank_cli_failure_is_terminal_without_false_completion(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_rank_fail", "project_dir": str(tmp_path),
+        "stage": "rank", "input_artifacts": [], "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    def runner(_request, *, progress, cancelled):
+        progress({"phase": "validating_inputs", "message": "valid"})
+        raise RankingError("ranking_cancelled", "cancelled", "preserved", "retry")
+
+    monkeypatch.setattr(cli, "rank_candidates", runner)
+    assert cli._rank(Namespace(request=str(request_path))) != 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "error"]
+    assert events[-1]["payload"]["code"] == "ranking_cancelled"
     assert validate_event_stream(events) == events

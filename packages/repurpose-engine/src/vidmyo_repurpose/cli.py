@@ -13,6 +13,7 @@ from typing import Any, Sequence
 from .contracts import (
     CANDIDATE_ARTIFACT_VERSION,
     INGEST_ARTIFACT_VERSION,
+    RANKING_ARTIFACT_VERSION,
     TRANSCRIPT_ARTIFACT_VERSION,
     ContractValidationError,
     validate_document,
@@ -24,6 +25,7 @@ from .candidates import (
     generate_candidates,
 )
 from .ingest import INGEST_ARTIFACT_RELATIVE_PATH, IngestError, ingest_project
+from .ranking import RANKING_ARTIFACT_RELATIVE_PATH, RankingError, rank_candidates
 from .transcribe import (
     DEFAULT_MODEL,
     TRANSCRIPT_ARTIFACT_RELATIVE_PATH,
@@ -315,6 +317,73 @@ def _candidates(args: argparse.Namespace) -> int:
             signal.signal(signum, handler)
 
 
+def _rank(args: argparse.Namespace) -> int:
+    request = validate_document("request", _read_json(args.request))
+    if request["stage"] != "rank":
+        raise ContractValidationError("stage: rank command requires stage 'rank'")
+    sequence = 1
+    _emit(_event(request, sequence, "accepted", {"message": "candidate ranking request accepted"}))
+    sequence += 1
+    cancellation = {"requested": False}
+    previous_handlers: dict[int, Any] = {}
+
+    def handle_signal(_signum: int, _frame: Any) -> None:
+        cancellation["requested"] = True
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, handle_signal)
+
+    def emit_progress(payload: dict[str, Any]) -> None:
+        nonlocal sequence
+        _emit(_event(request, sequence, "progress", payload))
+        sequence += 1
+
+    try:
+        result = rank_candidates(
+            request,
+            progress=emit_progress,
+            cancelled=lambda: cancellation["requested"],
+        )
+        _emit(_event(request, sequence, "artifact", {
+            "kind": "ranking_artifact",
+            "version": RANKING_ARTIFACT_VERSION,
+            "path": result.path.relative_to(Path(request["project_dir"]).expanduser().resolve()).as_posix(),
+            "cache_key": result.artifact["cache_key"],
+            "cache_hit": result.cache_hit,
+            "candidate_count": len(result.artifact["candidates"]),
+            "shortlist_count": len(result.artifact["shortlist_candidate_ids"]),
+        }))
+        sequence += 1
+        _emit(_event(request, sequence, "completed", {
+            "artifacts": [{
+                "kind": "ranking_artifact",
+                "version": RANKING_ARTIFACT_VERSION,
+                "path": RANKING_ARTIFACT_RELATIVE_PATH.as_posix(),
+            }],
+            "cache_hit": result.cache_hit,
+        }))
+        return 0
+    except RankingError as exc:
+        _emit(_event(request, sequence, "error", exc.payload()))
+        return 1
+    except ContractValidationError as exc:
+        failure = RankingError(
+            code="ranking_request_invalid",
+            message=f"The ranking request or normalized output is invalid: {exc}.",
+            preserved=(
+                "The completed transcript and candidate artifact, validated ranking caches, "
+                "and any earlier valid ranking artifact were preserved."
+            ),
+            next_action="Correct the version-1 request or input artifact and retry ranking.",
+        )
+        _emit(_event(request, sequence, "error", failure.payload()))
+        return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vidmyo-repurpose")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -325,6 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(
             "request", "manifest", "ingest_artifact", "transcript_artifact",
             "candidate_artifact",
+            "ranking_artifact",
         ),
         required=True,
     )
@@ -351,6 +421,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     candidates.add_argument("--request", required=True)
     candidates.set_defaults(handler=_candidates)
+
+    rank = commands.add_parser(
+        "rank", help="score, deduplicate, and shortlist candidate suggestions",
+    )
+    rank.add_argument("--request", required=True)
+    rank.set_defaults(handler=_rank)
 
     doctor = commands.add_parser("doctor", help="read-only transcription model readiness")
     doctor.add_argument("--model", default=DEFAULT_MODEL)

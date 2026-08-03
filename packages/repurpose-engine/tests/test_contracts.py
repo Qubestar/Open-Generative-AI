@@ -32,6 +32,7 @@ def load_jsonl(name: str):
     "kind", [
         "request", "event", "manifest", "ingest_artifact", "transcript_artifact",
         "candidate_artifact",
+        "ranking_artifact",
     ]
 )
 def test_schemas_are_valid_draft_2020_12(kind: str):
