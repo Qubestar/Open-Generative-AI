@@ -365,6 +365,59 @@ def test_final_cache_hit_reuses_without_provider_call_or_rewrite(tmp_path):
     assert provider.requests == []
 
 
+def test_final_cache_rejects_schema_valid_but_wrong_shortlist(tmp_path):
+    items = [
+        candidate("clip_001", 1, 30),
+        candidate("clip_002", 200, 229),
+    ]
+    request, _ = setup_project(tmp_path, items)
+    manifest_path = tmp_path / "repurpose.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_clip_count"] = 1
+    manifest_path.write_text(json.dumps(manifest))
+    candidate_path = tmp_path / "artifacts" / "candidate-artifact.v1.json"
+    candidate_document = json.loads(candidate_path.read_text())
+    candidate_document["generation_settings"]["requested_clip_count"] = 1
+    candidate_path.write_text(json.dumps(candidate_document))
+    provider = FakeProvider([
+        response(judgment(items[0], score=90), judgment(items[1], score=70)),
+    ])
+    first = rank_candidates(request, provider=provider, retry_delay=lambda _seconds: None)
+    assert first.artifact["shortlist_candidate_ids"] == ["clip_001"]
+
+    tampered = json.loads(first.path.read_text())
+    by_id = {item["candidate"]["id"]: item for item in tampered["candidates"]}
+    stronger, weaker = by_id["clip_001"], by_id["clip_002"]
+    stronger["recommended"] = False
+    stronger["shortlist_order"] = None
+    stronger["diversity"] = {
+        "adjusted_score": None,
+        "repeated_topic_penalty": 0.0,
+        "nearby_time_penalty": 0.0,
+    }
+    stronger["shortlist_exclusion_reasons"] = [
+        "Not included because the requested advisory shortlist count was reached."
+    ]
+    weaker["recommended"] = True
+    weaker["shortlist_order"] = 1
+    weaker["diversity"] = {
+        "adjusted_score": weaker["clip_potential"],
+        "repeated_topic_penalty": 0.0,
+        "nearby_time_penalty": 0.0,
+    }
+    weaker["shortlist_exclusion_reasons"] = []
+    tampered["shortlist_candidate_ids"] = ["clip_002"]
+    validate_document("ranking_artifact", tampered)
+    first.path.write_text(json.dumps(tampered))
+
+    cached_provider = FakeProvider([])
+    rebuilt = rank_candidates(
+        request, provider=cached_provider, retry_delay=lambda _seconds: None
+    )
+    assert rebuilt.cache_hit is False
+    assert rebuilt.artifact["shortlist_candidate_ids"] == ["clip_001"]
+    assert cached_provider.requests == []
+
 def test_per_window_resume_reuses_success_and_semantic_change_invalidates(tmp_path):
     items = [
         candidate("clip_001", 1, 30, window="window_000001"),

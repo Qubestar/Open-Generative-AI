@@ -8,6 +8,7 @@ import math
 import os
 import re
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -601,13 +602,14 @@ def group_duplicates(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def select_shortlist(entries: list[dict[str, Any]], count: int, source_duration: float) -> list[str]:
+def _select_shortlist(
+    entries: list[dict[str, Any]], count: int, nearby_threshold: float
+) -> list[str]:
     eligible = [
         entry for entry in entries
         if entry["hard_gate"]["passed"] and entry["near_duplicate_of"] is None
     ]
     selected: list[dict[str, Any]] = []
-    nearby_threshold = max(180.0, 0.05 * source_duration)
     while eligible and len(selected) < count:
         choices = []
         for entry in eligible:
@@ -646,6 +648,55 @@ def select_shortlist(entries: list[dict[str, Any]], count: int, source_duration:
     return [entry["candidate"]["id"] for entry in selected]
 
 
+def select_shortlist(entries: list[dict[str, Any]], count: int, source_duration: float) -> list[str]:
+    return _select_shortlist(entries, count, max(180.0, 0.05 * source_duration))
+
+
+def _deterministic_derivatives_match(artifact: Mapping[str, Any]) -> bool:
+    entries = deepcopy(artifact["candidates"])
+    for entry in entries:
+        entry["shortlist_exclusion_reasons"] = list(entry["hard_gate"]["exclusion_reasons"])
+        entry["duplicate_group_id"] = None
+        entry["near_duplicate_of"] = None
+        entry["diversity"] = {
+            "adjusted_score": None,
+            "repeated_topic_penalty": 0.0,
+            "nearby_time_penalty": 0.0,
+        }
+        entry["shortlist_order"] = None
+        entry["recommended"] = False
+
+    expected_groups = group_duplicates(entries)
+    expected_shortlist = _select_shortlist(
+        entries,
+        artifact["settings"]["requested_clip_count"],
+        artifact["thresholds"]["nearby_time_seconds"],
+    )
+    for entry in entries:
+        if not entry["recommended"] and not entry["shortlist_exclusion_reasons"]:
+            entry["shortlist_exclusion_reasons"].append(
+                "Not included because the requested advisory shortlist count was reached."
+            )
+
+    if artifact["duplicate_groups"] != expected_groups:
+        return False
+    if artifact["shortlist_candidate_ids"] != expected_shortlist:
+        return False
+    expected_by_id = {entry["candidate"]["id"]: entry for entry in entries}
+    derived_fields = (
+        "shortlist_exclusion_reasons",
+        "duplicate_group_id",
+        "near_duplicate_of",
+        "diversity",
+        "shortlist_order",
+        "recommended",
+    )
+    return all(
+        all(item[field] == expected_by_id[item["candidate"]["id"]][field] for field in derived_fields)
+        for item in artifact["candidates"]
+    )
+
+
 def _matching_final(
     path: Path,
     key: str,
@@ -667,6 +718,7 @@ def _matching_final(
         and artifact["source"]["candidate_content_hash"] == _canonical_hash(expected_candidates)
         and artifact["source"]["candidate_count"] == len(candidate_artifact["candidates"])
         and embedded == expected_candidates
+        and _deterministic_derivatives_match(artifact)
     )
     return artifact if matches else None
 
