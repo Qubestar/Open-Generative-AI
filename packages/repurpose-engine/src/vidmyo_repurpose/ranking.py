@@ -701,6 +701,11 @@ def _matching_final(
     path: Path,
     key: str,
     candidate_artifact: Mapping[str, Any],
+    *,
+    provider: Mapping[str, Any],
+    versions: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    thresholds: Mapping[str, Any],
 ) -> dict[str, Any] | None:
     try:
         artifact = validate_document(
@@ -714,6 +719,11 @@ def _matching_final(
     expected_candidates = sorted(candidate_artifact["candidates"], key=lambda item: item["id"])
     matches = (
         artifact["cache_key"] == key
+        and artifact["provider"] == provider
+        and artifact["versions"] == versions
+        and artifact["settings"] == settings
+        and artifact["weights"] == WEIGHTS
+        and artifact["thresholds"] == thresholds
         and artifact["source"]["candidate_cache_key"] == candidate_artifact["cache_key"]
         and artifact["source"]["candidate_content_hash"] == _canonical_hash(expected_candidates)
         and artifact["source"]["candidate_count"] == len(candidate_artifact["candidates"])
@@ -799,7 +809,15 @@ def rank_candidates(
         "thresholds": thresholds, "settings": settings,
     })
     artifact_path = project_dir / RANKING_ARTIFACT_RELATIVE_PATH
-    cached_final = _matching_final(artifact_path, key, candidate_artifact)
+    cached_final = _matching_final(
+        artifact_path,
+        key,
+        candidate_artifact,
+        provider={"id": provider_id, "model": model_id},
+        versions=versions,
+        settings=settings,
+        thresholds=thresholds,
+    )
     if cached_final is not None:
         progress({
             "phase": "final_cache_hit", "fraction": 1.0, "percent": 100,
