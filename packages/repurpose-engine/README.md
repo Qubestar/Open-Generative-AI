@@ -1,9 +1,9 @@
 # Vidmyo Repurpose engine contracts
 
-This package is the versioned contract boundary, local ingest worker, and
-local transcription worker for Vidmyo Repurpose. It requires Python 3.10 or newer. Local ingest also
+This package is the versioned contract boundary and staged worker for Vidmyo
+Repurpose. It requires Python 3.10 or newer. Local ingest also
 requires `ffprobe` from FFmpeg to be available on `PATH`; it does not download,
-copy, rank, reframe, render, or upload source media.
+copy, reframe, render, or upload source media.
 
 Install for development and tests:
 
@@ -144,3 +144,73 @@ The artifact contains proposed candidates only. It does not score, rank,
 deduplicate, repair boundaries, approve, select, extract, render, or publish.
 Automated candidate tests use injected providers and HTTP boundaries and never
 use an API key or network request.
+
+## Explainable candidate ranking and deduplication
+
+After candidate generation completes, submit a `rank` request naming both the
+current transcript and candidate artifacts:
+
+```json
+{
+  "protocol_version": 1,
+  "job_id": "job_rank_001",
+  "project_dir": "/path/to/repurpose-project",
+  "stage": "rank",
+  "input_artifacts": [
+    {
+      "kind": "transcript_artifact",
+      "path": "artifacts/transcript-artifact.v1.json",
+      "version": 1
+    },
+    {
+      "kind": "candidate_artifact",
+      "path": "artifacts/candidate-artifact.v1.json",
+      "version": 1
+    }
+  ],
+  "options": {}
+}
+```
+
+Run it with:
+
+```bash
+vidmyo-repurpose rank --request /path/to/rank-request.json
+```
+
+Ranking reuses the candidate artifact's explicit provider and model by default;
+`options.model` may supply another explicit validated model. The same strict,
+non-streaming structured-output boundary, temperature zero, bounded retries,
+secret redaction, and no-fallback policy apply. Tests inject this boundary and
+never make a paid or network request.
+
+The transcript-only `clip_potential` score is a weighted explanation, not a
+prediction of virality, views, or engagement. Its fixed version-1 weights are
+20% hook strength, 20% standalone coherence, 15% information value/novelty,
+15% narrative arc/payoff, 15% context independence, 10% duration fitness, and
+5% transcript-evidence quality. The first five components require a reason and
+exact in-candidate word evidence. Duration fitness is 100 from 30–90 seconds
+and declines linearly to 60 at 20 and 120 seconds. Evidence quality is mean
+available word confidence; absent confidence produces a neutral 50.
+
+Standalone coherence or context independence below 40 excludes a candidate
+from the advisory shortlist without deleting it. Temporal duplicates use IoU
+`>= 0.70` or containment `>= 0.85`. Semantic duplicates require the same
+normalized topic and token-set Jaccard claim similarity `>= 0.80`. Transitive
+groups retain every member; the highest-potential member (candidate ID on ties)
+is the stable leader.
+
+The first shortlist item is the strongest eligible group leader. Later items
+apply a 12-point repeated-topic penalty and an 8-point nearby-time penalty;
+nearby means within the greater of 180 seconds or 5% of source duration. The
+shortlist stays shorter when unique eligible candidates run out. It is advisory
+only: the version-1 ranking artifact never approves, rejects, selects for
+rendering, repairs boundaries, or creates media.
+
+Validated scores are atomically cached per candidate window. Exact final
+matches are no-call, no-rewrite cache hits; interrupted retries reuse completed
+window calls. Candidate content, transcript/candidate cache identity,
+provider/model, prompt/schema/scoring/dedupe versions, weights, thresholds, or
+requested shortlist count all participate in cache identity. Failures and
+cancellation preserve completed inputs, valid caches, and any earlier ranking
+artifact.

@@ -14,6 +14,7 @@ MANIFEST_VERSION = 1
 INGEST_ARTIFACT_VERSION = 1
 TRANSCRIPT_ARTIFACT_VERSION = 1
 CANDIDATE_ARTIFACT_VERSION = 1
+RANKING_ARTIFACT_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -31,6 +32,7 @@ _SCHEMA_FILES = {
     "ingest_artifact": "ingest-artifact.v1.schema.json",
     "transcript_artifact": "transcript-artifact.v1.schema.json",
     "candidate_artifact": "candidate-artifact.v1.schema.json",
+    "ranking_artifact": "ranking-artifact.v1.schema.json",
 }
 
 
@@ -77,6 +79,8 @@ def validate_document(kind: str, document: Any) -> Any:
         _validate_transcript_semantics(document)
     elif kind == "candidate_artifact":
         _validate_candidate_semantics(document)
+    elif kind == "ranking_artifact":
+        _validate_ranking_semantics(document)
     return document
 
 
@@ -204,6 +208,89 @@ def _validate_candidate_semantics(artifact: dict[str, Any]) -> None:
         raise ContractValidationError("outcome: no_candidates_found requires an empty candidate list")
     if artifact["outcome"] == "candidates_generated" and not candidates:
         raise ContractValidationError("outcome: candidates_generated requires candidates")
+
+
+def _validate_ranking_semantics(artifact: dict[str, Any]) -> None:
+    import hashlib
+
+    candidates = artifact["candidates"]
+    embedded_candidates = sorted(
+        (item["candidate"] for item in candidates), key=lambda item: item["id"]
+    )
+    content_hash = "sha256:" + hashlib.sha256(
+        json.dumps(embedded_candidates, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if artifact["source"]["candidate_count"] != len(candidates):
+        raise ContractValidationError("source.candidate_count: must match retained candidates")
+    if artifact["source"]["candidate_content_hash"] != content_hash:
+        raise ContractValidationError("source.candidate_content_hash: must match retained candidates")
+    ids = [item["candidate"].get("id") for item in candidates]
+    if any(not isinstance(candidate_id, str) for candidate_id in ids) or len(ids) != len(set(ids)):
+        raise ContractValidationError("candidates.candidate.id: ids must be present and unique")
+    ranks = [item["overall_rank"] for item in candidates]
+    if sorted(ranks) != list(range(1, len(candidates) + 1)):
+        raise ContractValidationError("candidates.overall_rank: must be unique and sequential")
+    expected = sorted(candidates, key=lambda item: (-item["clip_potential"], item["candidate"]["id"]))
+    if [item["candidate"]["id"] for item in expected] != [
+        item["candidate"]["id"] for item in sorted(candidates, key=lambda item: item["overall_rank"])
+    ]:
+        raise ContractValidationError("candidates.overall_rank: must follow clip potential and id")
+    shortlisted = artifact["shortlist_candidate_ids"]
+    orders = {
+        item["candidate"]["id"]: item["shortlist_order"]
+        for item in candidates if item["shortlist_order"] is not None
+    }
+    if shortlisted != [candidate_id for candidate_id, _ in sorted(orders.items(), key=lambda item: item[1])]:
+        raise ContractValidationError("shortlist_candidate_ids: must match sequential shortlist order")
+    if len(shortlisted) > artifact["settings"]["requested_clip_count"]:
+        raise ContractValidationError("shortlist_candidate_ids: exceeds requested clip count")
+    by_id = {item["candidate"]["id"]: item for item in candidates}
+    weights = artifact["weights"]
+    for index, item in enumerate(candidates):
+        candidate_id = item["candidate"]["id"]
+        expected_potential = round(sum(
+            item["components"][name]["score"] * weight for name, weight in weights.items()
+        ), 1)
+        if item["clip_potential"] != expected_potential:
+            raise ContractValidationError(f"candidates.{index}.clip_potential: does not match weighted components")
+        expected_gate = (
+            item["components"]["standalone_coherence"]["score"] >= artifact["thresholds"]["hard_gate"]
+            and item["components"]["context_independence"]["score"] >= artifact["thresholds"]["hard_gate"]
+        )
+        if item["hard_gate"]["passed"] != expected_gate:
+            raise ContractValidationError(f"candidates.{index}.hard_gate: does not match component thresholds")
+        if item["recommended"] != (candidate_id in shortlisted):
+            raise ContractValidationError(f"candidates.{index}.recommended: must match shortlist membership")
+        if item["recommended"] and item["shortlist_exclusion_reasons"]:
+            raise ContractValidationError(f"candidates.{index}.shortlist_exclusion_reasons: recommended candidate cannot be excluded")
+        if not item["recommended"] and not item["shortlist_exclusion_reasons"]:
+            raise ContractValidationError(f"candidates.{index}.shortlist_exclusion_reasons: excluded candidate requires a reason")
+        if item["shortlist_order"] is not None and (
+            not item["hard_gate"]["passed"] or item["near_duplicate_of"] is not None
+        ):
+            raise ContractValidationError(f"candidates.{index}: gated or duplicate candidate cannot be shortlisted")
+        if item["near_duplicate_of"] is not None and item["near_duplicate_of"] not in by_id:
+            raise ContractValidationError(f"candidates.{index}.near_duplicate_of: dangling candidate reference")
+        forbidden = {"approved", "approval", "selected", "render", "render_output", "output", "boundary_repair"}
+
+        def contains_forbidden(value: Any) -> bool:
+            if isinstance(value, dict):
+                return bool(forbidden & set(value)) or any(contains_forbidden(child) for child in value.values())
+            if isinstance(value, list):
+                return any(contains_forbidden(child) for child in value)
+            return False
+
+        if contains_forbidden(item):
+            raise ContractValidationError(f"candidates.{index}: ranking artifact contains an automatic decision")
+    group_ids = set()
+    for group_index, group in enumerate(artifact["duplicate_groups"]):
+        if group["id"] in group_ids:
+            raise ContractValidationError("duplicate_groups.id: ids must be unique")
+        group_ids.add(group["id"])
+        if group["leader_candidate_id"] not in group["member_candidate_ids"]:
+            raise ContractValidationError(f"duplicate_groups.{group_index}: leader must be a member")
+        if any(candidate_id not in by_id for candidate_id in group["member_candidate_ids"]):
+            raise ContractValidationError(f"duplicate_groups.{group_index}: dangling candidate reference")
 
 
 def validate_event_stream(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
