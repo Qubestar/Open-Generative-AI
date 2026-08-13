@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/reframe-artifact.v2.schema.json",
+  "title": "Vidmyo Repurpose unified reframe artifact v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_version", "engine_version", "created_at", "versions", "source", "settings", "cache_key", "requested_candidate_ids", "candidates"],
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "candidateId": {"type": "string", "pattern": "^clip_[0-9]{3,}$"},
+    "face": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y", "width", "height", "confidence"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0}, "y": {"type": "number", "minimum": 0},
+        "width": {"type": "number", "exclusiveMinimum": 0}, "height": {"type": "number", "exclusiveMinimum": 0},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "crop": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 2}, "height": {"type": "integer", "minimum": 2}
+      }
+    },
+    "output": {
+      "type": "object", "additionalProperties": false,
+      "required": ["origin", "requested", "state", "path", "fingerprint", "duration_seconds", "width", "height"],
+      "properties": {
+        "origin": {"enum": ["v1_reuse", "v2_render"]},
+        "requested": {"type": "boolean"},
+        "state": {"enum": ["not_requested", "pending", "completed"]},
+        "path": {"type": ["string", "null"]},
+        "fingerprint": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "duration_seconds": {"type": ["number", "null"], "minimum": 0},
+        "width": {"type": ["integer", "null"], "minimum": 1},
+        "height": {"type": ["integer", "null"], "minimum": 1}
+      }
+    }
+  },
+  "properties": {
+    "artifact_version": {"const": 2},
+    "engine_version": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "versions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "detector", "association", "tracker", "renderer"],
+      "properties": {
+        "schema": {"const": "reframe-artifact.v2"},
+        "detector": {"const": "yunet-2023mar.v1"},
+        "association": {"const": "spatial-pair.v1"},
+        "tracker": {"const": "two-speaker-panel-tracker.v1"},
+        "renderer": {"const": "vertical-split-preview.v1"}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fingerprint", "boundary_cache_key", "reframe_v1_cache_key", "reframe_v1_fingerprint"],
+      "properties": {
+        "fingerprint": {"$ref": "#/$defs/hash"}, "boundary_cache_key": {"$ref": "#/$defs/hash"},
+        "reframe_v1_cache_key": {"$ref": "#/$defs/hash"}, "reframe_v1_fingerprint": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "settings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["output_width", "output_height", "panel_width", "panel_height", "confidence_threshold", "paired_coverage_threshold", "safe_zone_margin", "safe_zone_target", "dead_zone_fraction", "smoothing_alpha", "maximum_step_fraction", "minimum_hold_seconds", "association_ambiguity_fraction", "duration_tolerance_seconds"],
+      "properties": {
+        "output_width": {"const": 1080}, "output_height": {"const": 1920},
+        "panel_width": {"const": 1080}, "panel_height": {"const": 960},
+        "confidence_threshold": {"const": 0.75}, "paired_coverage_threshold": {"const": 0.8},
+        "safe_zone_margin": {"const": 0.1}, "safe_zone_target": {"const": 0.95},
+        "dead_zone_fraction": {"const": 0.05}, "smoothing_alpha": {"const": 0.35},
+        "maximum_step_fraction": {"const": 0.08}, "minimum_hold_seconds": {"const": 1.0},
+        "association_ambiguity_fraction": {"const": 0.05},
+        "duration_tolerance_seconds": {"type": "number", "minimum": 0.05}
+      }
+    },
+    "cache_key": {"$ref": "#/$defs/hash"},
+    "requested_candidate_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/candidateId"}},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["candidate_id", "input", "mode", "fallback_reason", "paired_coverage", "mean_pair_confidence", "safe_zone_fraction", "samples", "segments", "output_key", "output"],
+        "properties": {
+          "candidate_id": {"$ref": "#/$defs/candidateId"},
+          "input": {
+            "type": "object", "additionalProperties": false,
+            "required": ["path", "fingerprint", "duration_seconds", "width", "height", "v1_mode", "v1_fallback_reason", "v1_output_path", "v1_output_fingerprint"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1}, "fingerprint": {"$ref": "#/$defs/hash"},
+              "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+              "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1},
+              "v1_mode": {"enum": ["track", "fallback"]},
+              "v1_fallback_reason": {"type": ["string", "null"]},
+              "v1_output_path": {"type": "string", "minLength": 1},
+              "v1_output_fingerprint": {"$ref": "#/$defs/hash"}
+            }
+          },
+          "mode": {"enum": ["single_speaker_reuse", "two_speaker_split", "fallback_reuse"]},
+          "fallback_reason": {"type": ["string", "null"]},
+          "paired_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+          "mean_pair_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "safe_zone_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["time_seconds", "faces", "assignment", "upper_crop", "lower_crop", "association_ambiguous"],
+              "properties": {
+                "time_seconds": {"type": "number", "minimum": 0},
+                "faces": {"type": "array", "items": {"$ref": "#/$defs/face"}},
+                "assignment": {
+                  "oneOf": [
+                    {"type": "null"},
+                    {"type": "object", "additionalProperties": false, "required": ["upper_face_index", "lower_face_index"], "properties": {"upper_face_index": {"type": "integer", "minimum": 0}, "lower_face_index": {"type": "integer", "minimum": 0}}}
+                  ]
+                },
+                "upper_crop": {"oneOf": [{"$ref": "#/$defs/crop"}, {"type": "null"}]},
+                "lower_crop": {"oneOf": [{"$ref": "#/$defs/crop"}, {"type": "null"}]},
+                "association_ambiguous": {"type": "boolean"}
+              }
+            }
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["start_seconds", "end_seconds", "upper", "lower"],
+              "properties": {
+                "start_seconds": {"type": "number", "minimum": 0}, "end_seconds": {"type": "number", "minimum": 0},
+                "upper": {"$ref": "#/$defs/crop"}, "lower": {"$ref": "#/$defs/crop"}
+              }
+            }
+          },
+          "output_key": {"$ref": "#/$defs/hash"},
+          "output": {"$ref": "#/$defs/output"}
+        }
+      }
+    }
+  }
+}

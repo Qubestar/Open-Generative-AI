@@ -17,6 +17,7 @@ CANDIDATE_ARTIFACT_VERSION = 1
 RANKING_ARTIFACT_VERSION = 1
 BOUNDARY_ARTIFACT_VERSION = 1
 REFRAME_ARTIFACT_VERSION = 1
+REFRAME_ARTIFACT_V2_VERSION = 2
 STAGES = (
     "ingest",
     "transcribe",
@@ -37,6 +38,7 @@ _SCHEMA_FILES = {
     "ranking_artifact": "ranking-artifact.v1.schema.json",
     "boundary_artifact": "boundary-artifact.v1.schema.json",
     "reframe_artifact": "reframe-artifact.v1.schema.json",
+    "reframe_artifact_v2": "reframe-artifact.v2.schema.json",
 }
 
 
@@ -89,6 +91,8 @@ def validate_document(kind: str, document: Any) -> Any:
         _validate_boundary_semantics(document)
     elif kind == "reframe_artifact":
         _validate_reframe_semantics(document)
+    elif kind == "reframe_artifact_v2":
+        _validate_reframe_v2_semantics(document)
     return document
 
 
@@ -361,6 +365,104 @@ def _validate_reframe_semantics(artifact: dict[str, Any]) -> None:
                 raise ContractValidationError(f"{root}.output: completed output must be 1080x1920")
         elif any(output[field] is not None for field in ("path", "fingerprint", "duration_seconds", "width", "height")):
             raise ContractValidationError(f"{root}.output: non-completed output must be empty")
+
+
+def _validate_reframe_v2_semantics(artifact: dict[str, Any]) -> None:
+    candidates = artifact["candidates"]
+    ids = [item["candidate_id"] for item in candidates]
+    if len(ids) != len(set(ids)):
+        raise ContractValidationError("candidates.candidate_id: ids must be unique")
+    requested = artifact["requested_candidate_ids"]
+    if len(requested) != len(set(requested)) or any(item not in set(ids) for item in requested):
+        raise ContractValidationError("requested_candidate_ids: must be unique retained candidates")
+    for index, item in enumerate(candidates):
+        root = f"candidates.{index}"
+        requested_here = item["candidate_id"] in requested
+        output = item["output"]
+        if output["requested"] != requested_here:
+            raise ContractValidationError(f"{root}.output.requested: must match request")
+        if item["mode"] == "two_speaker_split":
+            if item["fallback_reason"] is not None or not item["segments"] or output["origin"] != "v2_render":
+                raise ContractValidationError(f"{root}: split mode requires segments, v2 rendering, and no fallback")
+            if item["input"]["v1_mode"] != "fallback" or item["input"]["v1_fallback_reason"] != "multiple_faces":
+                raise ContractValidationError(f"{root}: split mode requires the v1 multiple-faces fallback")
+            if item["paired_coverage"] < artifact["settings"]["paired_coverage_threshold"]:
+                raise ContractValidationError(f"{root}.paired_coverage: split mode is below the required threshold")
+            if item["mean_pair_confidence"] < artifact["settings"]["confidence_threshold"]:
+                raise ContractValidationError(f"{root}.mean_pair_confidence: split mode is below the required threshold")
+            if item["safe_zone_fraction"] < artifact["settings"]["safe_zone_target"]:
+                raise ContractValidationError(f"{root}.safe_zone_fraction: split mode is below the required threshold")
+        else:
+            if item["segments"]:
+                raise ContractValidationError(f"{root}.segments: reused output cannot contain panel segments")
+            if output["origin"] != "v1_reuse":
+                raise ContractValidationError(f"{root}.output.origin: reused mode must name v1_reuse")
+            if item["mode"] == "single_speaker_reuse" and (
+                item["fallback_reason"] is not None or item["input"]["v1_mode"] != "track"
+            ):
+                raise ContractValidationError(f"{root}: single-speaker reuse must preserve a tracked v1 output")
+            if item["mode"] == "fallback_reuse" and item["fallback_reason"] is None:
+                raise ContractValidationError(f"{root}.fallback_reason: fallback reuse requires a reason")
+            if item["mode"] == "fallback_reuse" and item["input"]["v1_mode"] != "fallback":
+                raise ContractValidationError(f"{root}: fallback reuse must preserve a fallback v1 output")
+        if output["origin"] == "v1_reuse" and output["state"] != ("completed" if requested_here else "not_requested"):
+            raise ContractValidationError(f"{root}.output.state: v1 reuse must be immediately complete when requested")
+        if not requested_here and output["state"] != "not_requested":
+            raise ContractValidationError(f"{root}.output.state: unrequested output must remain not_requested")
+        if output["state"] == "completed":
+            required = ("path", "fingerprint", "duration_seconds", "width", "height")
+            if any(output[field] is None for field in required):
+                raise ContractValidationError(f"{root}.output: completed output is incomplete")
+            if output["width"] != 1080 or output["height"] != 1920:
+                raise ContractValidationError(f"{root}.output: completed output must be 1080x1920")
+            if abs(output["duration_seconds"] - item["input"]["duration_seconds"]) > artifact["settings"]["duration_tolerance_seconds"]:
+                raise ContractValidationError(f"{root}.output.duration_seconds: completed output differs from its input")
+            if output["origin"] == "v1_reuse" and (
+                output["path"] != item["input"]["v1_output_path"]
+                or output["fingerprint"] != item["input"]["v1_output_fingerprint"]
+            ):
+                raise ContractValidationError(f"{root}.output: v1 reuse must preserve the exact v1 output")
+            if output["origin"] == "v2_render":
+                expected_path = f"artifacts/reframed-previews-v2/{item['candidate_id']}.two-speaker.vertical.mp4"
+                if output["path"] != expected_path:
+                    raise ContractValidationError(f"{root}.output.path: v2 render must use the deterministic candidate path")
+        elif any(output[field] is not None for field in ("path", "fingerprint", "duration_seconds", "width", "height")):
+            raise ContractValidationError(f"{root}.output: non-completed output must be empty")
+        previous_sample_time = -1.0
+        for sample_index, sample in enumerate(item["samples"]):
+            sample_time = _finite_time(sample["time_seconds"], f"{root}.samples.{sample_index}.time_seconds")
+            if sample_time < previous_sample_time or sample_time > item["input"]["duration_seconds"]:
+                raise ContractValidationError(f"{root}.samples.{sample_index}.time_seconds: samples must be ordered within the input")
+            previous_sample_time = sample_time
+            assignment = sample["assignment"]
+            crops = sample["upper_crop"], sample["lower_crop"]
+            if assignment is None and any(crop is not None for crop in crops):
+                raise ContractValidationError(f"{root}.samples.{sample_index}: crops require an assignment")
+            if assignment is not None:
+                if any(crop is None for crop in crops):
+                    raise ContractValidationError(f"{root}.samples.{sample_index}: assignment requires both crops")
+                face_count = len(sample["faces"])
+                if assignment["upper_face_index"] == assignment["lower_face_index"]:
+                    raise ContractValidationError(f"{root}.samples.{sample_index}.assignment: panel faces must be distinct")
+                if assignment["upper_face_index"] >= face_count or assignment["lower_face_index"] >= face_count:
+                    raise ContractValidationError(f"{root}.samples.{sample_index}.assignment: face index is out of range")
+            for crop_name, crop in (("upper_crop", sample["upper_crop"]), ("lower_crop", sample["lower_crop"])):
+                if crop is not None and (
+                    crop["x"] + crop["width"] > item["input"]["width"]
+                    or crop["y"] + crop["height"] > item["input"]["height"]
+                ):
+                    raise ContractValidationError(f"{root}.samples.{sample_index}.{crop_name}: crop exceeds the source frame")
+        previous_segment_end = 0.0
+        for segment_index, segment in enumerate(item["segments"]):
+            start = _finite_time(segment["start_seconds"], f"{root}.segments.{segment_index}.start_seconds")
+            end = _finite_time(segment["end_seconds"], f"{root}.segments.{segment_index}.end_seconds")
+            if start < previous_segment_end or end <= start or end > item["input"]["duration_seconds"]:
+                raise ContractValidationError(f"{root}.segments.{segment_index}: segments must be ordered, positive, and within the input")
+            previous_segment_end = end
+            for panel_name in ("upper", "lower"):
+                crop = segment[panel_name]
+                if crop["x"] + crop["width"] > item["input"]["width"] or crop["y"] + crop["height"] > item["input"]["height"]:
+                    raise ContractValidationError(f"{root}.segments.{segment_index}.{panel_name}: crop exceeds the source frame")
 
 
 def validate_event_stream(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -34,6 +34,11 @@ from .candidates import (
 from .ingest import INGEST_ARTIFACT_RELATIVE_PATH, IngestError, ingest_project
 from .ranking import RANKING_ARTIFACT_RELATIVE_PATH, RankingError, rank_candidates
 from .reframe import REFRAME_ARTIFACT_RELATIVE_PATH, ReframeError, reframe_previews
+from .reframe_two import (
+    REFRAME_V2_ARTIFACT_RELATIVE_PATH,
+    TwoSpeakerReframeError,
+    upgrade_reframe_previews,
+)
 from .transcribe import (
     DEFAULT_MODEL,
     TRANSCRIPT_ARTIFACT_RELATIVE_PATH,
@@ -508,6 +513,62 @@ def _reframe(args: argparse.Namespace) -> int:
             signal.signal(signum, handler)
 
 
+def _reframe_two(args: argparse.Namespace) -> int:
+    request = validate_document("request", _read_json(args.request))
+    if request["stage"] != "reframe":
+        raise ContractValidationError("stage: reframe-two command requires stage 'reframe'")
+    sequence = 1
+    _emit(_event(request, sequence, "accepted", {"message": "two-speaker reframe request accepted"}))
+    sequence += 1
+    cancellation = {"requested": False}
+    previous_handlers: dict[int, Any] = {}
+
+    def handle_signal(_signum: int, _frame: Any) -> None:
+        cancellation["requested"] = True
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, handle_signal)
+
+    def emit_progress(payload: dict[str, Any]) -> None:
+        nonlocal sequence
+        _emit(_event(request, sequence, "progress", payload))
+        sequence += 1
+
+    try:
+        result = upgrade_reframe_previews(
+            request, progress=emit_progress, cancelled=lambda: cancellation["requested"],
+        )
+        completed = [item for item in result.artifact["candidates"] if item["output"]["state"] == "completed"]
+        _emit(_event(request, sequence, "artifact", {
+            "kind": "reframe_artifact", "version": 2,
+            "path": result.path.relative_to(Path(request["project_dir"]).expanduser().resolve()).as_posix(),
+            "cache_key": result.artifact["cache_key"], "cache_hit": result.cache_hit,
+            "preview_count": len(completed),
+        }))
+        sequence += 1
+        _emit(_event(request, sequence, "completed", {
+            "artifacts": [{"kind": "reframe_artifact", "version": 2, "path": REFRAME_V2_ARTIFACT_RELATIVE_PATH.as_posix()}],
+            "cache_hit": result.cache_hit, "preview_count": len(completed),
+        }))
+        return 0
+    except TwoSpeakerReframeError as exc:
+        _emit(_event(request, sequence, "error", exc.payload()))
+        return 1
+    except ContractValidationError as exc:
+        failure = TwoSpeakerReframeError(
+            "two_speaker_request_invalid",
+            f"The two-speaker request or normalized output is invalid: {exc}.",
+            "The source, Issue 6 previews, reframe v1 artifact, and every earlier valid output were preserved.",
+            "Correct the version-1 request or input artifacts and retry.",
+        )
+        _emit(_event(request, sequence, "error", failure.payload()))
+        return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vidmyo-repurpose")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -521,6 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
             "ranking_artifact",
             "boundary_artifact",
             "reframe_artifact",
+            "reframe_artifact_v2",
         ),
         required=True,
     )
@@ -565,6 +627,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reframe.add_argument("--request", required=True)
     reframe.set_defaults(handler=_reframe)
+
+    reframe_two = commands.add_parser(
+        "reframe-two", help="create stable two-speaker vertical split previews",
+    )
+    reframe_two.add_argument("--request", required=True)
+    reframe_two.set_defaults(handler=_reframe_two)
 
     doctor = commands.add_parser("doctor", help="read-only transcription model readiness")
     doctor.add_argument("--model", default=DEFAULT_MODEL)
