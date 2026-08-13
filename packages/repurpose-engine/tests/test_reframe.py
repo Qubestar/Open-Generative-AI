@@ -117,6 +117,20 @@ def test_missing_samples_below_coverage_threshold_fall_back():
     assert plan["fallback_reason"] == "insufficient_face_coverage"
 
 
+def test_missing_frames_cannot_inflate_observed_safe_zone_score():
+    times = [index * 0.5 for index in range(20)]
+    detections = (
+        [[face(700)] for _ in range(14)]
+        + [[face(1200)], [face(700)]]
+        + [[] for _ in range(4)]
+    )
+    plan = plan_tracking(detections, times, 1920, 1080, 10.0)
+    assert plan["coverage"] == 0.8
+    assert plan["safe_zone_fraction"] == round(15 / 16, 6)
+    assert plan["mode"] == "fallback"
+    assert plan["fallback_reason"] == "unsafe_crop"
+
+
 def test_default_reframes_completed_recommended_preview_and_records_artifact(tmp_path):
     request = prepared_reframe(tmp_path)
     media = ReframeMedia()

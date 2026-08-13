@@ -253,6 +253,7 @@ def plan_tracking(detections: list[list[dict[str, float]]], times: list[float], 
     samples = []
     segments = []
     safe = 0
+    confident_observed = 0
     max_x, max_y = width - crop_width, height - crop_height
     if present:
         first_face = present[0]
@@ -287,7 +288,10 @@ def plan_tracking(detections: list[list[dict[str, float]]], times: list[float], 
                 last_x, last_y, last_move = _clamp(last_x, 0, max_x), _clamp(last_y, 0, max_y), timestamp
             crop_x, crop_y = int(round(last_x)), int(round(last_y))
             margin_x, margin_y = crop_width * SAFE_ZONE_MARGIN, crop_height * SAFE_ZONE_MARGIN
-            if (
+            confidently_detected = len(faces) == 1 and face["confidence"] >= CONFIDENCE_THRESHOLD
+            if confidently_detected:
+                confident_observed += 1
+            if confidently_detected and (
                 protected_x >= crop_x + margin_x and protected_y >= crop_y + margin_y
                 and protected_x + protected_w <= crop_x + crop_width - margin_x
                 and protected_y + protected_h <= crop_y + crop_height - margin_y
@@ -300,7 +304,7 @@ def plan_tracking(detections: list[list[dict[str, float]]], times: list[float], 
                 "start_seconds": timestamp, "end_seconds": round(end, 6),
                 "x": crop_x, "y": crop_y, "width": crop_width, "height": crop_height,
             })
-    safe_fraction = round(safe / len(times), 6)
+    safe_fraction = round(safe / confident_observed, 6) if confident_observed else 0.0
     if reason is None and safe_fraction < SAFE_ZONE_TARGET:
         reason = "unsafe_crop"
     return {
