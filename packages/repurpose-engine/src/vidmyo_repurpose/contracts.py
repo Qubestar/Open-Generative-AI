@@ -15,6 +15,7 @@ INGEST_ARTIFACT_VERSION = 1
 TRANSCRIPT_ARTIFACT_VERSION = 1
 CANDIDATE_ARTIFACT_VERSION = 1
 RANKING_ARTIFACT_VERSION = 1
+BOUNDARY_ARTIFACT_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -33,6 +34,7 @@ _SCHEMA_FILES = {
     "transcript_artifact": "transcript-artifact.v1.schema.json",
     "candidate_artifact": "candidate-artifact.v1.schema.json",
     "ranking_artifact": "ranking-artifact.v1.schema.json",
+    "boundary_artifact": "boundary-artifact.v1.schema.json",
 }
 
 
@@ -81,6 +83,8 @@ def validate_document(kind: str, document: Any) -> Any:
         _validate_candidate_semantics(document)
     elif kind == "ranking_artifact":
         _validate_ranking_semantics(document)
+    elif kind == "boundary_artifact":
+        _validate_boundary_semantics(document)
     return document
 
 
@@ -291,6 +295,38 @@ def _validate_ranking_semantics(artifact: dict[str, Any]) -> None:
             raise ContractValidationError(f"duplicate_groups.{group_index}: leader must be a member")
         if any(candidate_id not in by_id for candidate_id in group["member_candidate_ids"]):
             raise ContractValidationError(f"duplicate_groups.{group_index}: dangling candidate reference")
+
+
+def _validate_boundary_semantics(artifact: dict[str, Any]) -> None:
+    candidates = artifact["candidates"]
+    ids = [item["candidate_id"] for item in candidates]
+    if len(ids) != len(set(ids)):
+        raise ContractValidationError("candidates.candidate_id: ids must be unique")
+    by_id = set(ids)
+    requested = artifact["requested_candidate_ids"]
+    if len(requested) != len(set(requested)) or any(item not in by_id for item in requested):
+        raise ContractValidationError("requested_candidate_ids: must be unique retained candidates")
+    for index, item in enumerate(candidates):
+        proposed = item["proposed_span"]
+        repaired = item["repaired_span"]
+        if proposed["end_seconds"] < proposed["start_seconds"]:
+            raise ContractValidationError(f"candidates.{index}.proposed_span: reversed timestamps")
+        if repaired["end_seconds"] < repaired["start_seconds"]:
+            raise ContractValidationError(f"candidates.{index}.repaired_span: reversed timestamps")
+        duration = repaired["end_seconds"] - repaired["start_seconds"]
+        if duration < 20 or duration > 120:
+            raise ContractValidationError(f"candidates.{index}.repaired_span: duration must be 20–120 seconds")
+        if repaired["start_seconds"] > proposed["start_seconds"] or repaired["end_seconds"] < proposed["end_seconds"]:
+            raise ContractValidationError(f"candidates.{index}.repaired_span: cannot lose proposed words")
+        extraction = item["extraction"]
+        requested_here = item["candidate_id"] in requested
+        if extraction["requested"] != requested_here:
+            raise ContractValidationError(f"candidates.{index}.extraction.requested: must match request")
+        if extraction["state"] == "completed":
+            if not extraction["path"] or not extraction["fingerprint"] or extraction["duration_seconds"] is None:
+                raise ContractValidationError(f"candidates.{index}.extraction: completed output is incomplete")
+        elif any(extraction[field] is not None for field in ("path", "fingerprint", "duration_seconds")):
+            raise ContractValidationError(f"candidates.{index}.extraction: non-completed output must be empty")
 
 
 def validate_event_stream(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

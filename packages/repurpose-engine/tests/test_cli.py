@@ -9,6 +9,7 @@ from argparse import Namespace
 from pathlib import Path
 
 import vidmyo_repurpose.cli as cli
+from vidmyo_repurpose.boundaries import BoundaryError, BoundaryResult
 from vidmyo_repurpose.candidates import (
     CandidateGenerationError,
     CandidateResult,
@@ -372,4 +373,56 @@ def test_rank_cli_failure_is_terminal_without_false_completion(
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [event["event"] for event in events] == ["accepted", "progress", "error"]
     assert events[-1]["payload"]["code"] == "ranking_cancelled"
+    assert validate_event_stream(events) == events
+
+
+def test_boundaries_cli_emits_ordered_artifact_and_completed_events(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_boundaries",
+        "project_dir": str(tmp_path), "stage": "repair_boundaries",
+        "input_artifacts": [], "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    artifact_path = tmp_path / "artifacts" / "boundary-artifact.v1.json"
+
+    def runner(_request, *, progress, cancelled):
+        assert cancelled() is False
+        progress({"phase": "validating_inputs", "fraction": 0.1, "cache_hit": False, "message": "valid"})
+        return BoundaryResult({
+            "cache_key": "sha256:" + "a" * 64,
+            "candidates": [{"extraction": {"state": "completed"}}],
+        }, artifact_path, False)
+
+    monkeypatch.setattr(cli, "repair_and_extract", runner)
+    assert cli._boundaries(Namespace(request=str(request_path))) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "artifact", "completed"]
+    assert events[-2]["payload"]["kind"] == "boundary_artifact"
+    assert events[-2]["payload"]["preview_count"] == 1
+    assert validate_event_stream(events) == events
+
+
+def test_boundaries_cli_failure_is_terminal_without_false_completion(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_boundaries_fail",
+        "project_dir": str(tmp_path), "stage": "repair_boundaries",
+        "input_artifacts": [], "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    def runner(_request, *, progress, cancelled):
+        progress({"phase": "validating_inputs", "message": "valid"})
+        raise BoundaryError("boundary_repair_cancelled", "cancelled", "preserved", "retry")
+
+    monkeypatch.setattr(cli, "repair_and_extract", runner)
+    assert cli._boundaries(Namespace(request=str(request_path))) != 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "error"]
+    assert events[-1]["payload"]["code"] == "boundary_repair_cancelled"
     assert validate_event_stream(events) == events

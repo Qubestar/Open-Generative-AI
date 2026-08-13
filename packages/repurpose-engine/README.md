@@ -214,3 +214,30 @@ provider/model, prompt/schema/scoring/dedupe versions, weights, thresholds, or
 requested shortlist count all participate in cache identity. Failures and
 cancellation preserve completed inputs, valid caches, and any earlier ranking
 artifact.
+
+## Boundary repair and local preview extraction
+
+After ranking completes, submit a `repair_boundaries` request naming the
+current ingest, transcript, and ranking artifacts:
+
+```bash
+vidmyo-repurpose repair-boundaries --request /path/to/boundary-request.json
+```
+
+By default, Vidmyo repairs and extracts only the advisory shortlist, in its
+existing order. Set `options.candidate_ids` to extract any explicit set of
+retained candidates on demand. Optional `boundary_overrides` select exact
+first and last transcript word IDs; otherwise the engine preserves the
+candidate's word-safe span and snaps outward to nearby detected silence when
+that remains within 20–120 seconds.
+
+The worker writes `artifacts/boundary-artifact.v1.json` atomically and creates
+source-aspect H.264/AAC preview clips under `artifacts/preview-clips/`. It
+validates duration, audio, video, and fingerprints before marking a preview
+complete. Exact retries are no-rewrite cache hits; changed target requests
+reuse already validated clips. Cancellation stops at a safe candidate boundary
+and preserves completed previews for retry.
+
+This stage is entirely local: it makes no provider or network call and never
+uploads or modifies the source. It does not approve candidates, change ranking,
+reframe, caption, translate, produce final delivery media, or publish anything.

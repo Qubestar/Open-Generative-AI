@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .contracts import (
+    BOUNDARY_ARTIFACT_VERSION,
     CANDIDATE_ARTIFACT_VERSION,
     INGEST_ARTIFACT_VERSION,
     RANKING_ARTIFACT_VERSION,
@@ -18,6 +19,11 @@ from .contracts import (
     ContractValidationError,
     validate_document,
     validate_event_stream,
+)
+from .boundaries import (
+    BOUNDARY_ARTIFACT_RELATIVE_PATH,
+    BoundaryError,
+    repair_and_extract,
 )
 from .candidates import (
     CANDIDATE_ARTIFACT_RELATIVE_PATH,
@@ -384,6 +390,69 @@ def _rank(args: argparse.Namespace) -> int:
             signal.signal(signum, handler)
 
 
+def _boundaries(args: argparse.Namespace) -> int:
+    request = validate_document("request", _read_json(args.request))
+    if request["stage"] != "repair_boundaries":
+        raise ContractValidationError("stage: repair command requires stage 'repair_boundaries'")
+    sequence = 1
+    _emit(_event(request, sequence, "accepted", {"message": "boundary repair request accepted"}))
+    sequence += 1
+    cancellation = {"requested": False}
+    previous_handlers: dict[int, Any] = {}
+
+    def handle_signal(_signum: int, _frame: Any) -> None:
+        cancellation["requested"] = True
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, handle_signal)
+
+    def emit_progress(payload: dict[str, Any]) -> None:
+        nonlocal sequence
+        _emit(_event(request, sequence, "progress", payload))
+        sequence += 1
+
+    try:
+        result = repair_and_extract(
+            request, progress=emit_progress,
+            cancelled=lambda: cancellation["requested"],
+        )
+        completed = [
+            item for item in result.artifact["candidates"]
+            if item["extraction"]["state"] == "completed"
+        ]
+        _emit(_event(request, sequence, "artifact", {
+            "kind": "boundary_artifact", "version": BOUNDARY_ARTIFACT_VERSION,
+            "path": result.path.relative_to(Path(request["project_dir"]).expanduser().resolve()).as_posix(),
+            "cache_key": result.artifact["cache_key"], "cache_hit": result.cache_hit,
+            "preview_count": len(completed),
+        }))
+        sequence += 1
+        _emit(_event(request, sequence, "completed", {
+            "artifacts": [{
+                "kind": "boundary_artifact", "version": BOUNDARY_ARTIFACT_VERSION,
+                "path": BOUNDARY_ARTIFACT_RELATIVE_PATH.as_posix(),
+            }],
+            "cache_hit": result.cache_hit, "preview_count": len(completed),
+        }))
+        return 0
+    except BoundaryError as exc:
+        _emit(_event(request, sequence, "error", exc.payload()))
+        return 1
+    except ContractValidationError as exc:
+        failure = BoundaryError(
+            "boundary_request_invalid",
+            f"The repair request or normalized output is invalid: {exc}.",
+            "The source, upstream artifacts, completed previews, and earlier valid boundary artifact were preserved.",
+            "Correct the version-1 request or input artifacts and retry.",
+        )
+        _emit(_event(request, sequence, "error", failure.payload()))
+        return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vidmyo-repurpose")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -395,6 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
             "request", "manifest", "ingest_artifact", "transcript_artifact",
             "candidate_artifact",
             "ranking_artifact",
+            "boundary_artifact",
         ),
         required=True,
     )
@@ -427,6 +497,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rank.add_argument("--request", required=True)
     rank.set_defaults(handler=_rank)
+
+    boundaries = commands.add_parser(
+        "repair-boundaries", help="repair word-safe boundaries and extract local previews",
+    )
+    boundaries.add_argument("--request", required=True)
+    boundaries.set_defaults(handler=_boundaries)
 
     doctor = commands.add_parser("doctor", help="read-only transcription model readiness")
     doctor.add_argument("--model", default=DEFAULT_MODEL)
