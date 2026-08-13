@@ -269,5 +269,38 @@ candidate.
 
 YuNet is bundled with its license and checksum, so reframing performs no model
 download, upload, account login, provider call, or paid API request. It does
-not recognize identities, approve candidates, create two-speaker layouts, add
-captions, create final masters, or publish media.
+not recognize identities, approve candidates, add captions, create final
+masters, or publish media.
+
+## Stable two-speaker split layouts
+
+After single-speaker reframing, submit `reframe-two` with exactly the current
+completed `reframe_artifact` v1 and matching `boundary_artifact` v1:
+
+```bash
+vidmyo-repurpose reframe-two --request /path/to/reframe-two-request.json
+```
+
+Single-speaker tracked outputs are reused byte-for-byte. A candidate that used
+the v1 `multiple_faces` fallback is eligible for a local two-speaker layout when
+exactly two confident faces remain visible and spatially unambiguous for at
+least 80% of samples. The source-left person is assigned to the upper 1080×960
+panel and source-right person to the lower panel. Each panel is independently
+smoothed and protected by the same safe-crop rules.
+
+Missing or extra faces, low paired coverage, ambiguous crossing, or an unsafe
+panel crop reuses the validated v1 blurred full-frame fallback. Vidmyo does not
+guess identities or reconstruct a second person who is not visible in the
+source frame.
+
+New split outputs are atomically rendered as local 1080×1920 H.264/AAC previews
+under `artifacts/reframed-previews-v2/`. The unified
+`artifacts/reframe-artifact.v2.json` records v1 provenance, face assignments,
+panel crops, fallback reasons, cache identity, and output state. Exact retries
+reuse validated work, and cancellation resumes at the first incomplete
+candidate.
+
+This step uses only the face evidence produced by the bundled YuNet detector
+and local FFmpeg. It performs no diarization, active-speaker switching, face
+recognition, network request, model download, account login, upload, or paid
+service call.

@@ -181,7 +181,13 @@ def _probe(path: Path, runner: Callable[[list[str]], subprocess.CompletedProcess
         raise _error("reframe_probe_failed", f"The preview could not be validated: {exc}.", "Check FFmpeg and recreate the Issue 6 preview.") from exc
     if result.returncode != 0 or not audio:
         raise _error("reframe_probe_failed", "The preview does not contain readable video and audio.", "Recreate the Issue 6 preview and retry.")
-    return {"duration": duration, "width": width, "height": height}
+    return {
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "video_codec": video.get("codec_name"),
+        "audio_codec": audio.get("codec_name"),
+    }
 
 
 def _load(request: dict[str, Any], ffprobe: Callable[[list[str]], subprocess.CompletedProcess[str]]) -> tuple[Path, dict[str, Any], list[dict[str, Any]]]:
