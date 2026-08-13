@@ -225,6 +225,16 @@ def test_unknown_duplicate_and_invalid_override_fail_before_ffmpeg(tmp_path):
     assert media.ffmpeg_calls == []
 
 
+def test_escaping_input_artifact_path_fails_before_ffmpeg(tmp_path):
+    request, _, _ = prepared_project(tmp_path)
+    request["input_artifacts"][0]["path"] = "../ingest-artifact.v1.json"
+    media = MediaRunner()
+    with pytest.raises(BoundaryError) as captured:
+        repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert captured.value.code == "boundary_input_invalid"
+    assert media.ffmpeg_calls == []
+
+
 def test_changed_source_fails_before_ffmpeg_and_preserves_prior_artifact(tmp_path):
     request, _, _ = prepared_project(tmp_path)
     media = MediaRunner()
