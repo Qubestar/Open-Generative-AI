@@ -291,7 +291,14 @@ def repair_and_extract(
         repaired, repair = repair_span(ranked, words, silences, duration, override)
         proposed = ranked["candidate"]["proposed_span"]
         proposed_span = {key: proposed[key] for key in ("first_word_id", "last_word_id", "start_seconds", "end_seconds")}
-        extraction_key = _hash({"source": source_identity, "candidate_id": candidate_id, "repaired_span": repaired, "versions": versions, "settings": settings})
+        extraction_key = _hash({
+            "source_fingerprint": source_identity["fingerprint"],
+            "candidate_id": candidate_id,
+            "proposed_span": proposed_span,
+            "repaired_span": repaired,
+            "versions": versions,
+            "settings": settings,
+        })
         is_requested = candidate_id in requested
         extraction = {"requested": is_requested, "state": "pending" if is_requested else "not_requested", "path": None, "fingerprint": None, "duration_seconds": None}
         old = previous_by_id.get(candidate_id)

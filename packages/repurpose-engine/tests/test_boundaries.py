@@ -192,6 +192,25 @@ def test_schema_valid_cache_tampering_is_recomputed_not_reused(tmp_path):
     assert json.loads(first.path.read_text())["settings"] == second.artifact["settings"]
 
 
+def test_changed_ranking_identity_reuses_unaffected_validated_previews(tmp_path):
+    request, _, _ = prepared_project(tmp_path, scores=(90, 80))
+    media = MediaRunner()
+    first = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    extraction_calls = len([call for call in media.ffmpeg_calls if "-t" in call])
+    ranking_path = tmp_path / "artifacts" / "ranking-artifact.v1.json"
+    ranking = json.loads(ranking_path.read_text())
+    ranking["cache_key"] = "sha256:" + "d" * 64
+    ranking_path.write_text(json.dumps(ranking))
+
+    second = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert second.cache_hit is False
+    assert second.artifact["source"]["ranking_cache_key"] == "sha256:" + "d" * 64
+    assert [item["extraction_key"] for item in second.artifact["candidates"]] == [
+        item["extraction_key"] for item in first.artifact["candidates"]
+    ]
+    assert len([call for call in media.ffmpeg_calls if "-t" in call]) == extraction_calls
+
+
 def test_unknown_duplicate_and_invalid_override_fail_before_ffmpeg(tmp_path):
     request, _, _ = prepared_project(tmp_path)
     media = MediaRunner()
