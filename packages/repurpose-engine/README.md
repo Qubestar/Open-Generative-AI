@@ -241,3 +241,33 @@ and preserves completed previews for retry.
 This stage is entirely local: it makes no provider or network call and never
 uploads or modifies the source. It does not approve candidates, change ranking,
 reframe, caption, translate, produce final delivery media, or publish anything.
+
+## Single-speaker vertical reframing
+
+After boundary repair, submit a `reframe` request naming the current completed
+`boundary_artifact`:
+
+```bash
+vidmyo-repurpose reframe --request /path/to/reframe-request.json
+```
+
+The default target set is the completed Issue 6 recommended previews.
+`options.candidate_ids` can instead name any explicit completed retained
+preview. Vidmyo samples each local preview every 0.5 seconds with the bundled
+YuNet CPU face detector. Exactly one stable, sufficiently confident face uses
+a smoothed 9:16 crop. Missing, multiple, low-confidence, insufficiently
+covered, or unsafe faces use the safety layout: the complete uncropped source
+frame centered over a blurred full-canvas copy.
+
+Outputs are local 1080×1920 H.264/AAC previews under
+`artifacts/reframed-previews/`. The versioned
+`artifacts/reframe-artifact.v1.json` records detections, confidence, crop
+segments, fallback reasons, settings, cache identity, and output state.
+Outputs are atomically written and validated with ffprobe. Exact retries do not
+rewrite validated media, while cancellation resumes after the last completed
+candidate.
+
+YuNet is bundled with its license and checksum, so reframing performs no model
+download, upload, account login, provider call, or paid API request. It does
+not recognize identities, approve candidates, create two-speaker layouts, add
+captions, create final masters, or publish media.

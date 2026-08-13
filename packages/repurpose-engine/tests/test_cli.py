@@ -16,6 +16,7 @@ from vidmyo_repurpose.candidates import (
 )
 from vidmyo_repurpose.contracts import validate_event_stream
 from vidmyo_repurpose.ranking import RankingError, RankingResult
+from vidmyo_repurpose.reframe import ReframeError, ReframeResult
 from vidmyo_repurpose.transcribe import (
     TranscriptionResult,
     cancellation_error,
@@ -425,4 +426,54 @@ def test_boundaries_cli_failure_is_terminal_without_false_completion(
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [event["event"] for event in events] == ["accepted", "progress", "error"]
     assert events[-1]["payload"]["code"] == "boundary_repair_cancelled"
+    assert validate_event_stream(events) == events
+
+
+def test_reframe_cli_emits_ordered_artifact_and_completed_events(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_reframe", "project_dir": str(tmp_path),
+        "stage": "reframe", "input_artifacts": [], "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    artifact_path = tmp_path / "artifacts" / "reframe-artifact.v1.json"
+
+    def runner(_request, *, progress, cancelled):
+        assert cancelled() is False
+        progress({"phase": "validating_inputs", "fraction": 0.1, "cache_hit": False, "message": "valid"})
+        return ReframeResult({
+            "cache_key": "sha256:" + "a" * 64,
+            "candidates": [{"output": {"state": "completed"}}],
+        }, artifact_path, False)
+
+    monkeypatch.setattr(cli, "reframe_previews", runner)
+    assert cli._reframe(Namespace(request=str(request_path))) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "artifact", "completed"]
+    assert events[-2]["payload"]["kind"] == "reframe_artifact"
+    assert events[-2]["payload"]["preview_count"] == 1
+    assert validate_event_stream(events) == events
+
+
+def test_reframe_cli_failure_is_terminal_without_false_completion(
+    tmp_path: Path, monkeypatch, capsys
+):
+    request = {
+        "protocol_version": 1, "job_id": "job_cli_reframe_fail", "project_dir": str(tmp_path),
+        "stage": "reframe", "input_artifacts": [], "options": {},
+    }
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    def runner(_request, *, progress, cancelled):
+        progress({"phase": "validating_inputs", "message": "valid"})
+        raise ReframeError("reframe_cancelled", "cancelled", "preserved", "retry")
+
+    monkeypatch.setattr(cli, "reframe_previews", runner)
+    assert cli._reframe(Namespace(request=str(request_path))) != 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "progress", "error"]
+    assert events[-1]["payload"]["code"] == "reframe_cancelled"
     assert validate_event_stream(events) == events
