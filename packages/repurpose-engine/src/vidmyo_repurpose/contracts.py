@@ -16,6 +16,7 @@ TRANSCRIPT_ARTIFACT_VERSION = 1
 CANDIDATE_ARTIFACT_VERSION = 1
 RANKING_ARTIFACT_VERSION = 1
 BOUNDARY_ARTIFACT_VERSION = 1
+REFRAME_ARTIFACT_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -35,6 +36,7 @@ _SCHEMA_FILES = {
     "candidate_artifact": "candidate-artifact.v1.schema.json",
     "ranking_artifact": "ranking-artifact.v1.schema.json",
     "boundary_artifact": "boundary-artifact.v1.schema.json",
+    "reframe_artifact": "reframe-artifact.v1.schema.json",
 }
 
 
@@ -85,6 +87,8 @@ def validate_document(kind: str, document: Any) -> Any:
         _validate_ranking_semantics(document)
     elif kind == "boundary_artifact":
         _validate_boundary_semantics(document)
+    elif kind == "reframe_artifact":
+        _validate_reframe_semantics(document)
     return document
 
 
@@ -327,6 +331,36 @@ def _validate_boundary_semantics(artifact: dict[str, Any]) -> None:
                 raise ContractValidationError(f"candidates.{index}.extraction: completed output is incomplete")
         elif any(extraction[field] is not None for field in ("path", "fingerprint", "duration_seconds")):
             raise ContractValidationError(f"candidates.{index}.extraction: non-completed output must be empty")
+
+
+def _validate_reframe_semantics(artifact: dict[str, Any]) -> None:
+    candidates = artifact["candidates"]
+    ids = [item["candidate_id"] for item in candidates]
+    if len(ids) != len(set(ids)):
+        raise ContractValidationError("candidates.candidate_id: ids must be unique")
+    requested = artifact["requested_candidate_ids"]
+    if len(requested) != len(set(requested)) or any(item not in set(ids) for item in requested):
+        raise ContractValidationError("requested_candidate_ids: must be unique retained candidates")
+    for index, item in enumerate(candidates):
+        root = f"candidates.{index}"
+        requested_here = item["candidate_id"] in requested
+        output = item["output"]
+        if output["requested"] != requested_here:
+            raise ContractValidationError(f"{root}.output.requested: must match request")
+        if item["mode"] == "track" and item["fallback_reason"] is not None:
+            raise ContractValidationError(f"{root}.fallback_reason: tracked output cannot have fallback")
+        if item["mode"] == "fallback" and item["fallback_reason"] is None:
+            raise ContractValidationError(f"{root}.fallback_reason: fallback output requires a reason")
+        if item["safe_zone_fraction"] < 0 or item["safe_zone_fraction"] > 1:
+            raise ContractValidationError(f"{root}.safe_zone_fraction: must be 0–1")
+        if output["state"] == "completed":
+            required = ("path", "fingerprint", "duration_seconds", "width", "height")
+            if any(output[field] is None for field in required):
+                raise ContractValidationError(f"{root}.output: completed output is incomplete")
+            if output["width"] != 1080 or output["height"] != 1920:
+                raise ContractValidationError(f"{root}.output: completed output must be 1080x1920")
+        elif any(output[field] is not None for field in ("path", "fingerprint", "duration_seconds", "width", "height")):
+            raise ContractValidationError(f"{root}.output: non-completed output must be empty")
 
 
 def validate_event_stream(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
