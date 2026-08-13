@@ -166,7 +166,7 @@ def test_explicit_nonrecommended_candidate_extracts_on_demand(tmp_path):
     assert (tmp_path / "artifacts" / "preview-clips" / "clip_002.source.mp4").is_file()
 
 
-def test_exact_retry_reuses_without_silence_scan_extraction_or_rewrite(tmp_path):
+def test_exact_retry_reuses_without_extraction_or_rewrite(tmp_path):
     request, _, _ = prepared_project(tmp_path)
     media = MediaRunner()
     first = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
@@ -174,8 +174,22 @@ def test_exact_retry_reuses_without_silence_scan_extraction_or_rewrite(tmp_path)
     second = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
     assert second.cache_hit is True
     assert second.path.read_bytes() == before
-    assert len([call for call in media.ffmpeg_calls if any("silencedetect=" in item for item in call)]) == 1
+    assert len([call for call in media.ffmpeg_calls if any("silencedetect=" in item for item in call)]) == 2
     assert len([call for call in media.ffmpeg_calls if "-t" in call]) == 1
+
+
+def test_schema_valid_cache_tampering_is_recomputed_not_reused(tmp_path):
+    request, _, _ = prepared_project(tmp_path)
+    media = MediaRunner()
+    first = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    document = json.loads(first.path.read_text())
+    document["settings"]["duration_tolerance_seconds"] = 999.0
+    first.path.write_text(json.dumps(document))
+
+    second = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert second.cache_hit is False
+    assert second.artifact["settings"]["duration_tolerance_seconds"] < 1.0
+    assert json.loads(first.path.read_text())["settings"] == second.artifact["settings"]
 
 
 def test_unknown_duplicate_and_invalid_override_fail_before_ffmpeg(tmp_path):

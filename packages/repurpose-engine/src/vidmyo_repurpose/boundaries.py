@@ -279,26 +279,6 @@ def repair_and_extract(
     except (OSError, json.JSONDecodeError, ContractValidationError):
         pass
     cache_key = _hash({"source": source_identity, "versions": versions, "settings": settings, "requested": requested, "overrides": overrides})
-    if previous and previous.get("cache_key") == cache_key and previous.get("requested_candidate_ids") == requested:
-        reusable = True
-        for item in previous["candidates"]:
-            if item["candidate_id"] not in requested:
-                continue
-            extraction = item["extraction"]
-            path = _inside(project, extraction["path"] or "")
-            try:
-                span = item["repaired_span"]
-                expected = span["end_seconds"] - span["start_seconds"]
-                _probe_preview(path, expected, tolerance, runner=ffprobe)
-                reusable = extraction["state"] == "completed" and fingerprint_file(path) == extraction["fingerprint"]
-            except (BoundaryError, OSError):
-                reusable = False
-            if not reusable:
-                break
-        if reusable:
-            progress({"phase": "final_cache_hit", "fraction": 1.0, "percent": 100, "cache_hit": True, "message": "reusing matching validated boundary artifact and previews"})
-            return BoundaryResult(previous, artifact_path, True)
-
     silences = detect_silences(source, duration, runner=ffmpeg)
     progress({"phase": "silence_analyzed", "fraction": 0.15, "cache_hit": False, "message": "detected reusable silence intervals"})
     previous_by_id = {item["candidate_id"]: item for item in previous["candidates"]} if previous else {}
@@ -326,13 +306,32 @@ def repair_and_extract(
             except BoundaryError:
                 pass
         entries.append({"candidate_id": candidate_id, "proposed_span": proposed_span, "repaired_span": repaired, "repair": repair, "extraction_key": extraction_key, "extraction": extraction})
+    created_at = clock().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     def document() -> dict[str, Any]:
         return {
             "artifact_version": BOUNDARY_ARTIFACT_VERSION, "engine_version": ENGINE_VERSION,
-            "created_at": clock().astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "created_at": created_at,
             "versions": versions, "source": source_identity, "settings": settings,
             "cache_key": cache_key, "requested_candidate_ids": list(requested), "candidates": entries,
         }
+
+    expected = document()
+    if previous is not None:
+        deterministic_fields = (
+            "artifact_version", "engine_version", "versions", "source", "settings",
+            "cache_key", "requested_candidate_ids", "candidates",
+        )
+        all_requested_complete = all(
+            item["extraction"]["state"] == "completed"
+            for item in expected["candidates"]
+            if item["candidate_id"] in requested
+        )
+        if all_requested_complete and all(
+            previous[field] == expected[field] for field in deterministic_fields
+        ):
+            progress({"phase": "final_cache_hit", "fraction": 1.0, "percent": 100, "cache_hit": True, "message": "reusing matching validated boundary artifact and previews"})
+            return BoundaryResult(previous, artifact_path, True)
 
     cache_hit = False
     requested_entries = [next(item for item in entries if item["candidate_id"] == candidate_id) for candidate_id in requested]
