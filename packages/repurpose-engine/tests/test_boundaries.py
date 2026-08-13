@@ -192,6 +192,26 @@ def test_schema_valid_cache_tampering_is_recomputed_not_reused(tmp_path):
     assert json.loads(first.path.read_text())["settings"] == second.artifact["settings"]
 
 
+def test_tampered_cached_extraction_path_is_repaired_without_reextracting(tmp_path):
+    request, _, _ = prepared_project(tmp_path)
+    media = MediaRunner()
+    first = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    extraction_calls = len([call for call in media.ffmpeg_calls if "-t" in call])
+    document = json.loads(first.path.read_text())
+    document["candidates"][0]["extraction"]["path"] = "../../outside-project.mp4"
+    first.path.write_text(json.dumps(document))
+
+    second = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    expected_path = "artifacts/preview-clips/clip_001.source.mp4"
+    persisted = json.loads(first.path.read_text())
+
+    assert second.cache_hit is False
+    assert second.artifact["candidates"][0]["extraction"]["path"] == expected_path
+    assert persisted["candidates"][0]["extraction"]["path"] == expected_path
+    assert "../../outside-project.mp4" not in json.dumps(second.artifact)
+    assert len([call for call in media.ffmpeg_calls if "-t" in call]) == extraction_calls
+
+
 def test_changed_ranking_identity_reuses_unaffected_validated_previews(tmp_path):
     request, _, _ = prepared_project(tmp_path, scores=(90, 80))
     media = MediaRunner()

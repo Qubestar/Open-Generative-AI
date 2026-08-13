@@ -306,10 +306,15 @@ def repair_and_extract(
         if candidate_id in requested and old and old["extraction_key"] == extraction_key and old["extraction"]["state"] == "completed" and destination.is_file():
             try:
                 checked = _probe_preview(destination, repaired["end_seconds"] - repaired["start_seconds"], tolerance, runner=ffprobe)
-                if fingerprint_file(destination) == old["extraction"]["fingerprint"]:
-                    extraction = dict(old["extraction"])
-                    extraction["requested"] = True
-                    extraction["duration_seconds"] = checked
+                actual_fingerprint = fingerprint_file(destination)
+                if actual_fingerprint == old["extraction"]["fingerprint"]:
+                    extraction = {
+                        "requested": True,
+                        "state": "completed",
+                        "path": destination.relative_to(project).as_posix(),
+                        "fingerprint": actual_fingerprint,
+                        "duration_seconds": checked,
+                    }
             except BoundaryError:
                 pass
         entries.append({"candidate_id": candidate_id, "proposed_span": proposed_span, "repaired_span": repaired, "repair": repair, "extraction_key": extraction_key, "extraction": extraction})
