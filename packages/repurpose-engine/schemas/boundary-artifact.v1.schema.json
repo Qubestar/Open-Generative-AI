@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/boundary-artifact.v1.schema.json",
+  "title": "Vidmyo Repurpose boundary artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_version", "engine_version", "created_at", "versions", "source", "settings", "cache_key", "requested_candidate_ids", "candidates"],
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "candidateId": {"type": "string", "pattern": "^clip_[0-9]{3,}$"},
+    "wordId": {"type": "string", "pattern": "^word_[0-9]{6}$"},
+    "span": {
+      "type": "object", "additionalProperties": false,
+      "required": ["first_word_id", "last_word_id", "start_seconds", "end_seconds"],
+      "properties": {
+        "first_word_id": {"$ref": "#/$defs/wordId"},
+        "last_word_id": {"$ref": "#/$defs/wordId"},
+        "start_seconds": {"type": "number", "minimum": 0},
+        "end_seconds": {"type": "number", "minimum": 0}
+      }
+    }
+  },
+  "properties": {
+    "artifact_version": {"const": 1},
+    "engine_version": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "versions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "repair", "encoder"],
+      "properties": {
+        "schema": {"const": "boundary-artifact.v1"},
+        "repair": {"const": "word-silence-repair.v1"},
+        "encoder": {"const": "preview-h264-aac.v1"}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fingerprint", "transcript_cache_key", "ranking_cache_key"],
+      "properties": {
+        "fingerprint": {"$ref": "#/$defs/hash"},
+        "transcript_cache_key": {"$ref": "#/$defs/hash"},
+        "ranking_cache_key": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "settings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minimum_duration_seconds", "maximum_duration_seconds", "silence_noise_db", "silence_minimum_seconds", "silence_search_seconds", "duration_tolerance_seconds"],
+      "properties": {
+        "minimum_duration_seconds": {"const": 20.0},
+        "maximum_duration_seconds": {"const": 120.0},
+        "silence_noise_db": {"const": -35.0},
+        "silence_minimum_seconds": {"const": 0.25},
+        "silence_search_seconds": {"const": 1.5},
+        "duration_tolerance_seconds": {"type": "number", "minimum": 0.05}
+      }
+    },
+    "cache_key": {"$ref": "#/$defs/hash"},
+    "requested_candidate_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/candidateId"}},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["candidate_id", "proposed_span", "repaired_span", "repair", "extraction_key", "extraction"],
+        "properties": {
+          "candidate_id": {"$ref": "#/$defs/candidateId"},
+          "proposed_span": {"$ref": "#/$defs/span"},
+          "repaired_span": {"$ref": "#/$defs/span"},
+          "repair": {
+            "type": "object", "additionalProperties": false,
+            "required": ["start_reason", "end_reason", "start_silence", "end_silence", "override_applied"],
+            "properties": {
+              "start_reason": {"enum": ["word_boundary", "nearby_silence", "manual_word_override"]},
+              "end_reason": {"enum": ["word_boundary", "nearby_silence", "manual_word_override"]},
+              "start_silence": {"type": ["object", "null"]},
+              "end_silence": {"type": ["object", "null"]},
+              "override_applied": {"type": "boolean"}
+            }
+          },
+          "extraction_key": {"$ref": "#/$defs/hash"},
+          "extraction": {
+            "type": "object", "additionalProperties": false,
+            "required": ["requested", "state", "path", "fingerprint", "duration_seconds"],
+            "properties": {
+              "requested": {"type": "boolean"},
+              "state": {"enum": ["not_requested", "pending", "completed"]},
+              "path": {"type": ["string", "null"]},
+              "fingerprint": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+              "duration_seconds": {"type": ["number", "null"], "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  }
+}
