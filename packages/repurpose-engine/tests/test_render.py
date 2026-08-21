@@ -272,6 +272,17 @@ def test_render_semantics_reject_path_escape(tmp_path):
         validate_document("render_artifact", tampered)
 
 
+def test_render_semantics_reject_overlay_escape_in_partial_checkpoint(tmp_path):
+    request = prepared_render(tmp_path)
+    media = RenderMedia()
+    result = render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    tampered = json.loads(result.path.read_text())
+    tampered["candidates"][0]["state"] = "pending"
+    tampered["candidates"][0]["caption"]["overlays"][0]["path"] = "../../outside.png"
+    with pytest.raises(ContractValidationError, match="deterministic project path"):
+        validate_document("render_artifact", tampered)
+
+
 def test_cli_emits_ordered_render_artifact_and_completion(tmp_path, monkeypatch, capsys):
     request = {"protocol_version": 1, "job_id": "job_cli_render", "project_dir": str(tmp_path), "stage": "render", "input_artifacts": [], "options": {}}
     request_path = tmp_path / "request.json"

@@ -503,9 +503,11 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
         if caption["enabled"]:
             if not item["cues"] or caption["fallback_reason"] is not None:
                 raise ContractValidationError(f"{root}.caption: enabled captions require cues and no fallback")
-            if item["state"] == "completed":
+            if item["state"] == "completed" and caption["state"] != "completed":
+                raise ContractValidationError(f"{root}.caption: completed render requires completed captions")
+            if caption["state"] == "completed":
                 expected_caption = f"artifacts/captions/{item['candidate_id']}.{style}.json"
-                if caption["state"] != "completed" or caption["path"] != expected_caption or caption["fingerprint"] is None:
+                if caption["path"] != expected_caption or caption["fingerprint"] is None:
                     raise ContractValidationError(f"{root}.caption: completed captions must use the deterministic overlay-plan path")
                 if [overlay["cue_id"] for overlay in caption["overlays"]] != [cue["id"] for cue in item["cues"]]:
                     raise ContractValidationError(f"{root}.caption.overlays: must match every cue in order")
@@ -519,6 +521,8 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
                     right_padding = overlay["backing_right"] - overlay["text_right"]
                     if left_padding != right_padding or left_padding != overlay["visible_padding_left"] or right_padding != overlay["visible_padding_right"]:
                         raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}: visible phrase padding must be symmetric")
+            elif caption["path"] is not None or caption["fingerprint"] is not None or caption["overlays"]:
+                raise ContractValidationError(f"{root}.caption: pending captions must have no files")
         else:
             if caption["state"] != "not_required" or caption["path"] is not None or caption["fingerprint"] is not None or caption["overlays"]:
                 raise ContractValidationError(f"{root}.caption: disabled/fallback captions must have no file")
