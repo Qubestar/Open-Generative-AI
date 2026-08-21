@@ -29,19 +29,19 @@ MAX_CHARACTERS_PER_CUE = 34
 DURATION_TOLERANCE_SECONDS = 0.25
 VERSIONS = {
     "schema": "render-artifact.v1",
-    "captioner": "word-phrase-ass.v1",
-    "backing": "libass-phrase-box.v1",
-    "renderer": "captioned-master-h264-aac.v1",
+    "captioner": "word-phrase-overlay.v1",
+    "backing": "opencv-phrase-box.v1",
+    "renderer": "ffmpeg-overlay-master-h264-aac.v1",
     "prober": "ffprobe-media-contract.v1",
 }
 CAPTION_STYLES = {
     "clean": {
-        "font": "Arial", "font_size": 58, "primary": "&H00FFFFFF",
-        "back": "&HC0000000", "outline": 10, "margin_v": 210,
+        "font_scale": 2.0, "thickness": 4, "text_bgra": (255, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 205), "padding_x": 34, "padding_y": 22, "baseline_y": 1650,
     },
     "bold": {
-        "font": "Arial", "font_size": 72, "primary": "&H0000FFFF",
-        "back": "&HE0000000", "outline": 14, "margin_v": 250,
+        "font_scale": 2.5, "thickness": 6, "text_bgra": (0, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 230), "padding_x": 44, "padding_y": 28, "baseline_y": 1600,
     },
 }
 PLATFORM_PRESETS = {
@@ -99,30 +99,6 @@ def _hash(value: Any) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
-def _atomic_text(destination: Path, content: str) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.parent / f".{destination.name}.{os.getpid()}.tmp"
-    try:
-        temporary.write_text(content, encoding="utf-8")
-        with temporary.open("rb") as handle:
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _ass_time(seconds: float) -> str:
-    centiseconds = max(0, int(round(seconds * 100)))
-    hours, remainder = divmod(centiseconds, 360000)
-    minutes, remainder = divmod(remainder, 6000)
-    whole_seconds, fraction = divmod(remainder, 100)
-    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{fraction:02d}"
-
-
-def _ass_text(value: str) -> str:
-    return value.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
-
-
 def build_caption_cues(
     words: list[dict[str, Any]], *, clip_start: float, clip_duration: float,
     max_words: int = MAX_WORDS_PER_CUE, max_characters: int = MAX_CHARACTERS_PER_CUE,
@@ -163,30 +139,71 @@ def build_caption_cues(
     return cues
 
 
-def build_ass(cues: list[dict[str, Any]], style_name: str) -> str:
+def build_caption_overlay(text: str, style_name: str, destination: Path) -> dict[str, Any]:
+    """Render one transparent phrase image and return measured symmetric padding."""
     try:
         style = CAPTION_STYLES[style_name]
     except KeyError as exc:
         raise ContractValidationError(f"options.caption_style: unsupported style {style_name!r}") from exc
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {OUTPUT_WIDTH}
-PlayResY: {OUTPUT_HEIGHT}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,{style['font']},{style['font_size']},{style['primary']},{style['primary']},&H00000000,{style['back']},-1,0,0,0,100,100,0,0,3,{style['outline']},0,2,90,90,{style['margin_v']},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-    events = "".join(
-        f"Dialogue: 0,{_ass_time(cue['start_seconds'])},{_ass_time(cue['end_seconds'])},Caption,,0,0,0,,{_ass_text(cue['text'])}\n"
-        for cue in cues
+    try:
+        import cv2
+        import numpy as np
+    except (ImportError, OSError) as exc:
+        raise _error("caption_renderer_unavailable", f"OpenCV could not render captions: {exc}.", "Install the complete Vidmyo Repurpose package and retry.") from exc
+    font = cv2.FONT_HERSHEY_DUPLEX
+    scale = float(style["font_scale"])
+    thickness = int(style["thickness"])
+    maximum_width = OUTPUT_WIDTH - 180
+    while scale > 0.6:
+        (text_width, text_height), baseline = cv2.getTextSize(text, font, scale, thickness)
+        if text_width <= maximum_width:
+            break
+        scale = round(scale - 0.1, 2)
+    if text_width > maximum_width:
+        raise ContractValidationError("caption text: phrase cannot fit inside the horizontal safe zone")
+    measurement = np.zeros((text_height + baseline + 100, text_width + 200, 4), dtype=np.uint8)
+    measurement_origin = (100, text_height + 50)
+    cv2.putText(
+        measurement, text, measurement_origin, font, scale,
+        style["text_bgra"], thickness, cv2.LINE_AA,
     )
-    return header + events
+    visible_y, visible_x = np.where(measurement[:, :, 3] > 0)
+    if not len(visible_x):
+        raise ContractValidationError("caption text: phrase produced no visible pixels")
+    measured_left, measured_right = int(visible_x.min()), int(visible_x.max())
+    measured_top, measured_bottom = int(visible_y.min()), int(visible_y.max())
+    visible_width = measured_right - measured_left + 1
+    visible_height = measured_bottom - measured_top + 1
+    pad_x, pad_y = int(style["padding_x"]), int(style["padding_y"])
+    left = (OUTPUT_WIDTH - visible_width) // 2
+    right = left + visible_width - 1
+    bottom = int(style["baseline_y"])
+    top = bottom - visible_height + 1
+    origin = (
+        left - (measured_left - measurement_origin[0]),
+        top - (measured_top - measurement_origin[1]),
+    )
+    canvas = np.zeros((OUTPUT_HEIGHT, OUTPUT_WIDTH, 4), dtype=np.uint8)
+    cv2.rectangle(
+        canvas, (left - pad_x, top - pad_y),
+        (right + pad_x, bottom + pad_y),
+        style["back_bgra"], thickness=-1,
+    )
+    cv2.putText(canvas, text, origin, font, scale, style["text_bgra"], thickness, cv2.LINE_AA)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.parent / f".{destination.name}.{os.getpid()}.tmp.png"
+    try:
+        if not cv2.imwrite(str(temporary), canvas):
+            raise _error("caption_render_failed", "OpenCV did not create a caption overlay.", "Check local disk space and retry.")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {
+        "path": destination.as_posix(), "fingerprint": fingerprint_file(destination),
+        "text_left": left, "text_right": right,
+        "backing_left": left - pad_x, "backing_right": right + pad_x,
+        "visible_padding_left": pad_x, "visible_padding_right": pad_x,
+    }
 
 
 def _descriptor_map(request: dict[str, Any]) -> dict[tuple[str, int], dict[str, Any]]:
@@ -268,23 +285,30 @@ def _load_inputs(
     return project, manifest, transcript, boundary, reframe_v1, reframe_v2
 
 
-def _ffmpeg_filter_path(file_path: Path) -> str:
-    value = str(file_path).replace("\\", r"\\").replace(":", r"\:").replace("'", r"\'")
-    return value.replace(",", r"\,").replace("[", r"\[").replace("]", r"\]")
-
-
 def _run_output(
     source: Path, destination: Path, duration: float, tolerance: float, *,
     ffmpeg: Callable[[list[str]], subprocess.CompletedProcess[str]],
     ffprobe: Callable[[list[str]], subprocess.CompletedProcess[str]],
-    video_args: list[str], filter_value: str | None = None,
+    video_args: list[str], overlays: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.parent / f".{destination.stem}.{os.getpid()}.tmp.mp4"
     command = ["ffmpeg", "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(source)]
-    if filter_value:
-        command.extend(["-vf", filter_value])
-    command.extend(["-map", "0:v:0", "-map", "0:a:0", *video_args, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(temporary)])
+    for overlay in overlays or []:
+        command.extend(["-loop", "1", "-i", str(overlay["path"])])
+    if overlays:
+        filters: list[str] = []
+        previous = "0:v"
+        for index, overlay in enumerate(overlays, 1):
+            output_label = f"captioned{index}"
+            filters.append(
+                f"[{previous}][{index}:v]overlay=0:0:enable='between(t,{overlay['start_seconds']:.6f},{overlay['end_seconds']:.6f})'[{output_label}]"
+            )
+            previous = output_label
+        command.extend(["-filter_complex", ";".join(filters), "-map", f"[{previous}]"])
+    else:
+        command.extend(["-map", "0:v:0"])
+    command.extend(["-map", "0:a:0", *video_args, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", f"{duration:.6f}", str(temporary)])
     try:
         try:
             result = ffmpeg(command)
@@ -429,10 +453,10 @@ def render_platform_outputs(
         words = [word_by_id[word_id] for word_id in ordered_word_ids[first:last + 1]]
         cues = build_caption_cues(words, clip_start=float(span["start_seconds"]), clip_duration=clip_duration)
         enabled = captions_enabled and bool(cues)
-        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}.ass"
+        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}.json"
         caption = {
             "enabled": enabled, "style": style, "state": "pending" if enabled else "not_required",
-            "path": None, "fingerprint": None,
+            "path": None, "fingerprint": None, "overlays": [],
             "fallback_reason": None if enabled else ("captions_disabled" if not captions_enabled else "no_usable_speech"),
             "backing_model": VERSIONS["backing"],
         }
@@ -460,6 +484,15 @@ def render_platform_outputs(
                     old["caption"]["state"] == "completed" and old["caption"]["path"] == caption_path.relative_to(project).as_posix()
                     and caption_path.is_file() and fingerprint_file(caption_path) == old["caption"]["fingerprint"]
                 )
+                if caption_ok:
+                    try:
+                        caption_ok = len(old["caption"]["overlays"]) == len(cues) and all(
+                            (project / overlay["path"]).is_file()
+                            and fingerprint_file(project / overlay["path"]) == overlay["fingerprint"]
+                            for overlay in old["caption"]["overlays"]
+                        )
+                    except (KeyError, OSError):
+                        caption_ok = False
             master_ok = old["master"] is not None and _validate_cached_output(project, old["master"], master_path, clip_duration, ffprobe)
             valid_export_ids: list[str] = []
             for preset_id in platforms:
@@ -499,22 +532,37 @@ def render_platform_outputs(
         candidate_id = entry["candidate_id"]
         input_path = _inside(project, entry["input"]["path"])
         style = entry["caption"]["style"]
-        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}.ass"
-        filter_value = None
+        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}.json"
         if entry["caption"]["enabled"] and entry["caption"]["state"] != "completed":
-            _atomic_text(caption_path, build_ass(entry["cues"], style))
+            overlays = []
+            overlay_directory = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}"
+            for cue in entry["cues"]:
+                overlay_path = overlay_directory / f"{cue['id']}.png"
+                overlay = build_caption_overlay(cue["text"], style, overlay_path)
+                overlay.update({
+                    "cue_id": cue["id"],
+                    "path": overlay_path.relative_to(project).as_posix(),
+                    "start_seconds": cue["start_seconds"],
+                    "end_seconds": cue["end_seconds"],
+                })
+                overlays.append(overlay)
+            _atomic_json(caption_path, {
+                "version": 1, "style": style, "backing_model": VERSIONS["backing"],
+                "overlays": overlays,
+            })
             entry["caption"].update({
                 "state": "completed", "path": caption_path.relative_to(project).as_posix(),
-                "fingerprint": fingerprint_file(caption_path),
+                "fingerprint": fingerprint_file(caption_path), "overlays": overlays,
             })
-            filter_value = f"ass='{_ffmpeg_filter_path(caption_path)}'"
-        elif entry["caption"]["enabled"]:
-            filter_value = f"ass='{_ffmpeg_filter_path(caption_path)}'"
+        overlays_for_ffmpeg = [
+            {**overlay, "path": project / overlay["path"]}
+            for overlay in entry["caption"]["overlays"]
+        ] if entry["caption"]["enabled"] else None
         master_path = project / MASTER_DIRECTORY / f"{candidate_id}.{style}.master.mp4"
         if entry["master"] is None:
             master = _run_output(
                 input_path, master_path, entry["input"]["duration_seconds"], DURATION_TOLERANCE_SECONDS,
-                ffmpeg=ffmpeg, ffprobe=ffprobe, filter_value=filter_value,
+                ffmpeg=ffmpeg, ffprobe=ffprobe, overlays=overlays_for_ffmpeg,
                 video_args=["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"],
             )
             master["path"] = master_path.relative_to(project).as_posix()
@@ -532,7 +580,7 @@ def render_platform_outputs(
             export_path = project / EXPORT_DIRECTORY / f"{candidate_id}.{style}.{preset['id']}.mp4"
             output = _run_output(
                 master_path, export_path, entry["input"]["duration_seconds"], DURATION_TOLERANCE_SECONDS,
-                ffmpeg=ffmpeg, ffprobe=ffprobe, filter_value=None,
+                ffmpeg=ffmpeg, ffprobe=ffprobe, overlays=None,
                 video_args=["-c:v", "libx264", "-preset", "medium", "-crf", str(preset["crf"]), "-maxrate", preset["video_bitrate"], "-bufsize", "20M", "-pix_fmt", "yuv420p"],
             )
             output["path"] = export_path.relative_to(project).as_posix()

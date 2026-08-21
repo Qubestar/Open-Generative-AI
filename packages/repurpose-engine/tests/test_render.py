@@ -21,7 +21,7 @@ from vidmyo_repurpose.render import (
     RenderError,
     RenderResult,
     _run_output,
-    build_ass,
+    build_caption_overlay,
     build_caption_cues,
     render_platform_outputs,
 )
@@ -92,13 +92,21 @@ def test_caption_cues_preserve_every_word_once_and_respect_phrase_limits():
     assert cues[0]["text"] == "One complete idea."
 
 
-def test_clean_and_bold_ass_use_one_phrase_box_width_model():
-    cues = [{"id": "cue_0001", "start_seconds": 0.0, "end_seconds": 1.0, "text": "Whole phrase", "word_ids": ["word_000001"]}]
-    clean, bold = build_ass(cues, "clean"), build_ass(cues, "bold")
-    assert "BorderStyle" in clean and "Style: Caption,Arial,58" in clean
-    assert "Style: Caption,Arial,72" in bold
-    assert "libass" not in clean
-    assert clean.count("Dialogue:") == 1
+def test_clean_and_bold_overlays_measure_visible_phrase_with_symmetric_padding(tmp_path):
+    import cv2
+    import numpy as np
+
+    for style in ("clean", "bold"):
+        path = tmp_path / f"{style}.png"
+        overlay = build_caption_overlay("Whole phrase", style, path)
+        image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        text_y, text_x = np.where(np.any(image[:, :, :3] != 0, axis=2))
+        backing_y, backing_x = np.where(image[:, :, 3] != 0)
+        assert (int(text_x.min()), int(text_x.max())) == (overlay["text_left"], overlay["text_right"])
+        assert (int(backing_x.min()), int(backing_x.max())) == (overlay["backing_left"], overlay["backing_right"])
+        assert overlay["visible_padding_left"] == overlay["visible_padding_right"]
+        assert overlay["text_left"] - overlay["backing_left"] == overlay["visible_padding_left"]
+        assert overlay["backing_right"] - overlay["text_right"] == overlay["visible_padding_right"]
 
 
 def test_no_usable_words_produce_no_fabricated_caption_cues():
@@ -114,7 +122,7 @@ def test_render_creates_captioned_master_and_all_platform_exports(tmp_path):
     assert item["caption"]["state"] == "completed"
     assert [entry["preset_id"] for entry in item["exports"]] == ["youtube_shorts", "tiktok", "instagram_reels"]
     assert len(media.ffmpeg_calls) == 4
-    assert "ass='" in media.ffmpeg_calls[0][media.ffmpeg_calls[0].index("-vf") + 1]
+    assert "overlay=0:0:enable=" in media.ffmpeg_calls[0][media.ffmpeg_calls[0].index("-filter_complex") + 1]
     assert validate_document("render_artifact", result.artifact) is result.artifact
 
 
@@ -124,7 +132,7 @@ def test_bold_style_uses_separate_deterministic_paths(tmp_path):
     result = render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
     item = result.artifact["candidates"][0]
     assert item["master"]["path"].endswith("clip_001.bold.master.mp4")
-    assert item["caption"]["path"].endswith("clip_001.bold.ass")
+    assert item["caption"]["path"].endswith("clip_001.bold.json")
 
 
 def test_disabled_captions_create_valid_uncaptioned_outputs_with_reason(tmp_path):
@@ -134,7 +142,7 @@ def test_disabled_captions_create_valid_uncaptioned_outputs_with_reason(tmp_path
     result = render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
     caption = result.artifact["candidates"][0]["caption"]
     assert caption["state"] == "not_required" and caption["fallback_reason"] == "captions_disabled"
-    assert "-vf" not in media.ffmpeg_calls[0]
+    assert "-filter_complex" not in media.ffmpeg_calls[0]
 
 
 def test_default_requires_selected_manual_approval(tmp_path):
@@ -187,6 +195,18 @@ def test_tampered_export_is_rebuilt_to_deterministic_path(tmp_path):
     assert second.cache_hit is False
     assert export_path.read_bytes() != b"tampered"
     assert second.artifact["candidates"][0]["exports"][1]["output"]["path"].endswith("tiktok.mp4")
+
+
+def test_tampered_caption_overlay_invalidates_and_rebuilds_its_master(tmp_path):
+    request = prepared_render(tmp_path)
+    media = RenderMedia()
+    first = render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    overlay_path = tmp_path / first.artifact["candidates"][0]["caption"]["overlays"][0]["path"]
+    overlay_path.write_bytes(b"tampered")
+    second = render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert second.cache_hit is False
+    assert overlay_path.read_bytes() != b"tampered"
+    assert len(media.ffmpeg_calls) == 8
 
 
 def test_cancellation_checkpoints_and_resumes_missing_exports(tmp_path):
@@ -281,12 +301,16 @@ def test_real_disposable_vertical_media_passes_h264_aac_contract(tmp_path):
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(source),
     ], capture_output=True, text=True)
     assert generated.returncode == 0, generated.stderr
+    caption_path = tmp_path / "caption.png"
+    overlay = build_caption_overlay("Visible phrase box", "clean", caption_path)
+    overlay.update({"start_seconds": 0.0, "end_seconds": 0.35})
     destination = tmp_path / "output.mp4"
     output = _run_output(
         source, destination, 0.4, 0.25,
         ffmpeg=lambda command: subprocess.run(command, capture_output=True, text=True),
         ffprobe=lambda command: subprocess.run(command, capture_output=True, text=True),
         video_args=["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p"],
+        overlays=[overlay],
     )
     assert output["state"] == "completed"
     assert (output["width"], output["height"], output["video_codec"], output["audio_codec"]) == (1080, 1920, "h264", "aac")

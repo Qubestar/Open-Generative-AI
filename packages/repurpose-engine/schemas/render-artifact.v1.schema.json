@@ -27,8 +27,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "captioner", "backing", "renderer", "prober"],
       "properties": {
-        "schema": {"const": "render-artifact.v1"}, "captioner": {"const": "word-phrase-ass.v1"},
-        "backing": {"const": "libass-phrase-box.v1"}, "renderer": {"const": "captioned-master-h264-aac.v1"},
+        "schema": {"const": "render-artifact.v1"}, "captioner": {"const": "word-phrase-overlay.v1"},
+        "backing": {"const": "opencv-phrase-box.v1"}, "renderer": {"const": "ffmpeg-overlay-master-h264-aac.v1"},
         "prober": {"const": "ffprobe-media-contract.v1"}
       }
     },
@@ -101,13 +101,27 @@
           },
           "caption": {
             "type": "object", "additionalProperties": false,
-            "required": ["enabled", "style", "state", "path", "fingerprint", "fallback_reason", "backing_model"],
+            "required": ["enabled", "style", "state", "path", "fingerprint", "overlays", "fallback_reason", "backing_model"],
             "properties": {
               "enabled": {"type": "boolean"}, "style": {"enum": ["clean", "bold"]},
               "state": {"enum": ["pending", "completed", "not_required"]}, "path": {"type": ["string", "null"]},
               "fingerprint": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+              "overlays": {
+                "type": "array", "items": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["cue_id", "path", "fingerprint", "start_seconds", "end_seconds", "text_left", "text_right", "backing_left", "backing_right", "visible_padding_left", "visible_padding_right"],
+                  "properties": {
+                    "cue_id": {"type": "string", "pattern": "^cue_[0-9]{4}$"},
+                    "path": {"type": "string", "minLength": 1}, "fingerprint": {"$ref": "#/$defs/hash"},
+                    "start_seconds": {"type": "number", "minimum": 0}, "end_seconds": {"type": "number", "minimum": 0},
+                    "text_left": {"type": "integer", "minimum": 0}, "text_right": {"type": "integer", "minimum": 0},
+                    "backing_left": {"type": "integer", "minimum": 0}, "backing_right": {"type": "integer", "maximum": 1079},
+                    "visible_padding_left": {"type": "integer", "minimum": 1}, "visible_padding_right": {"type": "integer", "minimum": 1}
+                  }
+                }
+              },
               "fallback_reason": {"type": ["string", "null"], "enum": [null, "captions_disabled", "no_usable_speech"]},
-              "backing_model": {"const": "libass-phrase-box.v1"}
+              "backing_model": {"const": "opencv-phrase-box.v1"}
             }
           },
           "output_key": {"$ref": "#/$defs/hash"}, "master": {"oneOf": [{"$ref": "#/$defs/output"}, {"type": "null"}]},

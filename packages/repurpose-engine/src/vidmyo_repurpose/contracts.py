@@ -504,11 +504,23 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
             if not item["cues"] or caption["fallback_reason"] is not None:
                 raise ContractValidationError(f"{root}.caption: enabled captions require cues and no fallback")
             if item["state"] == "completed":
-                expected_caption = f"artifacts/captions/{item['candidate_id']}.{style}.ass"
+                expected_caption = f"artifacts/captions/{item['candidate_id']}.{style}.json"
                 if caption["state"] != "completed" or caption["path"] != expected_caption or caption["fingerprint"] is None:
-                    raise ContractValidationError(f"{root}.caption: completed captions must use the deterministic ASS path")
+                    raise ContractValidationError(f"{root}.caption: completed captions must use the deterministic overlay-plan path")
+                if [overlay["cue_id"] for overlay in caption["overlays"]] != [cue["id"] for cue in item["cues"]]:
+                    raise ContractValidationError(f"{root}.caption.overlays: must match every cue in order")
+                for overlay_index, overlay in enumerate(caption["overlays"]):
+                    expected_overlay = f"artifacts/captions/{item['candidate_id']}.{style}/{overlay['cue_id']}.png"
+                    if overlay["path"] != expected_overlay:
+                        raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}.path: must use the deterministic project path")
+                    if overlay["start_seconds"] != item["cues"][overlay_index]["start_seconds"] or overlay["end_seconds"] != item["cues"][overlay_index]["end_seconds"]:
+                        raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}: timing must match its cue")
+                    left_padding = overlay["text_left"] - overlay["backing_left"]
+                    right_padding = overlay["backing_right"] - overlay["text_right"]
+                    if left_padding != right_padding or left_padding != overlay["visible_padding_left"] or right_padding != overlay["visible_padding_right"]:
+                        raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}: visible phrase padding must be symmetric")
         else:
-            if caption["state"] != "not_required" or caption["path"] is not None or caption["fingerprint"] is not None:
+            if caption["state"] != "not_required" or caption["path"] is not None or caption["fingerprint"] is not None or caption["overlays"]:
                 raise ContractValidationError(f"{root}.caption: disabled/fallback captions must have no file")
             if caption["fallback_reason"] not in {"captions_disabled", "no_usable_speech"}:
                 raise ContractValidationError(f"{root}.caption.fallback_reason: a stable reason is required")

@@ -325,14 +325,16 @@ accepts `youtube_shorts`, `tiktok`, and `instagram_reels`.
 
 Caption cues are reconstructed from authoritative transcript word IDs within
 the repaired boundary. Words are grouped deterministically into short phrase
-cues and written to project-owned ASS files. Both styles use libass phrase-box
-backing, so the complete rendered phrase and its equal horizontal outline
-determine visible backing width; per-word stroke widths are never accumulated.
-No usable cue produces a valid uncaptioned master with a recorded reason.
+cues. OpenCV renders each complete phrase to a project-owned transparent PNG
+after measuring its visible pixels, then adds equal left/right backing padding.
+FFmpeg composites those local overlays at cue time without depending on the
+optional `ass`, `subtitles`, or `drawtext` filters. No usable cue produces a
+valid uncaptioned master with a recorded reason.
 
 Outputs are local and deterministic:
 
-- `artifacts/captions/<candidate>.<style>.ass`
+- `artifacts/captions/<candidate>.<style>.json`
+- `artifacts/captions/<candidate>.<style>/<cue>.png`
 - `artifacts/rendered-masters/<candidate>.<style>.master.mp4`
 - `artifacts/platform-exports/<candidate>.<style>.<platform>.mp4`
 - `artifacts/render-artifact.v1.json`
