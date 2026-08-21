@@ -11,9 +11,9 @@ vertical, including Electron packaging and the local MCP surface.
   is completed and transcription-model installation/readiness is exercised on
   the distribution path.
 - Public creator release: **NO-GO** until the real benchmark passes, a supported
-  Python/runtime installation strategy is selected, the remaining framework
-  security upgrades are completed, and macOS Developer ID signing and
-  notarization are in place.
+  Python/runtime installation strategy is selected, the remaining Electron
+  toolchain security upgrades are completed, and macOS Developer ID signing
+  and notarization are in place.
 
 The offline synthetic corpus passed mechanics only. Its quality status is
 `unknown`, by design; it is not evidence of transcription, ranking, sentence,
@@ -34,19 +34,17 @@ speaker-tracking, or creator-facing quality.
 - Restart/recovery tests cover ingest, transcribe, generate-candidates, rank,
   repair-boundaries, reframe, and render, including both reframe substeps. They
   distinguish live children from stale jobs and preserve completed artifacts.
-- The final Apple-silicon directory package built in 37.11 seconds and occupied
-  747 MB including the Electron runtime. The packaged
+- The final Apple-silicon directory package built in 15.24 seconds and occupied
+  744 MB including the Electron runtime. The packaged
   standalone Next server served `/studio`; the packaged Python source imported
   contract version 1; and the packaged MCP server listed its tools over stdio.
 - The Python wheel contains the benchmark module plus installed data files for
   all schemas, the bundled YuNet model, and its license.
-- Compatible dependency updates moved Next.js to 15.5.23, Axios to 1.19.0, and
-  cleared the MCP audit. The root production audit still reports three high
-  findings in Next.js's pinned PostCSS/Sharp tree; clearing them currently
-  requires the breaking Next.js 16 migration. The full development audit also
-  requires breaking Electron 43 and electron-builder 26 upgrades. Those
-  migrations are intentionally release blockers rather than unreviewed changes
-  to this regression-hardening milestone.
+- Dependency updates moved Next.js to 16.3.2 and Axios to 1.19.0. Both
+  `npm audit --omit=dev` and the MCP audit report zero vulnerabilities. The full
+  development audit still requires breaking Electron 43, electron-builder 26,
+  and Vite 8 upgrades; those toolchain migrations remain explicit public-release
+  blockers rather than untested changes to this milestone.
 - Full regression and final package-size results are recorded on the SAI-21 pull
   request after the final clean verification run.
 
