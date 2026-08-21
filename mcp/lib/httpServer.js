@@ -29,7 +29,7 @@ import { registerTools } from './tools.js';
 export async function createHttpMcp(ctx = {}) {
   return {
     handleRequest: async (req, res, body) => {
-      const server = new McpServer({ name: 'vidmyo', version: '0.3.0' });
+      const server = new McpServer({ name: 'vidmyo', version: '0.4.0' });
       registerTools(server, ctx);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on('close', () => {
@@ -39,6 +39,8 @@ export async function createHttpMcp(ctx = {}) {
       await server.connect(transport);
       await transport.handleRequest(req, res, body);
     },
-    close: async () => {},
+    close: async () => {
+      await ctx.repurposeService?.close?.();
+    },
   };
 }

@@ -15,3 +15,11 @@
 Vidmyo does not copy ClipsAI, OpenSource Clipping, PodCLI, or other clipping
 pipelines. They informed product research only. In particular, no AGPL code or
 token-gated diarization component is linked into this package.
+
+## MCP exposure audit (SAI-20)
+
+The Repurpose MCP surface adds no copied third-party media or clipping code. It
+wraps Vidmyo's existing core contracts using the repository's existing
+`@modelcontextprotocol/sdk` and Zod dependencies. No ClipsAI, OpenSource
+Clipping, PodCLI, HotClip, or AI YouTube Shorts Generator source, model, or
+runtime dependency was imported for the MCP work.

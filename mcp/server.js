@@ -19,20 +19,39 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { registerTools } from './lib/tools.js';
+import { createRepurposeMcpService } from './lib/repurposeService.js';
 
 // Provider id -> the env var this standalone server reads it from.
-const ENV_KEY = { fal: 'FAL_KEY', agnes: 'AGNES_API_KEY' };
+const ENV_KEY = { fal: 'FAL_KEY', agnes: 'AGNES_API_KEY', openrouter: 'OPENROUTER_API_KEY' };
 
-const server = new McpServer({ name: 'vidmyo', version: '0.3.0' });
+const server = new McpServer({ name: 'vidmyo', version: '0.4.0' });
+const secrets = (providerId) => process.env[ENV_KEY[providerId]] || '';
+const repurposeService = createRepurposeMcpService({ secrets });
 
 registerTools(server, {
-  secrets: (providerId) => process.env[ENV_KEY[providerId]] || '',
+  secrets,
   imageConfig: () => ({
     imageSource: process.env.VIDMYO_IMAGE_SOURCE || 'flow',
     imageModel: process.env.VIDMYO_IMAGE_MODEL || null,
   }),
   keyHint: 'this MCP server\'s environment (FAL_KEY / AGNES_API_KEY), or use Vidmyo\'s hosted HTTP MCP for keychain keys',
+  repurposeService,
 });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+let closing = false;
+async function close() {
+  if (closing) return;
+  closing = true;
+  await repurposeService.close();
+  await server.close();
+}
+const onTransportClose = transport.onclose;
+transport.onclose = () => {
+  onTransportClose?.();
+  void close();
+};
+process.once('SIGINT', () => { void close().finally(() => process.exit(0)); });
+process.once('SIGTERM', () => { void close().finally(() => process.exit(0)); });
