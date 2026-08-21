@@ -304,3 +304,46 @@ This step uses only the face evidence produced by the bundled YuNet detector
 and local FFmpeg. It performs no diarization, active-speaker switching, face
 recognition, network request, model download, account login, upload, or paid
 service call.
+
+## Captioned masters and platform exports
+
+After reframe v2 completes and the project manifest contains at least one
+manually approved candidate, submit `render` with the current transcript v1,
+boundary v1, reframe v1, and reframe v2 descriptors:
+
+```bash
+vidmyo-repurpose render --request /path/to/render-request.json
+```
+
+The default target set is the intersection of the completed reframe-v2 request
+and candidates explicitly approved and selected in `repurpose.json`. An
+explicit `options.candidate_ids` list may render another completed retained
+candidate, but it must still be manually approved. Pending and rejected
+candidates never render. `options.caption_style` accepts `clean` or `bold`,
+`options.captions_enabled` may disable captions, and `options.platforms`
+accepts `youtube_shorts`, `tiktok`, and `instagram_reels`.
+
+Caption cues are reconstructed from authoritative transcript word IDs within
+the repaired boundary. Words are grouped deterministically into short phrase
+cues and written to project-owned ASS files. Both styles use libass phrase-box
+backing, so the complete rendered phrase and its equal horizontal outline
+determine visible backing width; per-word stroke widths are never accumulated.
+No usable cue produces a valid uncaptioned master with a recorded reason.
+
+Outputs are local and deterministic:
+
+- `artifacts/captions/<candidate>.<style>.ass`
+- `artifacts/rendered-masters/<candidate>.<style>.master.mp4`
+- `artifacts/platform-exports/<candidate>.<style>.<platform>.mp4`
+- `artifacts/render-artifact.v1.json`
+
+Every master and export is atomically written and validated with FFprobe for
+H.264 video, AAC audio, 1080×1920 dimensions, duration, and fingerprint. Exact
+retries do not rewrite files. Cancellation checkpoints the current master and
+completed preset prefix, then resumes at the first missing export. Changed
+approvals, transcript/boundary/reframe identity, caption style, cue contract,
+preset, encoder contract, or output bytes invalidate affected work.
+
+Rendering is local and private. It does not translate, upload, publish,
+schedule, authenticate to social platforms, call a provider, download a model,
+or modify source and earlier pipeline media.
