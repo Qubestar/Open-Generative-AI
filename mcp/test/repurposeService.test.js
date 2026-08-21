@@ -148,6 +148,10 @@ test('render requires completed framing and approved selection without partial u
   });
   assert.throws(() => service.render({ projectDir }), /Finish analysis through reframe/);
   completeThrough(project, 'reframe');
+  fs.unlinkSync(source);
+  assert.throws(() => service.render({ projectDir, candidateIds: ['clip_001'] }), /source is missing/);
+  assert.equal(RepurposeProject.load(projectDir).getCandidate('clip_001').selected, false);
+  fs.writeFileSync(source, 'local media');
   assert.throws(() => service.render({ projectDir, candidateIds: ['clip_001', 'clip_999'] }), /Unknown candidates/);
   assert.equal(RepurposeProject.load(projectDir).getCandidate('clip_001').selected, false);
   const started = service.render({
@@ -174,6 +178,25 @@ test('job lookup rejects other Vidmyo job types and never leaks absolute artifac
   store.addArtifact(repurpose.id, { path: source, kind: 'outside' });
   const result = createRepurposeMcpService({ jobsDir }).getJob({ jobId: repurpose.id });
   assert.deepEqual(result.artifacts.map(item => item.path), ['artifacts/safe.json']);
+});
+
+test('candidate artifact reads reject a project symlink that resolves outside', () => {
+  const { jobsDir, source, projectDir, root } = fixture();
+  const project = RepurposeProject.create(projectDir, { source: { type: 'local_file', uri: source } });
+  project.addCandidate({ metadata: { title: 'Safe manifest title' } });
+  const outside = path.join(root, 'outside-artifacts');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'boundary-artifact.v1.json'), JSON.stringify({
+    candidates: [{
+      candidate_id: 'clip_001',
+      repaired_span: { start_seconds: 1, end_seconds: 20 },
+      extraction: { state: 'completed', path: '../../outside.mp4' },
+    }],
+  }));
+  fs.symlinkSync(outside, path.join(projectDir, 'artifacts'));
+  const listed = createRepurposeMcpService({ jobsDir }).listCandidates({ projectDir });
+  assert.equal(listed.candidates[0].preview_path, null);
+  assert.equal(listed.candidates[0].repaired_start_seconds, null);
 });
 
 test('service shutdown cancels and terminates only its owned active worker', async () => {

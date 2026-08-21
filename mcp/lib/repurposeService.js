@@ -101,9 +101,13 @@ function readArtifact(projectDir, relativePath) {
   const relation = path.relative(projectDir, file);
   if (relation === '..' || relation.startsWith(`..${path.sep}`) || path.isAbsolute(relation)) return null;
   try {
-    const stat = fs.statSync(file);
+    const realRoot = fs.realpathSync(projectDir);
+    const realFile = fs.realpathSync(file);
+    const realRelation = path.relative(realRoot, realFile);
+    if (realRelation === '..' || realRelation.startsWith(`..${path.sep}`) || path.isAbsolute(realRelation)) return null;
+    const stat = fs.statSync(realFile);
     if (!stat.isFile() || stat.size > MAX_ARTIFACT_JSON) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    return JSON.parse(fs.readFileSync(realFile, 'utf8'));
   } catch {
     return null;
   }
@@ -182,6 +186,17 @@ export function createRepurposeMcpService({
     if (busy) throw new Error(`Project has ${busy.state} ${busy.params.stage} job ${busy.id}; wait for it to finish before changing candidate review`);
   }
 
+  function requireLocalSource(project) {
+    if (project.manifest.source.type !== 'local_file') throw new Error('Repurpose MCP supports local_file sources only');
+    const source = path.isAbsolute(project.manifest.source.uri)
+      ? path.resolve(project.manifest.source.uri)
+      : path.resolve(project.dir, project.manifest.source.uri);
+    if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
+      throw new Error(`Repurpose source is missing: ${source}`);
+    }
+    return source;
+  }
+
   function launch(jobId) {
     if (active.has(jobId)) return active.get(jobId).promise;
     const jobStore = store();
@@ -208,18 +223,27 @@ export function createRepurposeMcpService({
       contract_version: 1,
       project_dir: path.resolve(project.dir),
       project_id: manifest.id,
-      source: { type: manifest.source.type, uri: manifest.source.uri, fingerprint: manifest.source.fingerprint },
+      source: {
+        type: bounded(manifest.source.type),
+        uri: String(manifest.source.uri || '').slice(0, 4096),
+        fingerprint: manifest.source.fingerprint ? bounded(manifest.source.fingerprint) : null,
+      },
       requested_clip_count: manifest.requested_clip_count,
-      content_type: manifest.content_type,
-      target_platforms: manifest.target_platforms,
-      render_defaults: manifest.render_defaults,
-      stages: manifest.stages,
+      content_type: bounded(manifest.content_type),
+      target_platforms: manifest.target_platforms.slice(0, 20).map(item => bounded(item)),
+      render_defaults: boundedJson(manifest.render_defaults),
+      stages: Object.fromEntries(Object.entries(manifest.stages).map(([stage, record]) => [stage, {
+        state: record.state,
+        artifact: record.artifact ? relativeProjectPath(project.dir, record.artifact) : null,
+        error: record.error ? bounded(record.error) : null,
+      }])),
       candidate_counts: {
         total: manifest.candidates.length,
         approved: manifest.candidates.filter(item => item.decision === 'approved').length,
         selected: manifest.candidates.filter(item => item.selected).length,
       },
-      outputs: manifest.outputs.slice(0, 100),
+      outputs: manifest.outputs.slice(0, 100)
+        .map(item => relativeProjectPath(project.dir, item)).filter(Boolean),
       jobs: projectJobs(project.dir).slice(0, MAX_PROJECT_JOBS)
         .map(job => publicJob(job, active.has(job.id))),
     };
@@ -332,6 +356,7 @@ export function createRepurposeMcpService({
       if (!['pending', 'failed'].includes(project.manifest.stages.render.state)) {
         throw new Error(`Render cannot start from ${project.manifest.stages.render.state}`);
       }
+      requireLocalSource(project);
       if (candidateIds) {
         const wanted = new Set(candidateIds);
         const unknown = [...wanted].filter(id => !project.manifest.candidates.some(item => item.id === id));
