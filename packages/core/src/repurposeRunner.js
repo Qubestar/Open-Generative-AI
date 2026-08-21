@@ -50,6 +50,69 @@ const STAGE_PLAN = {
   render: [{ id: 'render', command: 'render', inputs: ['transcript', 'boundary', 'reframeV1', 'reframeV2'], output: 'render' }],
 };
 
+export function repurposeStageSubsteps(stage) {
+  if (!STAGE_PLAN[stage]) throw new Error(`Unknown Repurpose stage: ${stage}`);
+  return STAGE_PLAN[stage].map(step => step.id);
+}
+
+function workerProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+export function inspectRepurposeRecovery(store, projectDir, { processAlive = workerProcessAlive } = {}) {
+  if (!store || typeof store.list !== 'function') throw new Error('A JobStore-compatible store is required');
+  const project = RepurposeProject.load(path.resolve(projectDir));
+  const jobs = store.list({ type: REPURPOSE_JOB_TYPE })
+    .filter(job => path.resolve(job.params?.projectDir || '') === path.resolve(project.dir));
+  let prerequisitesComplete = true;
+  const stages = REPURPOSE_STAGES.map(stage => {
+    const record = project.manifest.stages[stage];
+    const latest = jobs.find(job => job.params?.stage === stage) || null;
+    const expected = repurposeStageSubsteps(stage);
+    const completed = (latest?.checkpoints?.completedSubsteps || []).filter(item => expected.includes(item));
+    const remaining = expected.filter(item => !completed.includes(item));
+    const liveWorker = latest?.state === 'running'
+      && Boolean(processAlive(latest.checkpoints?.childProcess?.pid));
+    let action;
+    if (record.state === 'completed') action = 'preserve_completed';
+    else if (!prerequisitesComplete) action = 'blocked_by_prerequisite';
+    else if (latest?.state === 'running' && liveWorker) action = 'wait_for_owned_worker';
+    else if (latest?.state === 'running') action = 'resume_persisted_job';
+    else if (latest?.state === 'queued') action = 'start_queued_job';
+    else if (record.state === 'failed' || ['error', 'cancelled'].includes(latest?.state)) action = 'retry_preserved_stage';
+    else if (record.state === 'pending') action = 'start_stage';
+    else action = 'inspect_inconsistent_state';
+    const result = {
+      stage,
+      manifest_state: record.state,
+      job_id: latest?.id || null,
+      job_state: latest?.state || null,
+      live_worker: liveWorker,
+      expected_substeps: expected,
+      reusable_substeps: completed,
+      remaining_substeps: remaining,
+      action,
+      safe_to_resume: action === 'resume_persisted_job',
+      guidance: action === 'wait_for_owned_worker'
+        ? 'Keep polling; another live Vidmyo surface owns this worker.'
+        : action === 'resume_persisted_job'
+          ? 'Resume the same durable job id; completed substeps and validated artifacts are preserved.'
+          : action === 'retry_preserved_stage'
+            ? 'Create a retry for this stage; completed prerequisites and valid caches remain preserved.'
+            : null,
+    };
+    prerequisitesComplete = prerequisitesComplete && record.state === 'completed';
+    return result;
+  });
+  return { contract_version: 1, project_dir: path.resolve(project.dir), stages };
+}
+
 const STAGE_OPTIONS = {
   ingest: [],
   transcribe: ['model', 'language', 'device', 'compute_type', 'model_cache'],

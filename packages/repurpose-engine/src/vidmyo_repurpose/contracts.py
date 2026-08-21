@@ -19,6 +19,7 @@ BOUNDARY_ARTIFACT_VERSION = 1
 REFRAME_ARTIFACT_VERSION = 1
 REFRAME_ARTIFACT_V2_VERSION = 2
 RENDER_ARTIFACT_VERSION = 1
+BENCHMARK_CORPUS_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -41,6 +42,7 @@ _SCHEMA_FILES = {
     "reframe_artifact": "reframe-artifact.v1.schema.json",
     "reframe_artifact_v2": "reframe-artifact.v2.schema.json",
     "render_artifact": "render-artifact.v1.schema.json",
+    "benchmark_corpus": "benchmark-corpus.v1.schema.json",
 }
 
 

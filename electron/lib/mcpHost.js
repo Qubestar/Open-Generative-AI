@@ -25,6 +25,7 @@ const { pathToFileURL } = require('node:url');
 const { app } = require('electron');
 const { getSecret } = require('./secrets');
 const { validateMcpRequest } = require('./mcpSecurity');
+const { resolveRuntimePaths } = require('./runtimePaths');
 
 // 7861 is Video Delta's engine — take the next one and keep it STABLE across
 // restarts, because agents register a fixed URL.
@@ -71,10 +72,10 @@ function listen(httpServer, port) {
 async function start() {
   if (state) return { ok: true, url: state.url, token: state.token, port: state.port };
   try {
-    const repo = path.join(__dirname, '..', '..');
-    const entry = path.join(repo, 'mcp', 'lib', 'httpServer.js');
+    const runtime = resolveRuntimePaths({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath });
+    const entry = path.join(runtime.mcpDir, 'lib', 'httpServer.js');
     const { createHttpMcp } = await import(pathToFileURL(entry).href);
-    const serviceEntry = path.join(repo, 'mcp', 'lib', 'repurposeService.js');
+    const serviceEntry = path.join(runtime.mcpDir, 'lib', 'repurposeService.js');
     const { createRepurposeMcpService } = await import(pathToFileURL(serviceEntry).href);
 
     const cfg = readHostConfig();
@@ -82,6 +83,7 @@ async function start() {
 
     const repurposeService = createRepurposeMcpService({
       secrets: (providerId) => getSecret(providerId),
+      engineDir: runtime.repurposeEngineDir,
     });
     const mcp = await createHttpMcp({
       // The whole point: keys come from the OS keychain, in-process.

@@ -19,6 +19,7 @@ const os = require('os');
 const { pathToFileURL } = require('url');
 const { getAgentPipeline, pipelineInstructions } = require('./agentPipelines');
 const mcpHost = require('./mcpHost');
+const { resolveRuntimePaths } = require('./runtimePaths');
 
 // ── Launch preferences ──────────────────────────────────────────────────────
 // How "Launch" opens an agent: its desktop app (default, Luke's preference)
@@ -474,7 +475,8 @@ function register() {
   // Falls back to stdio when the host didn't start, so the button always does
   // something useful.
   ipcMain.handle('agents:installMcp', async (_evt, agentId) => {
-    const serverPath = path.join(__dirname, '..', '..', 'mcp', 'server.js');
+    const runtime = resolveRuntimePaths({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath });
+    const serverPath = path.join(runtime.mcpDir, 'server.js');
     const host = mcpHost.info();
 
     const spec = host.running ? {
