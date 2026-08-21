@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { getSecret: defaultGetSecret } = require('./secrets');
+const { resolveRuntimePaths } = require('./runtimePaths');
 
 let corePromise = null;
 function defaultCore() {
@@ -64,11 +65,13 @@ function createRepurposeBridge({
   core = defaultCore,
   getSecret = defaultGetSecret,
   execFileImpl,
+  engineDir = null,
 } = {}) {
   if (!ipcMain || !dialog || !shell || !BrowserWindow || !app) {
     throw new Error('Repurpose bridge requires Electron IPC, dialog, shell, BrowserWindow, and app');
   }
   const active = new Map();
+  const trustedEngineDir = engineDir;
   const projectGrants = new Set();
   const sourceGrants = new Set();
   let registered = false;
@@ -144,7 +147,7 @@ function createRepurposeBridge({
       const openRouterKey = ['generate_candidates', 'rank'].includes(job.params.stage) ? getSecret('openrouter') : null;
       return mod.runRepurposeJob(jobStore, jobId, {
         python: mod.DEFAULT_REPURPOSE_PYTHON,
-        engineDir: mod.DEFAULT_REPURPOSE_ENGINE_DIR,
+        engineDir: trustedEngineDir || mod.DEFAULT_REPURPOSE_ENGINE_DIR,
         extraEnv: openRouterKey ? { OPENROUTER_API_KEY: openRouterKey } : {},
         onChild: child => { entry.child = child; },
         onEvent: event => send({ ...event, state: jobStore.get(jobId)?.state || 'running' }),
@@ -354,7 +357,7 @@ function createRepurposeBridge({
         const cfg = readConfig();
         const readiness = await mod.inspectRepurposeReadiness({
           python: mod.DEFAULT_REPURPOSE_PYTHON,
-          engineDir: mod.DEFAULT_REPURPOSE_ENGINE_DIR,
+          engineDir: trustedEngineDir || mod.DEFAULT_REPURPOSE_ENGINE_DIR,
           modelCache: cfg.modelCache || null,
           ...(execFileImpl ? { execFileImpl } : {}),
         });
@@ -375,7 +378,11 @@ let defaultBridge = null;
 function register() {
   if (!defaultBridge) {
     const { ipcMain, dialog, shell, BrowserWindow, app } = require('electron');
-    defaultBridge = createRepurposeBridge({ ipcMain, dialog, shell, BrowserWindow, app });
+    const runtime = resolveRuntimePaths({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath });
+    defaultBridge = createRepurposeBridge({
+      ipcMain, dialog, shell, BrowserWindow, app,
+      engineDir: runtime.repurposeEngineDir,
+    });
   }
   return defaultBridge.register();
 }

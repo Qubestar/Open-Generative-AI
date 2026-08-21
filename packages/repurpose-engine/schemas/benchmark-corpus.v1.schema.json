@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/benchmark-corpus.v1.schema.json",
+  "title": "Vidmyo Repurpose benchmark corpus v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "created_at", "scenarios"],
+  "properties": {
+    "schema_version": {"const": "repurpose-benchmark.v1"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "scenarios": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "category", "evidence_kind", "project_dir", "source", "evidence_files", "human_review", "timings"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
+          "category": {"enum": ["talking_head", "two_speaker", "lecture", "webinar", "visually_active"]},
+          "evidence_kind": {"enum": ["synthetic_fixture", "human_real"]},
+          "project_dir": {"type": "string", "minLength": 1},
+          "source": {
+            "type": "object", "additionalProperties": false,
+            "required": ["path", "provenance", "license"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "provenance": {"type": "string", "minLength": 1},
+              "license": {"type": "string", "minLength": 1}
+            }
+          },
+          "evidence_files": {
+            "type": "object", "additionalProperties": false,
+            "required": ["transcript", "ranking", "boundary", "reframe", "render"],
+            "properties": {
+              "transcript": {"type": "string", "minLength": 1},
+              "ranking": {"type": "string", "minLength": 1},
+              "boundary": {"type": "string", "minLength": 1},
+              "reframe": {"type": "string", "minLength": 1},
+              "render": {"type": "string", "minLength": 1}
+            }
+          },
+          "human_review": {
+            "type": "object", "additionalProperties": false,
+            "required": ["reviewer", "candidates"],
+            "properties": {
+              "reviewer": {"type": ["string", "null"]},
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["candidate_id", "approved", "complete_sentence"],
+                  "properties": {
+                    "candidate_id": {"type": "string", "pattern": "^clip_[0-9]{3,}$"},
+                    "approved": {"type": ["boolean", "null"]},
+                    "complete_sentence": {"type": ["boolean", "null"]}
+                  }
+                }
+              }
+            }
+          },
+          "timings": {
+            "type": "object",
+            "additionalProperties": {"type": ["number", "null"], "minimum": 0}
+          }
+        }
+      }
+    }
+  }
+}

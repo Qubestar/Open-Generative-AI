@@ -89,6 +89,25 @@ valid transcript remain intact. No-speech input completes with
 Automated tests inject all model/download/inference boundaries. They do not
 download models, access the network, require a GPU, or transcribe real media.
 
+## Five-scenario release benchmark
+
+The benchmark contract always contains exactly one talking-head, two-speaker,
+lecture, webinar, and visually active scenario. Generate the offline mechanical
+fixture corpus and report with:
+
+```bash
+vidmyo-repurpose benchmark-fixtures --output /tmp/vidmyo-benchmark
+vidmyo-repurpose benchmark \
+  --manifest /tmp/vidmyo-benchmark/benchmark-corpus.v1.json \
+  --output /tmp/vidmyo-benchmark/report
+```
+
+The generated media is deterministic local FFmpeg color-and-tone material. It
+can validate artifact contracts, metrics, FFprobe export checks, and reporting,
+but its quality status is always `unknown`. Only licensed `human_real` evidence
+from all five categories can satisfy the quality gate. See
+`docs/repurpose/benchmark/README.md` for the corpus contract and intake rules.
+
 ## Transcript-grounded candidate suggestions
 
 After a completed version-1 transcript, submit a `generate_candidates` worker

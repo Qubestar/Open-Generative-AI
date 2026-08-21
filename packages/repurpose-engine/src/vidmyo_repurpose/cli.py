@@ -27,6 +27,7 @@ from .boundaries import (
     BoundaryError,
     repair_and_extract,
 )
+from .benchmark import generate_fixture_corpus, run_benchmark, write_report
 from .candidates import (
     CANDIDATE_ARTIFACT_RELATIVE_PATH,
     CandidateGenerationError,
@@ -92,6 +93,23 @@ def _smoke(args: argparse.Namespace) -> int:
     for event in events:
         print(json.dumps(event, separators=(",", ":")))
     return 0
+
+
+def _benchmark_fixtures(args: argparse.Namespace) -> int:
+    manifest = generate_fixture_corpus(args.output)
+    print(json.dumps({"manifest": str(manifest)}, separators=(",", ":")))
+    return 0
+
+
+def _benchmark(args: argparse.Namespace) -> int:
+    report = run_benchmark(args.manifest)
+    json_path, markdown_path = write_report(report, args.output)
+    print(json.dumps({
+        "report": str(json_path), "markdown": str(markdown_path),
+        "mechanical_status": report["aggregate"]["mechanical_status"],
+        "quality_status": report["aggregate"]["quality_status"],
+    }, separators=(",", ":")))
+    return 0 if report["aggregate"]["mechanical_status"] == "pass" else 1
 
 
 def _emit(event: dict[str, Any]) -> None:
@@ -644,6 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
             "reframe_artifact",
             "reframe_artifact_v2",
             "render_artifact",
+            "benchmark_corpus",
         ),
         required=True,
     )
@@ -653,6 +672,19 @@ def build_parser() -> argparse.ArgumentParser:
     smoke = commands.add_parser("smoke", help="emit a no-media JSONL protocol smoke run")
     smoke.add_argument("--request", required=True)
     smoke.set_defaults(handler=_smoke)
+
+    benchmark_fixtures = commands.add_parser(
+        "benchmark-fixtures", help="generate the offline five-scenario mechanical fixture corpus"
+    )
+    benchmark_fixtures.add_argument("--output", required=True)
+    benchmark_fixtures.set_defaults(handler=_benchmark_fixtures)
+
+    benchmark = commands.add_parser(
+        "benchmark", help="compute JSON and Markdown evidence from a five-scenario corpus"
+    )
+    benchmark.add_argument("--manifest", required=True)
+    benchmark.add_argument("--output", required=True)
+    benchmark.set_defaults(handler=_benchmark)
 
     ingest = commands.add_parser("ingest", help="validate and fingerprint local source media")
     ingest.add_argument("--request", required=True)
