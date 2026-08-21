@@ -18,6 +18,7 @@ RANKING_ARTIFACT_VERSION = 1
 BOUNDARY_ARTIFACT_VERSION = 1
 REFRAME_ARTIFACT_VERSION = 1
 REFRAME_ARTIFACT_V2_VERSION = 2
+RENDER_ARTIFACT_VERSION = 1
 STAGES = (
     "ingest",
     "transcribe",
@@ -39,6 +40,7 @@ _SCHEMA_FILES = {
     "boundary_artifact": "boundary-artifact.v1.schema.json",
     "reframe_artifact": "reframe-artifact.v1.schema.json",
     "reframe_artifact_v2": "reframe-artifact.v2.schema.json",
+    "render_artifact": "render-artifact.v1.schema.json",
 }
 
 
@@ -93,6 +95,8 @@ def validate_document(kind: str, document: Any) -> Any:
         _validate_reframe_semantics(document)
     elif kind == "reframe_artifact_v2":
         _validate_reframe_v2_semantics(document)
+    elif kind == "render_artifact":
+        _validate_render_semantics(document)
     return document
 
 
@@ -463,6 +467,86 @@ def _validate_reframe_v2_semantics(artifact: dict[str, Any]) -> None:
                 crop = segment[panel_name]
                 if crop["x"] + crop["width"] > item["input"]["width"] or crop["y"] + crop["height"] > item["input"]["height"]:
                     raise ContractValidationError(f"{root}.segments.{segment_index}.{panel_name}: crop exceeds the source frame")
+
+
+def _validate_render_semantics(artifact: dict[str, Any]) -> None:
+    candidates = artifact["candidates"]
+    ids = [item["candidate_id"] for item in candidates]
+    requested = artifact["requested_candidate_ids"]
+    if len(ids) != len(set(ids)) or ids != requested:
+        raise ContractValidationError("candidates: must contain each requested candidate exactly once in request order")
+    preset_ids = [item["id"] for item in artifact["presets"]]
+    if len(preset_ids) != len(set(preset_ids)):
+        raise ContractValidationError("presets.id: ids must be unique")
+    style = artifact["settings"]["caption_style"]
+    for index, item in enumerate(candidates):
+        root = f"candidates.{index}"
+        duration = _finite_time(item["input"]["duration_seconds"], f"{root}.input.duration_seconds")
+        boundary_start = _finite_time(item["input"]["boundary_start_seconds"], f"{root}.input.boundary_start_seconds")
+        boundary_end = _finite_time(item["input"]["boundary_end_seconds"], f"{root}.input.boundary_end_seconds")
+        if boundary_end <= boundary_start:
+            raise ContractValidationError(f"{root}.input: boundary end must follow boundary start")
+        if item["caption"]["style"] != style:
+            raise ContractValidationError(f"{root}.caption.style: must match render settings")
+        seen_words: set[str] = set()
+        previous_end = 0.0
+        for cue_index, cue in enumerate(item["cues"]):
+            start = _finite_time(cue["start_seconds"], f"{root}.cues.{cue_index}.start_seconds")
+            end = _finite_time(cue["end_seconds"], f"{root}.cues.{cue_index}.end_seconds")
+            if start < previous_end or end <= start or end > duration:
+                raise ContractValidationError(f"{root}.cues.{cue_index}: cues must be ordered, positive, and within the clip")
+            if seen_words.intersection(cue["word_ids"]):
+                raise ContractValidationError(f"{root}.cues.{cue_index}.word_ids: words may appear only once")
+            seen_words.update(cue["word_ids"])
+            previous_end = end
+        caption = item["caption"]
+        if caption["enabled"]:
+            if not item["cues"] or caption["fallback_reason"] is not None:
+                raise ContractValidationError(f"{root}.caption: enabled captions require cues and no fallback")
+            if item["state"] == "completed" and caption["state"] != "completed":
+                raise ContractValidationError(f"{root}.caption: completed render requires completed captions")
+            if caption["state"] == "completed":
+                expected_caption = f"artifacts/captions/{item['candidate_id']}.{style}.json"
+                if caption["path"] != expected_caption or caption["fingerprint"] is None:
+                    raise ContractValidationError(f"{root}.caption: completed captions must use the deterministic overlay-plan path")
+                if [overlay["cue_id"] for overlay in caption["overlays"]] != [cue["id"] for cue in item["cues"]]:
+                    raise ContractValidationError(f"{root}.caption.overlays: must match every cue in order")
+                for overlay_index, overlay in enumerate(caption["overlays"]):
+                    expected_overlay = f"artifacts/captions/{item['candidate_id']}.{style}/{overlay['cue_id']}.png"
+                    if overlay["path"] != expected_overlay:
+                        raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}.path: must use the deterministic project path")
+                    if overlay["start_seconds"] != item["cues"][overlay_index]["start_seconds"] or overlay["end_seconds"] != item["cues"][overlay_index]["end_seconds"]:
+                        raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}: timing must match its cue")
+                    left_padding = overlay["text_left"] - overlay["backing_left"]
+                    right_padding = overlay["backing_right"] - overlay["text_right"]
+                    if left_padding != right_padding or left_padding != overlay["visible_padding_left"] or right_padding != overlay["visible_padding_right"]:
+                        raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}: visible phrase padding must be symmetric")
+            elif caption["path"] is not None or caption["fingerprint"] is not None or caption["overlays"]:
+                raise ContractValidationError(f"{root}.caption: pending captions must have no files")
+        else:
+            if caption["state"] != "not_required" or caption["path"] is not None or caption["fingerprint"] is not None or caption["overlays"]:
+                raise ContractValidationError(f"{root}.caption: disabled/fallback captions must have no file")
+            if caption["fallback_reason"] not in {"captions_disabled", "no_usable_speech"}:
+                raise ContractValidationError(f"{root}.caption.fallback_reason: a stable reason is required")
+        if item["state"] == "completed" and item["master"] is None:
+            raise ContractValidationError(f"{root}.master: completed render requires a master")
+        if item["master"] is not None:
+            expected_master = f"artifacts/rendered-masters/{item['candidate_id']}.{style}.master.mp4"
+            if item["master"]["path"] != expected_master:
+                raise ContractValidationError(f"{root}.master.path: must use the deterministic project path")
+            if abs(item["master"]["duration_seconds"] - duration) > artifact["settings"]["duration_tolerance_seconds"]:
+                raise ContractValidationError(f"{root}.master.duration_seconds: differs from the input")
+        export_ids = [entry["preset_id"] for entry in item["exports"]]
+        if export_ids != preset_ids[:len(export_ids)]:
+            raise ContractValidationError(f"{root}.exports: partial outputs must follow preset order")
+        if item["state"] == "completed" and export_ids != preset_ids:
+            raise ContractValidationError(f"{root}.exports: must contain every preset exactly once in preset order")
+        for export_index, export in enumerate(item["exports"]):
+            expected_export = f"artifacts/platform-exports/{item['candidate_id']}.{style}.{export['preset_id']}.mp4"
+            if export["output"]["path"] != expected_export:
+                raise ContractValidationError(f"{root}.exports.{export_index}.output.path: must use the deterministic preset path")
+            if abs(export["output"]["duration_seconds"] - duration) > artifact["settings"]["duration_tolerance_seconds"]:
+                raise ContractValidationError(f"{root}.exports.{export_index}.output.duration_seconds: differs from the input")
 
 
 def validate_event_stream(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

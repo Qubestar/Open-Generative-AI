@@ -16,6 +16,7 @@ from .contracts import (
     INGEST_ARTIFACT_VERSION,
     RANKING_ARTIFACT_VERSION,
     REFRAME_ARTIFACT_VERSION,
+    RENDER_ARTIFACT_VERSION,
     TRANSCRIPT_ARTIFACT_VERSION,
     ContractValidationError,
     validate_document,
@@ -39,6 +40,7 @@ from .reframe_two import (
     TwoSpeakerReframeError,
     upgrade_reframe_previews,
 )
+from .render import RENDER_ARTIFACT_RELATIVE_PATH, RenderError, render_platform_outputs
 from .transcribe import (
     DEFAULT_MODEL,
     TRANSCRIPT_ARTIFACT_RELATIVE_PATH,
@@ -569,6 +571,64 @@ def _reframe_two(args: argparse.Namespace) -> int:
             signal.signal(signum, handler)
 
 
+def _render(args: argparse.Namespace) -> int:
+    request = validate_document("request", _read_json(args.request))
+    if request["stage"] != "render":
+        raise ContractValidationError("stage: render command requires stage 'render'")
+    sequence = 1
+    _emit(_event(request, sequence, "accepted", {"message": "caption and platform render request accepted"}))
+    sequence += 1
+    cancellation = {"requested": False}
+    previous_handlers: dict[int, Any] = {}
+
+    def handle_signal(_signum: int, _frame: Any) -> None:
+        cancellation["requested"] = True
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, handle_signal)
+
+    def emit_progress(payload: dict[str, Any]) -> None:
+        nonlocal sequence
+        _emit(_event(request, sequence, "progress", payload))
+        sequence += 1
+
+    try:
+        result = render_platform_outputs(
+            request, progress=emit_progress, cancelled=lambda: cancellation["requested"],
+        )
+        completed = [item for item in result.artifact["candidates"] if item["state"] == "completed"]
+        export_count = sum(len(item["exports"]) for item in completed)
+        _emit(_event(request, sequence, "artifact", {
+            "kind": "render_artifact", "version": RENDER_ARTIFACT_VERSION,
+            "path": result.path.relative_to(Path(request["project_dir"]).expanduser().resolve()).as_posix(),
+            "cache_key": result.artifact["cache_key"], "cache_hit": result.cache_hit,
+            "master_count": len(completed), "export_count": export_count,
+        }))
+        sequence += 1
+        _emit(_event(request, sequence, "completed", {
+            "artifacts": [{"kind": "render_artifact", "version": RENDER_ARTIFACT_VERSION, "path": RENDER_ARTIFACT_RELATIVE_PATH.as_posix()}],
+            "cache_hit": result.cache_hit, "master_count": len(completed), "export_count": export_count,
+        }))
+        return 0
+    except RenderError as exc:
+        _emit(_event(request, sequence, "error", exc.payload()))
+        return 1
+    except (ContractValidationError, OSError, ReframeError) as exc:
+        request_invalid = isinstance(exc, ContractValidationError)
+        failure = RenderError(
+            "render_request_invalid" if request_invalid else "render_local_io_failed",
+            ("The render request or normalized output is invalid" if request_invalid else "Local render I/O failed") + f": {exc}.",
+            "The source, transcript, boundaries, reframed previews, approvals, and every earlier valid render were preserved.",
+            "Correct the version-1 request or current input artifacts and retry." if request_invalid else "Check local disk access and FFmpeg/FFprobe, then retry.",
+        )
+        _emit(_event(request, sequence, "error", failure.payload()))
+        return 1
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vidmyo-repurpose")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -583,6 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
             "boundary_artifact",
             "reframe_artifact",
             "reframe_artifact_v2",
+            "render_artifact",
         ),
         required=True,
     )
@@ -633,6 +694,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reframe_two.add_argument("--request", required=True)
     reframe_two.set_defaults(handler=_reframe_two)
+
+    render = commands.add_parser(
+        "render", help="create local captioned masters and platform-ready exports",
+    )
+    render.add_argument("--request", required=True)
+    render.set_defaults(handler=_render)
 
     doctor = commands.add_parser("doctor", help="read-only transcription model readiness")
     doctor.add_argument("--model", default=DEFAULT_MODEL)

@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vidmyo.local/schemas/repurpose/render-artifact.v1.schema.json",
+  "title": "Vidmyo Repurpose caption and platform render artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_version", "engine_version", "created_at", "versions", "source", "settings", "presets", "cache_key", "requested_candidate_ids", "candidates"],
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "candidateId": {"type": "string", "pattern": "^clip_[0-9]{3,}$"},
+    "wordId": {"type": "string", "pattern": "^word_[0-9]{6}$"},
+    "output": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "path", "fingerprint", "duration_seconds", "width", "height", "video_codec", "audio_codec"],
+      "properties": {
+        "state": {"const": "completed"}, "path": {"type": "string", "minLength": 1},
+        "fingerprint": {"$ref": "#/$defs/hash"}, "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "width": {"const": 1080}, "height": {"const": 1920},
+        "video_codec": {"const": "h264"}, "audio_codec": {"const": "aac"}
+      }
+    }
+  },
+  "properties": {
+    "artifact_version": {"const": 1}, "engine_version": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "versions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "captioner", "backing", "renderer", "prober"],
+      "properties": {
+        "schema": {"const": "render-artifact.v1"}, "captioner": {"const": "word-phrase-overlay.v1"},
+        "backing": {"const": "opencv-phrase-box.v1"}, "renderer": {"const": "ffmpeg-overlay-master-h264-aac.v1"},
+        "prober": {"const": "ffprobe-media-contract.v1"}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fingerprint", "transcript_cache_key", "boundary_cache_key", "reframe_v1_cache_key", "reframe_v2_cache_key", "reframe_v2_fingerprint", "manifest_decisions_hash"],
+      "properties": {
+        "fingerprint": {"$ref": "#/$defs/hash"}, "transcript_cache_key": {"$ref": "#/$defs/hash"},
+        "boundary_cache_key": {"$ref": "#/$defs/hash"}, "reframe_v1_cache_key": {"$ref": "#/$defs/hash"},
+        "reframe_v2_cache_key": {"$ref": "#/$defs/hash"}, "reframe_v2_fingerprint": {"$ref": "#/$defs/hash"},
+        "manifest_decisions_hash": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "settings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["caption_style", "captions_enabled", "max_words_per_cue", "max_characters_per_cue", "output_width", "output_height", "safe_margin_left_right", "duration_tolerance_seconds", "encoder"],
+      "properties": {
+        "caption_style": {"enum": ["clean", "bold"]}, "captions_enabled": {"type": "boolean"},
+        "max_words_per_cue": {"const": 7}, "max_characters_per_cue": {"const": 34},
+        "output_width": {"const": 1080}, "output_height": {"const": 1920}, "safe_margin_left_right": {"const": 90},
+        "duration_tolerance_seconds": {"type": "number", "minimum": 0.05},
+        "encoder": {"const": "libx264-yuv420p-aac-faststart.v1"}
+      }
+    },
+    "presets": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "container", "video_codec", "audio_codec", "width", "height", "frame_rate_policy", "crf", "video_bitrate", "audio_bitrate"],
+        "properties": {
+          "id": {"enum": ["youtube_shorts", "tiktok", "instagram_reels"]}, "label": {"type": "string", "minLength": 1},
+          "container": {"const": "mp4"}, "video_codec": {"const": "h264"}, "audio_codec": {"const": "aac"},
+          "width": {"const": 1080}, "height": {"const": 1920}, "frame_rate_policy": {"const": "preserve"},
+          "crf": {"type": "integer", "minimum": 0, "maximum": 51}, "video_bitrate": {"type": "string", "minLength": 1},
+          "audio_bitrate": {"const": "192k"}
+        }
+      }
+    },
+    "cache_key": {"$ref": "#/$defs/hash"},
+    "requested_candidate_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/candidateId"}},
+    "candidates": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["candidate_id", "state", "input", "cue_key", "cues", "caption", "output_key", "master", "exports"],
+        "properties": {
+          "candidate_id": {"$ref": "#/$defs/candidateId"}, "state": {"enum": ["pending", "completed"]},
+          "input": {
+            "type": "object", "additionalProperties": false,
+            "required": ["path", "fingerprint", "duration_seconds", "reframe_mode", "boundary_first_word_id", "boundary_last_word_id", "boundary_start_seconds", "boundary_end_seconds"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1}, "fingerprint": {"$ref": "#/$defs/hash"},
+              "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+              "reframe_mode": {"enum": ["single_speaker_reuse", "two_speaker_split", "fallback_reuse"]},
+              "boundary_first_word_id": {"$ref": "#/$defs/wordId"}, "boundary_last_word_id": {"$ref": "#/$defs/wordId"},
+              "boundary_start_seconds": {"type": "number", "minimum": 0}, "boundary_end_seconds": {"type": "number", "minimum": 0}
+            }
+          },
+          "cue_key": {"$ref": "#/$defs/hash"},
+          "cues": {
+            "type": "array", "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["id", "start_seconds", "end_seconds", "text", "word_ids"],
+              "properties": {
+                "id": {"type": "string", "pattern": "^cue_[0-9]{4}$"}, "start_seconds": {"type": "number", "minimum": 0},
+                "end_seconds": {"type": "number", "minimum": 0}, "text": {"type": "string", "minLength": 1},
+                "word_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/wordId"}}
+              }
+            }
+          },
+          "caption": {
+            "type": "object", "additionalProperties": false,
+            "required": ["enabled", "style", "state", "path", "fingerprint", "overlays", "fallback_reason", "backing_model"],
+            "properties": {
+              "enabled": {"type": "boolean"}, "style": {"enum": ["clean", "bold"]},
+              "state": {"enum": ["pending", "completed", "not_required"]}, "path": {"type": ["string", "null"]},
+              "fingerprint": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+              "overlays": {
+                "type": "array", "items": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["cue_id", "path", "fingerprint", "start_seconds", "end_seconds", "text_left", "text_right", "backing_left", "backing_right", "visible_padding_left", "visible_padding_right"],
+                  "properties": {
+                    "cue_id": {"type": "string", "pattern": "^cue_[0-9]{4}$"},
+                    "path": {"type": "string", "minLength": 1}, "fingerprint": {"$ref": "#/$defs/hash"},
+                    "start_seconds": {"type": "number", "minimum": 0}, "end_seconds": {"type": "number", "minimum": 0},
+                    "text_left": {"type": "integer", "minimum": 0}, "text_right": {"type": "integer", "minimum": 0},
+                    "backing_left": {"type": "integer", "minimum": 0}, "backing_right": {"type": "integer", "maximum": 1079},
+                    "visible_padding_left": {"type": "integer", "minimum": 1}, "visible_padding_right": {"type": "integer", "minimum": 1}
+                  }
+                }
+              },
+              "fallback_reason": {"type": ["string", "null"], "enum": [null, "captions_disabled", "no_usable_speech"]},
+              "backing_model": {"const": "opencv-phrase-box.v1"}
+            }
+          },
+          "output_key": {"$ref": "#/$defs/hash"}, "master": {"oneOf": [{"$ref": "#/$defs/output"}, {"type": "null"}]},
+          "exports": {
+            "type": "array", "items": {
+              "type": "object", "additionalProperties": false, "required": ["preset_id", "output"],
+              "properties": {"preset_id": {"enum": ["youtube_shorts", "tiktok", "instagram_reels"]}, "output": {"$ref": "#/$defs/output"}}
+            }
+          }
+        }
+      }
+    }
+  }
+}
