@@ -614,12 +614,13 @@ def _render(args: argparse.Namespace) -> int:
     except RenderError as exc:
         _emit(_event(request, sequence, "error", exc.payload()))
         return 1
-    except ContractValidationError as exc:
+    except (ContractValidationError, OSError, ReframeError) as exc:
+        request_invalid = isinstance(exc, ContractValidationError)
         failure = RenderError(
-            "render_request_invalid",
-            f"The render request or normalized output is invalid: {exc}.",
+            "render_request_invalid" if request_invalid else "render_local_io_failed",
+            ("The render request or normalized output is invalid" if request_invalid else "Local render I/O failed") + f": {exc}.",
             "The source, transcript, boundaries, reframed previews, approvals, and every earlier valid render were preserved.",
-            "Correct the version-1 request or current input artifacts and retry.",
+            "Correct the version-1 request or current input artifacts and retry." if request_invalid else "Check local disk access and FFmpeg/FFprobe, then retry.",
         )
         _emit(_event(request, sequence, "error", failure.payload()))
         return 1

@@ -196,6 +196,10 @@ def build_caption_overlay(text: str, style_name: str, destination: Path) -> dict
         if not cv2.imwrite(str(temporary), canvas):
             raise _error("caption_render_failed", "OpenCV did not create a caption overlay.", "Check local disk space and retry.")
         os.replace(temporary, destination)
+    except RenderError:
+        raise
+    except OSError as exc:
+        raise _error("caption_render_failed", f"The caption overlay could not be stored: {exc}.", "Check local disk space and permissions, then retry.") from exc
     finally:
         temporary.unlink(missing_ok=True)
     return {
@@ -317,7 +321,10 @@ def _run_output(
         if result.returncode != 0 or not temporary.is_file():
             detail = (result.stderr or "FFmpeg produced no complete output")[:500]
             raise _error("render_failed", f"FFmpeg failed to create a complete output: {detail}", "Check FFmpeg, codecs, and disk space, then retry.")
-        probe = _probe(temporary, ffprobe)
+        try:
+            probe = _probe(temporary, ffprobe)
+        except ReframeError as exc:
+            raise _error("render_output_invalid", f"The rendered output could not be probed: {exc}.", "Check FFmpeg/FFprobe and retry.") from exc
         if (
             probe["width"] != OUTPUT_WIDTH or probe["height"] != OUTPUT_HEIGHT
             or probe["video_codec"] != "h264" or probe["audio_codec"] != "aac"

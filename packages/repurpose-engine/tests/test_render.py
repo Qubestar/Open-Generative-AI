@@ -243,6 +243,21 @@ def test_render_failure_is_atomic_and_leaves_no_temporary_output(tmp_path):
     assert list((tmp_path / "artifacts" / "rendered-masters").glob(".*.tmp.mp4")) == []
 
 
+def test_output_probe_failure_becomes_stable_render_error(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    media = RenderMedia()
+    with pytest.raises(RenderError, match="could not be probed") as failure:
+        _run_output(
+            source, tmp_path / "output.mp4", 29.9, 0.25,
+            ffmpeg=media.ffmpeg,
+            ffprobe=lambda command: subprocess.CompletedProcess(command, 1, "{}", "failed"),
+            video_args=["-c:v", "libx264"],
+        )
+    assert failure.value.code == "render_output_invalid"
+    assert list(tmp_path.glob(".*.tmp.mp4")) == []
+
+
 def test_export_failure_checkpoints_valid_master_for_retry(tmp_path):
     request = prepared_render(tmp_path)
     media = RenderMedia()
@@ -299,6 +314,18 @@ def test_cli_emits_ordered_render_artifact_and_completion(tmp_path, monkeypatch,
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [event["event"] for event in events] == ["accepted", "progress", "artifact", "completed"]
     assert events[-1]["payload"]["export_count"] == 3
+    assert validate_event_stream(events) == events
+
+
+def test_cli_converts_local_io_failure_to_ordered_error_event(tmp_path, monkeypatch, capsys):
+    request = {"protocol_version": 1, "job_id": "job_cli_render", "project_dir": str(tmp_path), "stage": "render", "input_artifacts": [], "options": {}}
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request))
+    monkeypatch.setattr(cli, "render_platform_outputs", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")))
+    assert cli._render(Namespace(request=str(request_path))) == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["accepted", "error"]
+    assert events[-1]["payload"]["code"] == "render_local_io_failed"
     assert validate_event_stream(events) == events
 
 
