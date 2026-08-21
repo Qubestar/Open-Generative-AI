@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { StoryStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
+import { StoryStudio, RepurposeStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
 import axios from 'axios';
 
 // The five cloud generation studios (Image/Video/Lip Sync/Cinema/Marketing) are muapi-backed,
@@ -10,6 +10,7 @@ import axios from 'axios';
 // (Their render branches + imports stay below, harmless; re-add a line here to restore one.)
 const TABS = [
   { id: 'story', label: 'Story' },
+  { id: 'repurpose', label: 'Repurpose' },
   { id: 'image', label: 'Image' },
   { id: 'video', label: 'Video' },
   { id: 'workflows', label: 'Workflows' },
@@ -297,6 +298,7 @@ export default function StandaloneShell() {
         {activeTab === 'image'   && <CloudImageStudio />}
         {activeTab === 'video'   && <CloudVideoStudio />}
         {activeTab === 'story' && <StoryStudio />}
+        {activeTab === 'repurpose' && <RepurposeStudio />}
         {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
         {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
         {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}

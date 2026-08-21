@@ -15,6 +15,13 @@ function defaultCore() {
 }
 
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 256 * 1024 * 1024;
+const MEDIA_MIME = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+};
 const fail = err => ({ ok: false, error: String((err && err.message) || err).slice(0, 1000) });
 
 function atomicWriteJson(file, value) {
@@ -120,7 +127,7 @@ function createRepurposeBridge({
     const project = mod.RepurposeProject.load(resolved);
     const jobs = (await store()).list({ type: mod.REPURPOSE_JOB_TYPE })
       .filter(job => path.resolve(job.params?.projectDir || '') === resolved)
-      .map(publicJob);
+      .map(job => ({ ...publicJob(job), active: active.has(job.id) }));
     return { ok: true, dir: resolved, manifest: project.manifest, jobs };
   }
 
@@ -155,9 +162,10 @@ function createRepurposeBridge({
   async function ensureProjectIdle(projectDir) {
     const mod = await core();
     const resolved = path.resolve(projectDir);
-    const running = (await store()).list({ type: mod.REPURPOSE_JOB_TYPE, state: 'running' })
-      .some(job => path.resolve(job.params?.projectDir || '') === resolved);
-    if (running) throw new Error('Candidate decisions cannot change while a Repurpose stage is running');
+    const busy = (await store()).list({ type: mod.REPURPOSE_JOB_TYPE })
+      .some(job => ['queued', 'running'].includes(job.state)
+        && path.resolve(job.params?.projectDir || '') === resolved);
+    if (busy) throw new Error('Candidate decisions cannot change while a Repurpose stage is queued or running');
   }
 
   async function stop() {
@@ -227,7 +235,7 @@ function createRepurposeBridge({
         };
         const job = mod.createRepurposeJob(jobStore, { projectDir, stage, options: stageOptions });
         void launch(job.id).catch(() => {});
-        return { ok: true, job: publicJob(job) };
+        return { ok: true, job: { ...publicJob(job), active: true } };
       } catch (error) { return fail(error); }
     });
 
@@ -311,6 +319,18 @@ function createRepurposeBridge({
         const stat = fs.statSync(file);
         if (!stat.isFile() || stat.size > MAX_JSON_BYTES) throw new Error('Artifact is missing or too large');
         return { ok: true, path: relativePath, value: JSON.parse(fs.readFileSync(file, 'utf8')) };
+      } catch (error) { return fail(error); }
+    });
+
+    ipcMain.handle('repurpose:read-media', async (_event, dir, relativePath) => {
+      try {
+        const extension = path.extname(relativePath).toLowerCase();
+        if (!MEDIA_MIME[extension]) throw new Error('Only project-owned video previews can be read');
+        const { insideRepurposeProject } = await core();
+        const file = insideRepurposeProject(requireProjectGrant(dir), relativePath);
+        const stat = fs.statSync(file);
+        if (!stat.isFile() || stat.size > MAX_MEDIA_BYTES) throw new Error('Preview is missing or exceeds the 256 MiB desktop limit');
+        return { ok: true, path: relativePath, bytes: new Uint8Array(await fs.promises.readFile(file)), mime: MEDIA_MIME[extension] };
       } catch (error) { return fail(error); }
     });
 
