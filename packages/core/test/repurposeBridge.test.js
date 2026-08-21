@@ -52,7 +52,7 @@ test('bridge registers once and exposes only structured Repurpose handlers', () 
   assert.deepEqual([...handlers.keys()].sort(), [
     'repurpose:cancel-job', 'repurpose:create', 'repurpose:get', 'repurpose:get-config',
     'repurpose:get-job', 'repurpose:list-jobs', 'repurpose:pick-project-dir',
-    'repurpose:pick-source', 'repurpose:read-artifact', 'repurpose:readiness',
+    'repurpose:pick-source', 'repurpose:read-artifact', 'repurpose:read-media', 'repurpose:readiness',
     'repurpose:resume-job', 'repurpose:reveal', 'repurpose:run-stage',
     'repurpose:select-candidate', 'repurpose:set-candidate-decision', 'repurpose:set-config',
   ]);
@@ -89,11 +89,13 @@ test('run-stage returns a durable job immediately and list/get responses are san
   const started = await handlers.get('repurpose:run-stage')(null, dir, 'ingest', {});
   assert.equal(started.ok, true);
   assert.equal(started.job.type, 'repurpose');
+  assert.equal(started.job.active, true);
   assert.equal(Object.hasOwn(started.job, 'params'), false);
   await new Promise(resolve => setImmediate(resolve));
   const fetched = await handlers.get('repurpose:get-job')(null, started.job.id);
   assert.equal(fetched.ok, true);
   assert.equal(fetched.job.state, 'done');
+  assert.equal(fetched.active, false);
   const listed = await handlers.get('repurpose:list-jobs')(null, { projectDir: dir });
   assert.equal(listed.jobs.length, 1);
 });
@@ -120,6 +122,25 @@ test('job inspection and resume require a user-selected project grant', async ()
   assert.equal((await handlers.get('repurpose:list-jobs')(null, { projectDir: dir })).jobs.length, 1);
 });
 
+test('candidate decisions are locked while a project job is queued', async () => {
+  const { bridge, handlers, jobsDir } = harness();
+  bridge.register();
+  const dir = tempDir('vidmyo-bridge-candidate-lock-');
+  const source = path.join(dir, 'source.mp4');
+  fs.writeFileSync(source, 'media');
+  const project = actualCore.RepurposeProject.create(dir, { source: { type: 'local_file', uri: source } });
+  project.addCandidate();
+  new actualCore.JobStore(jobsDir).create({
+    type: actualCore.REPURPOSE_JOB_TYPE,
+    project: project.manifest.id,
+    params: { projectDir: dir, stage: 'ingest', options: {} },
+  });
+  bridge.authorizeProject(dir);
+  const result = await handlers.get('repurpose:set-candidate-decision')(null, dir, 'clip_001', 'approved');
+  assert.equal(result.ok, false);
+  assert.match(result.error, /queued or running/);
+});
+
 test('artifact reads and reveals are confined to project-owned files', async () => {
   const { bridge, handlers, sent } = harness();
   bridge.register();
@@ -135,6 +156,23 @@ test('artifact reads and reveals are confined to project-owned files', async () 
   assert.equal((await handlers.get('repurpose:read-artifact')(null, dir, 'source.mp4')).ok, false);
   assert.equal((await handlers.get('repurpose:reveal')(null, dir, 'artifacts/result.json')).ok, true);
   assert.deepEqual(sent[0], ['reveal', artifact]);
+});
+
+test('preview reads are scoped to granted project-owned video files', async () => {
+  const { bridge, handlers } = harness();
+  bridge.register();
+  const dir = tempDir('vidmyo-bridge-media-');
+  const preview = path.join(dir, 'artifacts', 'clip.mp4');
+  fs.mkdirSync(path.dirname(preview), { recursive: true });
+  fs.writeFileSync(preview, Buffer.from([0, 1, 2, 3]));
+  assert.equal((await handlers.get('repurpose:read-media')(null, dir, 'artifacts/clip.mp4')).ok, false);
+  bridge.authorizeProject(dir);
+  const read = await handlers.get('repurpose:read-media')(null, dir, 'artifacts/clip.mp4');
+  assert.equal(read.ok, true);
+  assert.equal(read.mime, 'video/mp4');
+  assert.deepEqual([...read.bytes], [0, 1, 2, 3]);
+  assert.equal((await handlers.get('repurpose:read-media')(null, dir, '../../outside.mp4')).ok, false);
+  assert.equal((await handlers.get('repurpose:read-media')(null, dir, 'artifacts/data.json')).ok, false);
 });
 
 test('readiness is read-only and config cannot become generic process execution', async () => {
@@ -156,7 +194,7 @@ test('preload surface names every narrow channel and exposes no generic invoke h
   for (const channel of [
     'pick-source', 'pick-project-dir', 'create', 'get', 'run-stage', 'resume-job',
     'cancel-job', 'get-job', 'list-jobs', 'set-candidate-decision', 'select-candidate',
-    'read-artifact', 'reveal', 'get-config', 'set-config', 'readiness',
+    'read-artifact', 'read-media', 'reveal', 'get-config', 'set-config', 'readiness',
   ]) assert.match(preload, new RegExp(`repurpose:${channel}`));
   assert.doesNotMatch(preload, /repurpose[^\n]+invoke:\s*ipcRenderer\.invoke/);
 });

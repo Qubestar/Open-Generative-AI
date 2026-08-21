@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { StoryStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
+import { StoryStudio, RepurposeStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
 import axios from 'axios';
 
 // The five cloud generation studios (Image/Video/Lip Sync/Cinema/Marketing) are muapi-backed,
@@ -10,6 +10,7 @@ import axios from 'axios';
 // (Their render branches + imports stay below, harmless; re-add a line here to restore one.)
 const TABS = [
   { id: 'story', label: 'Story' },
+  { id: 'repurpose', label: 'Repurpose' },
   { id: 'image', label: 'Image' },
   { id: 'video', label: 'Video' },
   { id: 'workflows', label: 'Workflows' },
@@ -172,10 +173,14 @@ export default function StandaloneShell() {
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (activeTab === 'repurpose') {
+      setIsDragging(false);
+      return;
+    }
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       setIsDragging(true);
     }
-  }, []);
+  }, [activeTab]);
 
   const handleDragLeave = useCallback((e) => {
     e.preventDefault();
@@ -189,12 +194,13 @@ export default function StandaloneShell() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
+    if (activeTab === 'repurpose') return;
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
       setDroppedFiles(files);
     }
-  }, []);
+  }, [activeTab]);
 
   const handleFilesHandled = useCallback(() => {
     setDroppedFiles(null);
@@ -297,6 +303,7 @@ export default function StandaloneShell() {
         {activeTab === 'image'   && <CloudImageStudio />}
         {activeTab === 'video'   && <CloudVideoStudio />}
         {activeTab === 'story' && <StoryStudio />}
+        {activeTab === 'repurpose' && <RepurposeStudio />}
         {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
         {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
         {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}

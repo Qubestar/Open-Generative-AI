@@ -96,6 +96,7 @@ contextBridge.exposeInMainWorld('repurpose', {
     setCandidateDecision: (dir, candidateId, decision) => ipcRenderer.invoke('repurpose:set-candidate-decision', dir, candidateId, decision),
     selectCandidate: (dir, candidateId, selected) => ipcRenderer.invoke('repurpose:select-candidate', dir, candidateId, selected),
     readArtifact: (dir, relativePath) => ipcRenderer.invoke('repurpose:read-artifact', dir, relativePath),
+    readMedia: (dir, relativePath) => ipcRenderer.invoke('repurpose:read-media', dir, relativePath),
     reveal: (dir, relativePath) => ipcRenderer.invoke('repurpose:reveal', dir, relativePath),
     getConfig: () => ipcRenderer.invoke('repurpose:get-config'),
     setConfig: (update) => ipcRenderer.invoke('repurpose:set-config', update),
