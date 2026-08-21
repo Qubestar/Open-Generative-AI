@@ -10,7 +10,8 @@
     "./providers": "./src/providers.js",
     "./jobs": "./src/jobs.js",
     "./project": "./src/project.js",
-    "./repurpose": "./src/repurpose.js"
+    "./repurpose": "./src/repurpose.js",
+    "./repurpose-runner": "./src/repurposeRunner.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js"

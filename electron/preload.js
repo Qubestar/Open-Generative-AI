@@ -81,6 +81,32 @@ contextBridge.exposeInMainWorld('story', {
     },
 });
 
+// ── Repurpose Studio bridge (durable local Python worker jobs) ──────────────
+contextBridge.exposeInMainWorld('repurpose', {
+    isElectron: true,
+    pickSource: () => ipcRenderer.invoke('repurpose:pick-source'),
+    pickProjectDir: () => ipcRenderer.invoke('repurpose:pick-project-dir'),
+    create: (opts) => ipcRenderer.invoke('repurpose:create', opts),
+    get: (dir) => ipcRenderer.invoke('repurpose:get', dir),
+    runStage: (dir, stage, opts) => ipcRenderer.invoke('repurpose:run-stage', dir, stage, opts),
+    resumeJob: (jobId) => ipcRenderer.invoke('repurpose:resume-job', jobId),
+    cancelJob: (jobId) => ipcRenderer.invoke('repurpose:cancel-job', jobId),
+    getJob: (jobId) => ipcRenderer.invoke('repurpose:get-job', jobId),
+    listJobs: (opts) => ipcRenderer.invoke('repurpose:list-jobs', opts),
+    setCandidateDecision: (dir, candidateId, decision) => ipcRenderer.invoke('repurpose:set-candidate-decision', dir, candidateId, decision),
+    selectCandidate: (dir, candidateId, selected) => ipcRenderer.invoke('repurpose:select-candidate', dir, candidateId, selected),
+    readArtifact: (dir, relativePath) => ipcRenderer.invoke('repurpose:read-artifact', dir, relativePath),
+    reveal: (dir, relativePath) => ipcRenderer.invoke('repurpose:reveal', dir, relativePath),
+    getConfig: () => ipcRenderer.invoke('repurpose:get-config'),
+    setConfig: (update) => ipcRenderer.invoke('repurpose:set-config', update),
+    readiness: () => ipcRenderer.invoke('repurpose:readiness'),
+    onProgress: (callback) => {
+        const listener = (_, data) => callback(data);
+        ipcRenderer.on('repurpose:progress', listener);
+        return () => ipcRenderer.removeListener('repurpose:progress', listener);
+    },
+});
+
 // ── Local AI agent bridge ───────────────────────────────────────────────────
 // Detect/connect/launch coding agents already installed on the machine, and
 // bootstrap media-generation skills. See electron/lib/agents.js.
