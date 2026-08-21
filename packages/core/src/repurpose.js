@@ -87,6 +87,19 @@ function atomicWriteJson(file, data) {
   fs.renameSync(temporary, file);
 }
 
+function requireProjectFile(projectDir, relativePath, pathName) {
+  requireNonEmptyString(relativePath, pathName);
+  if (path.isAbsolute(relativePath)) contractError(pathName, 'must be project-relative');
+  const root = path.resolve(projectDir);
+  const resolved = path.resolve(root, relativePath);
+  const relation = path.relative(root, resolved);
+  if (relation === '..' || relation.startsWith(`..${path.sep}`) || path.isAbsolute(relation)) {
+    contractError(pathName, 'escapes the Repurpose project');
+  }
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) contractError(pathName, 'does not exist');
+  return resolved;
+}
+
 export function validateWorkerRequest(request) {
   const keys = ['protocol_version', 'job_id', 'project_dir', 'stage', 'input_artifacts', 'options'];
   requireKeys(request, keys, 'request');
@@ -458,6 +471,95 @@ export class RepurposeProject {
     }
     this.save();
     return { sourceChanged, manifest: this.manifest };
+  }
+
+  applyCandidateArtifact(artifact, { artifactPath = 'artifacts/candidate-artifact.v1.json' } = {}) {
+    if (this.manifest.stages.generate_candidates.state !== 'running') {
+      throw new Error('Candidate artifact requires a running generate_candidates stage');
+    }
+    if (!artifact || !Array.isArray(artifact.candidates)
+      || artifact.source?.fingerprint !== this.manifest.source.fingerprint) {
+      throw new Error('Candidate artifact does not match the current Repurpose source');
+    }
+    const previous = new Map(this.manifest.candidates.map(candidate => [candidate.id, candidate]));
+    const ids = new Set();
+    const candidates = artifact.candidates.map((candidate, index) => {
+      if (!candidate || typeof candidate.id !== 'string' || !CLIP_ID_RE.test(candidate.id)) {
+        throw new Error(`candidate_artifact.candidates.${index}.id: must match clip_NNN`);
+      }
+      if (ids.has(candidate.id)) throw new Error(`candidate_artifact.candidates.${index}.id: must be unique`);
+      ids.add(candidate.id);
+      const prior = previous.get(candidate.id);
+      return {
+        id: candidate.id,
+        decision: prior?.decision || 'pending',
+        selected: prior?.decision === 'approved' ? Boolean(prior.selected) : false,
+        proposed_start_sec: candidate.proposed_span?.start_seconds ?? null,
+        proposed_end_sec: candidate.proposed_span?.end_seconds ?? null,
+        metadata: {
+          provider_suggestion_id: candidate.provider_suggestion_id,
+          window_id: candidate.window_id,
+          title: candidate.title,
+          hook: candidate.hook,
+          summary: candidate.summary,
+          selection_reason: candidate.selection_reason,
+          signal_types: structuredClone(candidate.signal_types || []),
+          proposed_span: structuredClone(candidate.proposed_span || {}),
+          evidence_spans: structuredClone(candidate.evidence_spans || []),
+        },
+      };
+    });
+    this.manifest.candidates = candidates;
+    this.completeStage('generate_candidates', { artifact: artifactPath });
+    return { manifest: this.manifest, candidateCount: candidates.length };
+  }
+
+  applyRankingArtifact(artifact, { artifactPath = 'artifacts/ranking-artifact.v1.json' } = {}) {
+    if (this.manifest.stages.rank.state !== 'running') {
+      throw new Error('Ranking artifact requires a running rank stage');
+    }
+    if (!artifact || !Array.isArray(artifact.candidates)
+      || artifact.source?.fingerprint !== this.manifest.source.fingerprint) {
+      throw new Error('Ranking artifact does not match the current Repurpose source');
+    }
+    const byId = new Map(this.manifest.candidates.map(candidate => [candidate.id, candidate]));
+    const updates = artifact.candidates.map((entry, index) => {
+      const id = entry?.candidate?.id;
+      const candidate = byId.get(id);
+      if (!candidate) throw new Error(`ranking_artifact.candidates.${index}: unknown candidate ${id}`);
+      return { candidate, entry };
+    });
+    for (const { candidate, entry } of updates) {
+      const { candidate: _sourceCandidate, ...ranking } = entry;
+      candidate.metadata = { ...candidate.metadata, ranking: structuredClone(ranking) };
+    }
+    this.completeStage('rank', { artifact: artifactPath });
+    return { manifest: this.manifest, shortlist: [...(artifact.shortlist_candidate_ids || [])] };
+  }
+
+  applyRenderArtifact(artifact, { artifactPath = 'artifacts/render-artifact.v1.json' } = {}) {
+    if (this.manifest.stages.render.state !== 'running') {
+      throw new Error('Render artifact requires a running render stage');
+    }
+    if (!artifact || !Array.isArray(artifact.candidates)
+      || artifact.source?.fingerprint !== this.manifest.source.fingerprint) {
+      throw new Error('Render artifact does not match the current Repurpose source');
+    }
+    const outputs = [];
+    for (const [candidateIndex, candidate] of artifact.candidates.entries()) {
+      for (const [exportIndex, entry] of (candidate.exports || []).entries()) {
+        const outputPath = entry?.output?.path;
+        requireProjectFile(
+          this.dir,
+          outputPath,
+          `render_artifact.candidates.${candidateIndex}.exports.${exportIndex}.output.path`,
+        );
+        outputs.push(outputPath);
+      }
+    }
+    this.manifest.outputs = outputs;
+    this.completeStage('render', { artifact: artifactPath });
+    return { manifest: this.manifest, outputs: [...outputs] };
   }
 
   addCandidate({ proposedStartSec = null, proposedEndSec = null, metadata = {} } = {}) {

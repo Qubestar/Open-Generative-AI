@@ -346,6 +346,33 @@ completed preset prefix, then resumes at the first missing export. Changed
 approvals, transcript/boundary/reframe identity, caption style, cue contract,
 preset, encoder contract, or output bytes invalidate affected work.
 
+## Desktop worker bridge
+
+The active Electron/Next.js app runs these commands through the pure Node
+`@vidmyo/core` Repurpose runner. Each desktop stage creates one durable
+`type: repurpose` record in `~/.vidmyo/jobs` and writes its exact version-1
+request under `<project>/.vidmyo/requests/`. Worker stdout is parsed only as
+ordered JSONL; shell execution and arbitrary IPC/filesystem access are not
+exposed to the renderer.
+
+The desktop `reframe` stage runs the single-speaker and two-speaker workers
+in order under one parent job, checkpointing each substep. A desktop restart
+does not mark a persisted running job complete: the user must explicitly
+resume it, at which point the same job ID and Python artifact caches are reused.
+Cancellation is scoped to the child owned by that job and leaves the manifest
+stage retryable. Candidate and ranking reconciliation preserve manual approval
+and selection; only the user-facing decision methods can change them.
+
+The preload surface is `window.repurpose`. It provides project/source pickers,
+create/open, stage run/resume/cancel, job inspection, manual candidate decisions,
+project-owned JSON reads/reveal, and read-only readiness. Readiness checks the
+configured Python executable, local package import, FFmpeg, FFprobe, and model
+cache without downloading a model. The renderer may atomically configure only
+an absolute model-cache path; the Python executable and trusted engine location
+come from the app/process configuration and cannot be turned into generic
+process execution over IPC. Provider keys remain in the existing OS keychain
+and never enter project request or job records.
+
 Rendering is local and private. It does not translate, upload, publish,
 schedule, authenticate to social platforms, call a provider, download a model,
 or modify source and earlier pipeline media.

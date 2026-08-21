@@ -7,6 +7,7 @@ export * from './src/providers.js';
 export * from './src/jobs.js';
 export * from './src/project.js';
 export * from './src/repurpose.js';
+export * from './src/repurposeRunner.js';
 export * from './src/run.js';
 export * from './src/sheets.js';
 export * from './src/story.js';

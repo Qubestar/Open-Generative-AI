@@ -8,6 +8,7 @@ const { register: registerSecrets } = require('./lib/secrets');
 const { register: registerNetProxy } = require('./lib/netProxy');
 const { register: registerStory } = require('./lib/storyBridge');
 const { register: registerMedia } = require('./lib/mediaBridge');
+const { register: registerRepurpose, stop: stopRepurpose } = require('./lib/repurposeBridge');
 const mcpHost = require('./lib/mcpHost');
 
 // Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1 which
@@ -83,6 +84,7 @@ app.whenReady().then(() => {
     registerNetProxy();
     registerStory();
     registerMedia();
+    registerRepurpose();
     // Loopback MCP so agents can use keychain keys (image generation) while
     // Vidmyo is open. Best-effort: a failure here must never block the app.
     mcpHost.start().then((r) => {
@@ -96,7 +98,10 @@ app.whenReady().then(() => {
     });
 });
 
-app.on('will-quit', () => { mcpHost.stop(); });
+app.on('will-quit', () => {
+    mcpHost.stop();
+    void stopRepurpose();
+});
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
