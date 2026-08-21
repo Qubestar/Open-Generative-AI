@@ -173,10 +173,14 @@ export default function StandaloneShell() {
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (activeTab === 'repurpose') {
+      setIsDragging(false);
+      return;
+    }
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       setIsDragging(true);
     }
-  }, []);
+  }, [activeTab]);
 
   const handleDragLeave = useCallback((e) => {
     e.preventDefault();
@@ -190,12 +194,13 @@ export default function StandaloneShell() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
+    if (activeTab === 'repurpose') return;
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
       setDroppedFiles(files);
     }
-  }, []);
+  }, [activeTab]);
 
   const handleFilesHandled = useCallback(() => {
     setDroppedFiles(null);
