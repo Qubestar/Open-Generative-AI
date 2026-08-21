@@ -296,6 +296,22 @@ test('artifact path escape is rejected before manifest completion', async () => 
   assert.equal(RepurposeProject.load(project.dir).manifest.stages.transcribe.state, 'failed');
 });
 
+test('unexpected project-local artifacts are rejected before durable evidence is recorded', async () => {
+  const project = projectAt('transcribe');
+  const store = new JobStore(tempDir('vidmyo-jobs-'));
+  const job = createRepurposeJob(store, { projectDir: project.dir, stage: 'transcribe' });
+  const spawnImpl = fakeSpawn(({ child, request }) => emitStream(child, [
+    event(request, 1, 'accepted'),
+    event(request, 2, 'artifact', { kind: 'wrong_artifact', version: 1, path: 'source.mp4' }),
+    event(request, 3, 'completed'),
+  ]));
+  const failed = await runRepurposeJob(store, job.id, { spawnImpl });
+  assert.equal(failed.state, 'error');
+  assert.match(failed.error, /unexpected artifact/);
+  assert.deepEqual(failed.artifacts, []);
+  assert.deepEqual(failed.checkpoints.artifactEvidence, undefined);
+});
+
 test('worker terminal errors are bounded, durable, and never advance the manifest', async () => {
   const project = projectAt('transcribe');
   const store = new JobStore(tempDir('vidmyo-jobs-'));
@@ -329,5 +345,28 @@ test('cancellation kills only the owned child and keeps another job untouched', 
   assert.equal(cancelled.state, 'cancelled');
   assert.equal(activeChild.killed, true);
   assert.equal(store.get(unrelated.id).state, 'queued');
+  assert.equal(RepurposeProject.load(project.dir).manifest.stages.transcribe.state, 'failed');
+});
+
+test('cancellation after worker completion wins before manifest reconciliation', async () => {
+  const project = projectAt('transcribe');
+  const store = new JobStore(tempDir('vidmyo-jobs-'));
+  const job = createRepurposeJob(store, { projectDir: project.dir, stage: 'transcribe' });
+  const spawnImpl = fakeSpawn(({ child, request }) => {
+    const relativePath = 'artifacts/transcript-artifact.v1.json';
+    writeArtifact(project.dir, relativePath, {});
+    emitStream(child, [
+      event(request, 1, 'accepted'),
+      event(request, 2, 'artifact', { kind: 'transcript_artifact', version: 1, path: relativePath }),
+      event(request, 3, 'completed'),
+    ]);
+  });
+  const cancelled = await runRepurposeJob(store, job.id, {
+    spawnImpl,
+    onEvent: eventItem => {
+      if (eventItem.event === 'completed') cancelRepurposeJob(store, job.id);
+    },
+  });
+  assert.equal(cancelled.state, 'cancelled');
   assert.equal(RepurposeProject.load(project.dir).manifest.stages.transcribe.state, 'failed');
 });

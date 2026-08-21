@@ -258,12 +258,15 @@ async function runWorkerStep({
     if (expectedSequence === 1 && event.event !== 'accepted') throw new Error('Worker stream must begin with accepted');
     expectedSequence += 1;
     terminalSeen = ['completed', 'error'].includes(event.event);
+    if (event.event === 'artifact') {
+      insideRepurposeProject(projectDir, event.payload?.path);
+      if (event.payload?.kind !== expectedArtifact.kind
+        || event.payload?.path !== expectedArtifact.path
+        || event.payload?.version !== expectedArtifact.version) {
+        throw new Error(`Worker emitted an unexpected artifact for ${step.id}`);
+      }
+    }
     recordArtifact(store, parentJobId, projectDir, event);
-    if (event.event === 'artifact' && (
-      event.payload?.kind !== expectedArtifact.kind
-      || event.payload?.path !== expectedArtifact.path
-      || event.payload?.version !== expectedArtifact.version
-    )) throw new Error(`Worker emitted an unexpected artifact for ${step.id}`);
     events.push(event);
     store.checkpoint(parentJobId, 'lastEvent', {
       substep: step.id,
@@ -453,6 +456,10 @@ export async function runRepurposeJob(store, jobId, {
       });
       completed.add(step.id);
       store.checkpoint(jobId, 'completedSubsteps', [...completed]);
+    }
+    if (store.get(jobId)?.state === 'cancelled') {
+      failRunningStage(projectDir, stage, 'cancelled; retry the stage to resume valid cached work');
+      return store.get(jobId);
     }
     const result = applyCompletedStage(RepurposeProject.load(projectDir), stage);
     store.checkpoint(jobId, 'manifestStage', {

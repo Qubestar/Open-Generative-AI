@@ -98,6 +98,28 @@ test('run-stage returns a durable job immediately and list/get responses are san
   assert.equal(listed.jobs.length, 1);
 });
 
+test('job inspection and resume require a user-selected project grant', async () => {
+  const { bridge, handlers, jobsDir } = harness();
+  bridge.register();
+  const dir = tempDir('vidmyo-bridge-private-');
+  const source = path.join(dir, 'source.mp4');
+  fs.writeFileSync(source, 'media');
+  const project = actualCore.RepurposeProject.create(dir, { source: { type: 'local_file', uri: source } });
+  const store = new actualCore.JobStore(jobsDir);
+  const job = store.create({
+    type: actualCore.REPURPOSE_JOB_TYPE,
+    project: project.manifest.id,
+    params: { projectDir: dir, stage: 'ingest', options: {} },
+  });
+  store.setState(job.id, 'running');
+  assert.equal((await handlers.get('repurpose:get-job')(null, job.id)).ok, false);
+  assert.equal((await handlers.get('repurpose:list-jobs')(null, { projectDir: dir })).ok, false);
+  assert.equal((await handlers.get('repurpose:resume-job')(null, job.id)).ok, false);
+  bridge.authorizeProject(dir);
+  assert.equal((await handlers.get('repurpose:get-job')(null, job.id)).ok, true);
+  assert.equal((await handlers.get('repurpose:list-jobs')(null, { projectDir: dir })).jobs.length, 1);
+});
+
 test('artifact reads and reveals are confined to project-owned files', async () => {
   const { bridge, handlers, sent } = harness();
   bridge.register();

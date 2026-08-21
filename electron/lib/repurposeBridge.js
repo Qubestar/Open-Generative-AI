@@ -237,7 +237,7 @@ function createRepurposeBridge({
         const jobStore = await store();
         const job = jobStore.get(jobId);
         if (!job || job.type !== mod.REPURPOSE_JOB_TYPE || job.state !== 'running') throw new Error('Only a persisted running Repurpose job can resume');
-        grantProject(job.params.projectDir);
+        requireProjectGrant(job.params.projectDir);
         void launch(jobId).catch(() => {});
         return { ok: true, job: publicJob(job) };
       } catch (error) { return fail(error); }
@@ -247,6 +247,9 @@ function createRepurposeBridge({
       try {
         const mod = await core();
         const jobStore = await store();
+        const existing = jobStore.get(jobId);
+        if (!existing || existing.type !== mod.REPURPOSE_JOB_TYPE) throw new Error(`No such Repurpose job: ${jobId}`);
+        requireProjectGrant(existing.params.projectDir);
         const owned = active.get(jobId)?.child || null;
         const job = mod.cancelRepurposeJob(jobStore, jobId, {
           terminate: owned ? () => owned.kill('SIGTERM') : null,
@@ -261,6 +264,7 @@ function createRepurposeBridge({
         const mod = await core();
         const job = (await store()).get(jobId);
         if (!job || job.type !== mod.REPURPOSE_JOB_TYPE) throw new Error(`No such Repurpose job: ${jobId}`);
+        requireProjectGrant(job.params.projectDir);
         return { ok: true, job: publicJob(job), active: active.has(jobId) };
       } catch (error) { return fail(error); }
     });
@@ -268,9 +272,11 @@ function createRepurposeBridge({
     ipcMain.handle('repurpose:list-jobs', async (_event, { projectDir = null, state = null, limit = 50 } = {}) => {
       try {
         const mod = await core();
+        if (!projectDir) throw new Error('Choose a Repurpose project folder before listing its jobs');
+        const grantedProject = requireProjectGrant(projectDir);
         const boundedLimit = Math.max(1, Math.min(100, Number(limit) || 50));
         const jobs = (await store()).list({ type: mod.REPURPOSE_JOB_TYPE, state })
-          .filter(job => !projectDir || path.resolve(job.params?.projectDir || '') === path.resolve(projectDir))
+          .filter(job => path.resolve(job.params?.projectDir || '') === grantedProject)
           .slice(0, boundedLimit)
           .map(publicJob);
         return { ok: true, jobs };
