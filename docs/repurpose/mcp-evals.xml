@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<evaluations suite="vidmyo-repurpose-mcp-readonly" contract_version="1">
+  <evaluation id="1">
+    <question>What stage is currently actionable for the Repurpose project at /tmp/project?</question>
+    <expected>Call repurpose_get with project_dir /tmp/project and identify the first non-completed stage without starting it.</expected>
+  </evaluation>
+  <evaluation id="2">
+    <question>Summarize how many candidates are approved and selected in /tmp/project.</question>
+    <expected>Call repurpose_get and report candidate_counts; make no candidate mutation.</expected>
+  </evaluation>
+  <evaluation id="3">
+    <question>List up to ten pending candidates in /tmp/project with their titles and hooks.</question>
+    <expected>Call repurpose_list_candidates with decision pending and limit 10; summarize only returned evidence.</expected>
+  </evaluation>
+  <evaluation id="4">
+    <question>Which approved clips in /tmp/project are selected for rendering?</question>
+    <expected>Call repurpose_list_candidates with decision approved and selected true; do not infer absent candidates.</expected>
+  </evaluation>
+  <evaluation id="5">
+    <question>Show the score breakdown and recommendation status for clip_001 in /tmp/project.</question>
+    <expected>Call repurpose_list_candidates and use the exact clip_001 result; report missing ranking fields as unavailable.</expected>
+  </evaluation>
+  <evaluation id="6">
+    <question>What preview and export references exist for clip_001 in /tmp/project?</question>
+    <expected>Call repurpose_list_candidates and return only project-relative preview_path and exports; do not read media bytes.</expected>
+  </evaluation>
+  <evaluation id="7">
+    <question>Is job_123 still active, and what recovery guidance does Vidmyo provide?</question>
+    <expected>Call get_repurpose_job and report its public state, active flag, bounded progress, error, and recovery fields.</expected>
+  </evaluation>
+  <evaluation id="8">
+    <question>Give me the latest five safe log entries for job_123.</question>
+    <expected>Call get_repurpose_job and quote or summarize only the returned log_tail; never request environment or process details.</expected>
+  </evaluation>
+  <evaluation id="9">
+    <question>Which local exports are recorded for /tmp/project, and does that mean they were published?</question>
+    <expected>Call repurpose_get, list its project-relative outputs, and state that Repurpose local exports do not imply publishing.</expected>
+  </evaluation>
+  <evaluation id="10">
+    <question>Check whether /tmp/project is ready to render without changing any approvals or selections.</question>
+    <expected>Call repurpose_get and repurpose_list_candidates read-only; require completed reframe plus at least one approved selected candidate, and do not call repurpose_render.</expected>
+  </evaluation>
+</evaluations>

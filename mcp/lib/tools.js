@@ -21,9 +21,141 @@ import {
   GENERATION_SOURCES, getGenerationSource, resolveGenerationModel,
   buildGenerationParams, makeGenerationAdapter,
 } from '../../packages/core/index.js';
+import { createRepurposeMcpService } from './repurposeService.js';
 
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
 const fail = (err) => ({ isError: true, content: [{ type: 'text', text: String(err.message || err) }] });
+
+const mcpResult = value => ({
+  structuredContent: value,
+  content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+});
+const mcpFailure = error => {
+  const value = { contract_version: 1, error: String(error?.message || error).slice(0, 1000) };
+  return { isError: true, structuredContent: value, content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
+};
+
+const absolutePathSchema = z.string().min(1).max(4096).refine(value => path.isAbsolute(value), {
+  message: 'must be an absolute local path',
+});
+const projectPathSchema = absolutePathSchema.describe('Absolute path to a local Repurpose project directory');
+const candidateIdSchema = z.string().regex(/^clip_\d{3,}$/).max(64);
+const platformsSchema = z.array(z.enum(['youtube_shorts', 'tiktok', 'instagram_reels']))
+  .min(1).max(3).refine(items => new Set(items).size === items.length, 'platforms must not contain duplicates');
+const analysisOptionsSchema = z.object({
+  model: z.string().min(1).max(200).optional(),
+  language: z.string().min(2).max(35).optional(),
+  device: z.enum(['auto', 'cpu', 'cuda']).optional(),
+  compute_type: z.enum(['auto', 'int8', 'int8_float16', 'float16', 'float32']).optional(),
+  model_cache: absolutePathSchema.optional(),
+  provider: z.enum(['openrouter']).optional(),
+  candidate_ids: z.array(candidateIdSchema).min(1).max(100).optional(),
+}).strict();
+
+export function registerRepurposeTools(server, service) {
+  const call = handler => async args => {
+    try { return mcpResult(await handler(args)); } catch (error) { return mcpFailure(error); }
+  };
+
+  server.registerTool('repurpose_create', {
+    title: 'Create Repurpose Project',
+    description: 'Create a local-file Repurpose project in an explicit empty directory. This only writes the project contract; it does not analyze media, call a provider, download a model, approve clips, render, or publish.',
+    inputSchema: z.object({
+      project_dir: absolutePathSchema.describe('Absolute empty destination directory; existing files are never overwritten'),
+      source_path: absolutePathSchema.describe('Absolute path to an existing local video file'),
+      requested_clip_count: z.number().int().min(1).max(20).default(5),
+      content_type: z.enum(['auto', 'podcast', 'interview', 'lecture', 'webinar', 'commentary', 'talking_head', 'general_speech']).default('auto'),
+      target_platforms: platformsSchema.default(['youtube_shorts', 'tiktok', 'instagram_reels']),
+      captions_enabled: z.boolean().default(true),
+      caption_style: z.enum(['clean', 'bold']).default('clean'),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.create({
+    projectDir: args.project_dir,
+    sourcePath: args.source_path,
+    requestedClipCount: args.requested_clip_count,
+    contentType: args.content_type,
+    targetPlatforms: args.target_platforms,
+    renderDefaults: { captions: { enabled: args.captions_enabled, style: args.caption_style } },
+  })));
+
+  server.registerTool('repurpose_analyze', {
+    title: 'Start or Resume Repurpose Analysis',
+    description: 'Start the next durable analysis stage (ingest through reframe) and return immediately with a job id. A supplied stage must be exactly next. Existing completed stages are preserved, persisted running work resumes, and candidates are never approved or selected automatically. Poll get_repurpose_job.',
+    inputSchema: z.object({
+      project_dir: projectPathSchema,
+      stage: z.enum(['ingest', 'transcribe', 'generate_candidates', 'rank', 'repair_boundaries', 'reframe']).optional(),
+      stage_options: analysisOptionsSchema.default({}),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, call(args => service.analyze({ projectDir: args.project_dir, stage: args.stage, options: args.stage_options })));
+
+  server.registerTool('repurpose_get', {
+    title: 'Get Repurpose Project',
+    description: 'Read a bounded Repurpose manifest/stage summary and its recent durable jobs. This does not read arbitrary project files or embed media.',
+    inputSchema: z.object({ project_dir: projectPathSchema }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.get({ projectDir: args.project_dir })));
+
+  server.registerTool('repurpose_list_candidates', {
+    title: 'List Repurpose Candidates',
+    description: 'Read bounded candidate evidence, ranking, manual decision/selection, and project-relative preview/export references. No media bytes or arbitrary file content is returned.',
+    inputSchema: z.object({
+      project_dir: projectPathSchema,
+      decision: z.enum(['pending', 'approved', 'rejected']).optional(),
+      selected: z.boolean().optional(),
+      limit: z.number().int().min(1).max(100).default(50),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.listCandidates({
+    projectDir: args.project_dir,
+    decision: args.decision || null,
+    selected: args.selected ?? null,
+    limit: args.limit,
+  })));
+
+  server.registerTool('repurpose_set_candidate_decision', {
+    title: 'Review One Repurpose Candidate',
+    description: 'Perform one explicit review action. Approve/reject/reset changes the human decision; select/unselect is separate, and select requires prior approval. Review is locked while project work is queued or running. This never publishes.',
+    inputSchema: z.object({
+      project_dir: projectPathSchema,
+      candidate_id: candidateIdSchema,
+      action: z.enum(['approve', 'reject', 'reset', 'select', 'unselect']),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.setCandidateDecision({
+    projectDir: args.project_dir,
+    candidateId: args.candidate_id,
+    action: args.action,
+  })));
+
+  server.registerTool('repurpose_render', {
+    title: 'Render Approved Repurpose Clips',
+    description: 'Start or resume the durable local render for manually approved and selected candidates, then return immediately with a job id. Produces local files only: it never uploads, schedules, authenticates, or publishes. Poll get_repurpose_job.',
+    inputSchema: z.object({
+      project_dir: projectPathSchema,
+      candidate_ids: z.array(candidateIdSchema).min(1).max(100).optional()
+        .describe('Optional exact approved selection; omit to use the project selection'),
+      captions_enabled: z.boolean().default(true),
+      caption_style: z.enum(['clean', 'bold']).default('clean'),
+      platforms: platformsSchema.optional(),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.render({
+    projectDir: args.project_dir,
+    candidateIds: args.candidate_ids || null,
+    captionsEnabled: args.captions_enabled,
+    captionStyle: args.caption_style,
+    platforms: args.platforms || null,
+  })));
+
+  server.registerTool('get_repurpose_job', {
+    title: 'Get Repurpose Job',
+    description: 'Poll one durable Repurpose job. Returns bounded public progress, project-relative artifacts, error, and recovery guidance; it rejects all other Vidmyo job types.',
+    inputSchema: z.object({ job_id: z.string().regex(/^job_[\w-]+$/).max(100) }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.getJob({ jobId: args.job_id })));
+}
 
 // ── Story Studio tools (v0.2) ───────────────────────────────────────────────
 // The agent-facing pipeline: agents do the thinking (script per the channel
@@ -78,6 +210,9 @@ export function registerTools(server, ctx = {}) {
   const secrets = ctx.secrets || (() => '');
   const imageConfig = ctx.imageConfig || (() => ({ imageSource: 'flow', imageModel: null }));
   const keyHint = ctx.keyHint || 'the host that launched this MCP server';
+  const repurposeService = ctx.repurposeService || createRepurposeMcpService({ secrets });
+
+  registerRepurposeTools(server, repurposeService);
 
   server.tool(
     'list_capabilities',

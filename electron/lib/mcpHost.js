@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { app } = require('electron');
 const { getSecret } = require('./secrets');
+const { validateMcpRequest } = require('./mcpSecurity');
 
 // 7861 is Video Delta's engine — take the next one and keep it STABLE across
 // restarts, because agents register a fixed URL.
@@ -73,10 +74,15 @@ async function start() {
     const repo = path.join(__dirname, '..', '..');
     const entry = path.join(repo, 'mcp', 'lib', 'httpServer.js');
     const { createHttpMcp } = await import(pathToFileURL(entry).href);
+    const serviceEntry = path.join(repo, 'mcp', 'lib', 'repurposeService.js');
+    const { createRepurposeMcpService } = await import(pathToFileURL(serviceEntry).href);
 
     const cfg = readHostConfig();
     const token = cfg.token || crypto.randomBytes(32).toString('hex');
 
+    const repurposeService = createRepurposeMcpService({
+      secrets: (providerId) => getSecret(providerId),
+    });
     const mcp = await createHttpMcp({
       // The whole point: keys come from the OS keychain, in-process.
       secrets: (providerId) => getSecret(providerId),
@@ -85,9 +91,18 @@ async function start() {
         return { imageSource: s.imageSource, imageModel: s.imageModel };
       },
       keyHint: 'Vidmyo → Settings → Providers',
+      repurposeService,
     });
 
     const httpServer = http.createServer((req, res) => {
+      const securityError = validateMcpRequest(req, port);
+      if (securityError) {
+        const statusCode = securityError === 'method not allowed' ? 405
+          : securityError === 'not found' ? 404 : 403;
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: securityError }));
+        return;
+      }
       if (!tokenMatches(req.headers.authorization, token)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'unauthorized' }));
