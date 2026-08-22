@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   deriveRepurposeStages,
   joinRepurposeCandidates,
@@ -69,4 +71,13 @@ test('errors are bounded and normalized for UI display', () => {
   const error = normalizeRepurposeError({ message: `broken\n${'x'.repeat(800)}` });
   assert.equal(error.includes('\n'), false);
   assert.equal(error.length, 500);
+});
+
+test('studio renders one detected-agent dropdown and locks artifact provenance', () => {
+  const source = fs.readFileSync(path.resolve('..', 'studio', 'src', 'components', 'RepurposeStudio.jsx'), 'utf8');
+  assert.match(source, /<span>AI agent<\/span>/);
+  assert.match(source, /readiness\?\.analysis\?\.agents/);
+  assert.match(source, /artifacts\.candidate\?\.provider\?\.id/);
+  assert.match(source, /This project is locked to the agent that generated its candidates/);
+  assert.doesNotMatch(source, /\['codex',\s*'claude_code'/);
 });

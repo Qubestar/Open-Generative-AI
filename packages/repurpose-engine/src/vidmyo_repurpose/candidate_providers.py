@@ -5,12 +5,20 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
+import subprocess
+import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
 OPENROUTER_PROVIDER_ID = "openrouter"
+LOCAL_AGENT_PROVIDER_IDS = frozenset({"codex", "claude_code", "gemini", "hermes"})
+SUPPORTED_PROVIDER_IDS = frozenset({OPENROUTER_PROVIDER_ID, *LOCAL_AGENT_PROVIDER_IDS})
+CONFIGURED_DEFAULT_MODEL = "configured-default"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_CHAT_PATH = "/chat/completions"
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
@@ -47,7 +55,7 @@ def normalize_provider_id(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("options.provider: must be a non-empty string")
     provider_id = value.strip().lower()
-    if provider_id != OPENROUTER_PROVIDER_ID:
+    if provider_id not in SUPPORTED_PROVIDER_IDS:
         raise ValueError(f"options.provider: unsupported candidate provider {provider_id!r}")
     return provider_id
 
@@ -227,6 +235,185 @@ class OpenRouterCandidateProvider:
         return document
 
 
+def _structured_prompt(request: Mapping[str, Any]) -> str:
+    schema = request.get("schema")
+    messages = request.get("messages")
+    if not isinstance(schema, dict) or not isinstance(messages, list):
+        raise ProviderError("provider_invalid_request", "The normalized structured request is invalid.", False)
+    return (
+        "Return exactly one JSON object matching the JSON Schema below. "
+        "Do not use tools, inspect files, browse, or add markdown fences.\n\n"
+        f"MESSAGES:\n{json.dumps(messages, ensure_ascii=False)}\n\n"
+        f"JSON SCHEMA:\n{json.dumps(schema, ensure_ascii=False)}\n"
+    )
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("response was not text or an object")
+    text = value.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("response JSON was not an object")
+    return parsed
+
+
+def _extract_local_document(provider_id: str, stdout: str, output_file: Path) -> dict[str, Any]:
+    if provider_id == "codex" and output_file.exists():
+        if output_file.stat().st_size > _MAX_RESPONSE_BYTES:
+            raise ProviderError("provider_response_too_large", "Local agent response exceeded the safe limit.", True)
+        return _json_object(output_file.read_text(encoding="utf-8"))
+    envelope = json.loads(stdout) if provider_id in {"claude_code", "gemini"} else stdout
+    if provider_id == "claude_code" and isinstance(envelope, dict):
+        return _json_object(envelope.get("structured_output", envelope.get("result")))
+    if provider_id == "gemini" and isinstance(envelope, dict):
+        return _json_object(envelope.get("response", envelope.get("result")))
+    return _json_object(envelope)
+
+
+_HERMES_SCRIPT = """import sys
+import hermes_cli.oneshot as oneshot
+original = oneshot._normalize_toolsets
+oneshot._normalize_toolsets = lambda value: [] if value == '__vidmyo_no_tools__' else original(value)
+oneshot.get_fallback_chain = lambda _cfg: []
+response, _result = oneshot._run_agent(
+    sys.stdin.read(), toolsets='__vidmyo_no_tools__', use_config_toolsets=False
+)
+sys.stdout.write(response or '')
+"""
+
+
+def _hermes_python(cli_path: str) -> str:
+    current = Path(cli_path)
+    for _ in range(3):
+        try:
+            text = current.read_text(encoding="utf-8")[:4096]
+        except (OSError, UnicodeError):
+            break
+        first = text.splitlines()[0] if text else ""
+        if first.startswith("#!") and "python" in first.lower():
+            return first[2:].strip().split()[0]
+        match = re.search(r'^exec\s+["\']([^"\']+)["\']\s+"\$@"', text, re.MULTILINE)
+        if not match:
+            break
+        current = Path(match.group(1))
+    raise ProviderError(
+        "provider_isolation_unavailable",
+        "Hermes is installed, but Vidmyo could not resolve its isolated Python runtime.",
+        False,
+    )
+
+
+class LocalAgentCandidateProvider:
+    """Tool-free structured requests through an already-authenticated local agent CLI."""
+
+    def __init__(
+        self,
+        provider_id: str,
+        model_id: str,
+        *,
+        cli_path: str | None = None,
+        cli_version: str | None = None,
+        timeout_seconds: float = 180.0,
+        cancelled: Callable[[], bool] = lambda: False,
+        popen: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
+    ) -> None:
+        self.provider_id = normalize_provider_id(provider_id)
+        if self.provider_id not in LOCAL_AGENT_PROVIDER_IDS:
+            raise ValueError(f"unsupported local candidate provider {self.provider_id!r}")
+        self.model_id = normalize_model_id(model_id)
+        self.cli_path = cli_path or os.environ.get("VIDMYO_AGENT_CLI", "")
+        self.cli_version = cli_version or os.environ.get("VIDMYO_AGENT_VERSION", "unknown")
+        if not self.cli_path or not Path(self.cli_path).is_absolute():
+            raise ProviderError("provider_not_installed", f"{self.provider_id} CLI is not installed.", False)
+        self._timeout_seconds = float(timeout_seconds)
+        self._cancelled = cancelled
+        self._popen = popen
+
+    def _command(self, schema_path: Path, output_path: Path) -> list[str]:
+        if self.provider_id == "codex":
+            return [self.cli_path, "exec", "--ephemeral", "--ignore-rules", "--sandbox", "read-only",
+                    "--skip-git-repo-check", "--output-schema", str(schema_path),
+                    "--output-last-message", str(output_path), "-"]
+        if self.provider_id == "claude_code":
+            schema = schema_path.read_text(encoding="utf-8")
+            return [self.cli_path, "--print", "--output-format", "json", "--json-schema", schema,
+                    "--no-session-persistence", "--tools", "", "--permission-mode", "dontAsk",
+                    "--disable-slash-commands"]
+        if self.provider_id == "gemini":
+            return [self.cli_path, "--output-format", "json", "--sandbox", "--approval-mode", "default", "-p", ""]
+        return [_hermes_python(self.cli_path), "-c", _HERMES_SCRIPT]
+
+    def structured(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        prompt = _structured_prompt(request)
+        schema = request.get("schema")
+        with tempfile.TemporaryDirectory(prefix="vidmyo-agent-") as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            schema_path = root / "schema.json"
+            output_path = root / "response.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            schema_path.chmod(0o600)
+            env = dict(os.environ)
+            env.update({"HERMES_SAFE_MODE": "1", "HERMES_IGNORE_RULES": "1"})
+            try:
+                process = self._popen(
+                    self._command(schema_path, output_path), cwd=root, env=env, shell=False,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, start_new_session=True,
+                )
+                started = time.monotonic()
+                while True:
+                    try:
+                        stdout, stderr = process.communicate(input=prompt, timeout=0.2)
+                        break
+                    except subprocess.TimeoutExpired:
+                        prompt = None
+                        if self._cancelled() or time.monotonic() - started > self._timeout_seconds:
+                            try:
+                                if hasattr(os, "killpg"):
+                                    os.killpg(process.pid, signal.SIGTERM)
+                                else:
+                                    process.terminate()
+                                process.wait(timeout=2)
+                            except (OSError, subprocess.TimeoutExpired):
+                                try:
+                                    if hasattr(os, "killpg"):
+                                        os.killpg(process.pid, signal.SIGKILL)
+                                    else:
+                                        process.kill()
+                                except (OSError, AttributeError):
+                                    pass
+                            code = "provider_cancelled" if self._cancelled() else "provider_timeout"
+                            message = "Local agent request was cancelled." if code == "provider_cancelled" else "Local agent timed out."
+                            raise ProviderError(code, message, code == "provider_timeout")
+                if process.returncode:
+                    detail = _bounded_text(stderr)
+                    needs_auth = "auth" in detail.lower() or "login" in detail.lower()
+                    raise ProviderError(
+                        "provider_authentication_failed" if needs_auth else "provider_request_failed",
+                        f"{self.provider_id} needs authentication." if needs_auth else f"{self.provider_id} could not complete the request.",
+                        False,
+                    )
+                if len(stdout.encode("utf-8")) > _MAX_RESPONSE_BYTES:
+                    raise ProviderError("provider_response_too_large", "Local agent response exceeded the safe limit.", True)
+                return _extract_local_document(self.provider_id, stdout, output_path)
+            except ProviderError:
+                raise
+            except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+                raise ProviderError(
+                    "provider_malformed_response",
+                    f"{self.provider_id} returned invalid structured output: {_bounded_text(str(exc))}",
+                    True,
+                ) from exc
+
+
 def make_candidate_provider(
     provider_id: Any,
     model_id: Any,
@@ -236,4 +423,6 @@ def make_candidate_provider(
     normalized_model = normalize_model_id(model_id)
     if normalized_provider == OPENROUTER_PROVIDER_ID:
         return OpenRouterCandidateProvider(normalized_model, **kwargs)
+    if normalized_provider in LOCAL_AGENT_PROVIDER_IDS:
+        return LocalAgentCandidateProvider(normalized_provider, normalized_model, **kwargs)
     raise ValueError(f"unsupported candidate provider {normalized_provider!r}")

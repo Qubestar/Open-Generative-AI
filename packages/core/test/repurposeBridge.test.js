@@ -12,7 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const { createRepurposeBridge } = require('../../../electron/lib/repurposeBridge.js');
 const tempDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
-function harness() {
+function harness({ secret = '', detectedAgents = [] } = {}) {
   const handlers = new Map();
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn) };
   const jobsDir = tempDir('vidmyo-bridge-jobs-');
@@ -20,10 +20,12 @@ function harness() {
     constructor() { super(jobsDir); }
   }
   const sent = [];
+  const runOptions = [];
   const core = async () => ({
     ...actualCore,
     JobStore: TestJobStore,
-    runRepurposeJob: async (store, jobId) => {
+    runRepurposeJob: async (store, jobId, options) => {
+      runOptions.push(options);
       if (store.get(jobId).state === 'queued') store.setState(jobId, 'running');
       return store.setState(jobId, 'done');
     },
@@ -36,13 +38,17 @@ function harness() {
     BrowserWindow: { getAllWindows: () => [{ webContents: { send: (...args) => sent.push(args) } }] },
     app: { getPath: () => userData },
     core,
-    getSecret: () => null,
+    getSecret: () => secret,
+    agents: {
+      detectAll: async () => detectedAgents,
+      preferredAgentId: async () => detectedAgents.find(agent => agent.installed)?.id || null,
+    },
     execFileImpl: (_command, args, _options, callback) => {
       if (args.includes('doctor')) callback(null, JSON.stringify({ ok: false, status: 'missing' }), '');
       else callback(null, 'ready', '');
     },
   });
-  return { bridge, handlers, sent, jobsDir, userData };
+  return { bridge, handlers, sent, jobsDir, userData, runOptions };
 }
 
 test('bridge registers once and exposes only structured Repurpose handlers', () => {
@@ -98,6 +104,32 @@ test('run-stage returns a durable job immediately and list/get responses are san
   assert.equal(fetched.active, false);
   const listed = await handlers.get('repurpose:list-jobs')(null, { projectDir: dir });
   assert.equal(listed.jobs.length, 1);
+});
+
+test('candidate jobs require and persist one detected analysis provider', async () => {
+  const detectedAgents = [{
+    id: 'codex', name: 'OpenAI Codex', repurposeName: 'OpenAI Codex',
+    installed: true, authed: true, supportsRepurpose: true, path: '/opt/codex', version: '1.2.3',
+  }];
+  const { bridge, handlers, jobsDir, runOptions } = harness({ detectedAgents });
+  bridge.register();
+  const dir = tempDir('vidmyo-bridge-provider-');
+  const source = path.join(dir, 'source.mp4');
+  fs.writeFileSync(source, 'media');
+  const project = actualCore.RepurposeProject.create(dir, { source: { type: 'local_file', uri: source } });
+  project.manifest.stages.ingest = { state: 'completed', artifact: 'artifacts/ingest.json', error: null };
+  project.manifest.stages.transcribe = { state: 'completed', artifact: 'artifacts/transcript.json', error: null };
+  project.save();
+  bridge.authorizeProject(dir);
+  assert.equal((await handlers.get('repurpose:run-stage')(null, dir, 'generate_candidates', {})).ok, false);
+  await handlers.get('repurpose:set-config')(null, { analysisProvider: 'codex' });
+  const started = await handlers.get('repurpose:run-stage')(null, dir, 'generate_candidates', {});
+  assert.equal(started.ok, true);
+  await new Promise(resolve => setImmediate(resolve));
+  const stored = new actualCore.JobStore(jobsDir).get(started.job.id);
+  assert.deepEqual(stored.params.options, { provider: 'codex', model: 'configured-default' });
+  assert.equal(runOptions[0].extraEnv.VIDMYO_AGENT_CLI, '/opt/codex');
+  assert.equal(runOptions[0].extraEnv.VIDMYO_AGENT_VERSION, '1.2.3');
 });
 
 test('job inspection and resume require a user-selected project grant', async () => {
@@ -176,16 +208,28 @@ test('preview reads are scoped to granted project-owned video files', async () =
 });
 
 test('readiness is read-only and config cannot become generic process execution', async () => {
-  const { bridge, handlers, userData } = harness();
+  const detectedAgents = [{
+    id: 'codex', name: 'OpenAI Codex', repurposeName: 'OpenAI Codex',
+    installed: true, authed: true, supportsRepurpose: true, path: '/opt/codex', version: '1.2.3',
+  }];
+  const { bridge, handlers, userData } = harness({ secret: 'stored-key', detectedAgents });
   bridge.register();
-  const config = await handlers.get('repurpose:set-config')(null, { modelCache: path.join(userData, 'models') });
+  const config = await handlers.get('repurpose:set-config')(null, {
+    modelCache: path.join(userData, 'models'), analysisProvider: 'codex', openRouterModel: 'openai/gpt-5',
+  });
   assert.equal(config.ok, true);
+  assert.equal(config.config.analysisProvider, 'codex');
+  assert.equal(config.config.openRouterModel, 'openai/gpt-5');
+  assert.equal((await handlers.get('repurpose:set-config')(null, { analysisProvider: 'opencode' })).ok, false);
   assert.equal((await handlers.get('repurpose:set-config')(null, { python: 'python3' })).ok, false);
   assert.equal((await handlers.get('repurpose:set-config')(null, { arbitrary: 'value' })).ok, false);
   const readiness = await handlers.get('repurpose:readiness')();
   assert.equal(readiness.ok, true);
   assert.equal(readiness.readiness.downloadsPerformed, false);
   assert.equal(readiness.readiness.model.status, 'missing');
+  assert.equal(readiness.readiness.analysis.openrouter.authed, true);
+  assert.equal(readiness.readiness.analysis.preferredAgent, 'codex');
+  assert.deepEqual(readiness.readiness.analysis.agents, detectedAgents);
 });
 
 test('preload surface names every narrow channel and exposes no generic invoke helper', () => {

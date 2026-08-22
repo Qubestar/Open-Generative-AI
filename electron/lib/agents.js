@@ -205,8 +205,8 @@ async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
 
 // Agent used for auto-delegation. The user's saved choice wins (when still
 // installed); otherwise Claude Code if present, else the first installed one.
-async function preferredAgentId() {
-  const all = await detectAll();
+async function preferredAgentId(detectedAgents = null) {
+  const all = detectedAgents || await detectAll();
   const saved = readAgentsConfig().preferredAgent;
   if (saved && all.find((a) => a.id === saved && a.installed)) return saved;
   const claude = all.find((a) => a.id === 'claude_code' && a.installed);
@@ -261,6 +261,7 @@ const KNOWN_AGENTS = [
     loginCmd: 'claude',            // first run / `claude` triggers its own auth
     installCmd: 'npm install -g @anthropic-ai/claude-code',
     authPaths: ['.claude/.credentials.json', '.claude.json', '.config/claude/.credentials.json'],
+    repurposeName: 'Claude Code',
   },
   {
     id: 'codex',
@@ -269,6 +270,7 @@ const KNOWN_AGENTS = [
     loginCmd: 'codex login',       // real ChatGPT/OpenAI OAuth in the browser
     installCmd: 'npm install -g @openai/codex',
     authPaths: ['.codex/auth.json'],
+    repurposeName: 'OpenAI Codex',
   },
   {
     id: 'gemini',
@@ -277,6 +279,7 @@ const KNOWN_AGENTS = [
     loginCmd: 'gemini',            // first run triggers Google OAuth
     installCmd: 'npm install -g @google/gemini-cli',
     authPaths: ['.gemini/oauth_creds.json', '.gemini/installation_id'],
+    repurposeName: 'Gemini / Antigravity',
   },
   {
     id: 'hermes',
@@ -285,6 +288,7 @@ const KNOWN_AGENTS = [
     loginCmd: 'hermes',
     installCmd: 'npm install -g @outsourc-e/hermes-agent',
     authPaths: ['.hermes/config.json', '.hermes'],
+    repurposeName: 'Hermes',
   },
   {
     id: 'opencode',
@@ -390,6 +394,8 @@ async function detectAll() {
       installCmd: agent.installCmd,
       loginCmd: agent.loginCmd,
       desktopApp: findDesktopApp(agent.id)?.name || null,
+      supportsRepurpose: Boolean(agent.repurposeName),
+      repurposeName: agent.repurposeName || null,
     });
   }
   return out;
@@ -544,4 +550,6 @@ function register() {
   });
 }
 
-module.exports = { register, KNOWN_AGENTS, detectAll, launchAgent, preferredAgentId };
+module.exports = {
+  register, KNOWN_AGENTS, detectAll, launchAgent, preferredAgentId, resolveCliPath,
+};
