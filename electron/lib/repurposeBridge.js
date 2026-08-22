@@ -7,7 +7,10 @@ const { getSecret: defaultGetSecret } = require('./secrets');
 const { resolveRuntimePaths } = require('./runtimePaths');
 const agentsLib = require('./agents');
 
-const ANALYSIS_PROVIDERS = new Set(['openrouter', 'codex', 'claude_code', 'gemini', 'hermes']);
+const LOCAL_ANALYSIS_PROVIDERS = new Set(
+  agentsLib.KNOWN_AGENTS.filter(agent => agent.repurposeName).map(agent => agent.id),
+);
+const ANALYSIS_PROVIDERS = new Set(['openrouter', ...LOCAL_ANALYSIS_PROVIDERS]);
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 
 let corePromise = null;
@@ -175,7 +178,6 @@ function createRepurposeBridge({
         if (!detected?.installed) throw new Error(`${detected?.repurposeName || analysisProvider} CLI is not installed`);
         if (!detected.authed) throw new Error(`${detected.repurposeName || detected.name} needs authentication`);
         extraEnv.VIDMYO_AGENT_CLI = detected.path;
-        extraEnv.VIDMYO_AGENT_VERSION = detected.version || 'unknown';
       }
       return mod.runRepurposeJob(jobStore, jobId, {
         python: mod.DEFAULT_REPURPOSE_PYTHON,
@@ -275,6 +277,13 @@ function createRepurposeBridge({
         if (stage === 'generate_candidates' && !stageOptions.provider) throw new Error('Choose an AI agent before finding moments');
         if (stage === 'generate_candidates' && stageOptions.provider === 'openrouter' && !stageOptions.model) {
           throw new Error('Choose an OpenRouter model before finding moments');
+        }
+        if (stage === 'generate_candidates' && LOCAL_ANALYSIS_PROVIDERS.has(stageOptions.provider)) {
+          const detected = (await agents.detectAll()).find(agent => agent.id === stageOptions.provider);
+          if (!detected?.installed) throw new Error(`${detected?.repurposeName || stageOptions.provider} CLI is not installed`);
+          if (!detected.authed) throw new Error(`${detected.repurposeName || detected.name} needs authentication`);
+          const version = String(detected.version || 'unknown').replace(/[^A-Za-z0-9._/-]/g, '_').slice(0, 80);
+          stageOptions.model = `configured-default@${version}.run-${Date.now()}`;
         }
         const job = mod.createRepurposeJob(jobStore, { projectDir, stage, options: stageOptions });
         void launch(job.id).catch(() => {});

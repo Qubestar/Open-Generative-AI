@@ -550,6 +550,4 @@ function register() {
   });
 }
 
-module.exports = {
-  register, KNOWN_AGENTS, detectAll, launchAgent, preferredAgentId, resolveCliPath,
-};
+module.exports = { register, KNOWN_AGENTS, detectAll, launchAgent, preferredAgentId };

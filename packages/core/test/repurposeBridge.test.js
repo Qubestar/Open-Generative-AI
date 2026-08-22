@@ -127,9 +127,10 @@ test('candidate jobs require and persist one detected analysis provider', async 
   assert.equal(started.ok, true);
   await new Promise(resolve => setImmediate(resolve));
   const stored = new actualCore.JobStore(jobsDir).get(started.job.id);
-  assert.deepEqual(stored.params.options, { provider: 'codex', model: 'configured-default' });
+  assert.match(stored.params.options.model, /^configured-default@1\.2\.3\.run-\d+$/);
+  assert.equal(stored.params.options.provider, 'codex');
   assert.equal(runOptions[0].extraEnv.VIDMYO_AGENT_CLI, '/opt/codex');
-  assert.equal(runOptions[0].extraEnv.VIDMYO_AGENT_VERSION, '1.2.3');
+  assert.equal(runOptions[0].extraEnv.VIDMYO_AGENT_VERSION, undefined);
 });
 
 test('job inspection and resume require a user-selected project grant', async () => {

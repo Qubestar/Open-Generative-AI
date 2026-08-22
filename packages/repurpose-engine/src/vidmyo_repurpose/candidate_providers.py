@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -267,7 +268,7 @@ def _json_object(value: Any) -> dict[str, Any]:
 def _extract_local_document(provider_id: str, stdout: str, output_file: Path) -> dict[str, Any]:
     if provider_id == "codex" and output_file.exists():
         if output_file.stat().st_size > _MAX_RESPONSE_BYTES:
-            raise ProviderError("provider_response_too_large", "Local agent response exceeded the safe limit.", True)
+            raise ProviderError("provider_response_too_large", "Local agent response exceeded the safe limit.", False)
         return _json_object(output_file.read_text(encoding="utf-8"))
     envelope = json.loads(stdout) if provider_id in {"claude_code", "gemini"} else stdout
     if provider_id == "claude_code" and isinstance(envelope, dict):
@@ -298,7 +299,15 @@ def _hermes_python(cli_path: str) -> str:
             break
         first = text.splitlines()[0] if text else ""
         if first.startswith("#!") and "python" in first.lower():
-            return first[2:].strip().split()[0]
+            interpreter = first[2:].strip().split()
+            if Path(interpreter[0]).name == "env" and len(interpreter) > 1:
+                adjacent = current.parent / interpreter[-1]
+                return str(adjacent) if adjacent.is_file() else (shutil.which(interpreter[-1]) or interpreter[-1])
+            return interpreter[0]
+        if "'''exec'" in text and "'python3'" in text:
+            runtime = current.parent / "python3"
+            if runtime.is_file():
+                return str(runtime)
         match = re.search(r'^exec\s+["\']([^"\']+)["\']\s+"\$@"', text, re.MULTILINE)
         if not match:
             break
@@ -319,7 +328,6 @@ class LocalAgentCandidateProvider:
         model_id: str,
         *,
         cli_path: str | None = None,
-        cli_version: str | None = None,
         timeout_seconds: float = 180.0,
         cancelled: Callable[[], bool] = lambda: False,
         popen: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
@@ -329,7 +337,6 @@ class LocalAgentCandidateProvider:
             raise ValueError(f"unsupported local candidate provider {self.provider_id!r}")
         self.model_id = normalize_model_id(model_id)
         self.cli_path = cli_path or os.environ.get("VIDMYO_AGENT_CLI", "")
-        self.cli_version = cli_version or os.environ.get("VIDMYO_AGENT_VERSION", "unknown")
         if not self.cli_path or not Path(self.cli_path).is_absolute():
             raise ProviderError("provider_not_installed", f"{self.provider_id} CLI is not installed.", False)
         self._timeout_seconds = float(timeout_seconds)
@@ -338,14 +345,24 @@ class LocalAgentCandidateProvider:
 
     def _command(self, schema_path: Path, output_path: Path) -> list[str]:
         if self.provider_id == "codex":
-            return [self.cli_path, "exec", "--ephemeral", "--ignore-rules", "--sandbox", "read-only",
+            disabled = [
+                "apps", "browser_use", "browser_use_external", "code_mode_host",
+                "computer_use", "hooks", "image_generation", "in_app_browser",
+                "multi_agent", "plugins", "shell_tool", "skill_mcp_dependency_install",
+                "skill_search", "tool_call_mcp_elicitation",
+            ]
+            flags = [flag for feature in disabled for flag in ("--disable", feature)]
+            return [self.cli_path, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+                    "--strict-config", *flags, "--sandbox", "read-only",
                     "--skip-git-repo-check", "--output-schema", str(schema_path),
                     "--output-last-message", str(output_path), "-"]
         if self.provider_id == "claude_code":
             schema = schema_path.read_text(encoding="utf-8")
+            mcp_config = schema_path.parent / "claude-mcp.json"
             return [self.cli_path, "--print", "--output-format", "json", "--json-schema", schema,
-                    "--no-session-persistence", "--tools", "", "--permission-mode", "dontAsk",
-                    "--disable-slash-commands"]
+                    "--safe-mode", "--no-session-persistence", "--tools", "", "--permission-mode", "dontAsk",
+                    "--disable-slash-commands", "--mcp-config", str(mcp_config),
+                    "--strict-mcp-config", "--setting-sources", ""]
         if self.provider_id == "gemini":
             return [self.cli_path, "--output-format", "json", "--sandbox", "--approval-mode", "default", "-p", ""]
         return [_hermes_python(self.cli_path), "-c", _HERMES_SCRIPT]
@@ -358,41 +375,111 @@ class LocalAgentCandidateProvider:
             root.chmod(0o700)
             schema_path = root / "schema.json"
             output_path = root / "response.json"
+            prompt_path = root / "prompt.txt"
+            stdout_path = root / "stdout.txt"
+            stderr_path = root / "stderr.txt"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
             schema_path.chmod(0o600)
-            env = dict(os.environ)
+            claude_mcp_path = root / "claude-mcp.json"
+            claude_mcp_path.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+            claude_mcp_path.chmod(0o600)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            prompt_path.chmod(0o600)
+            common = {
+                "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP",
+                "LANG", "LANGUAGE", "SSL_CERT_FILE", "SSL_CERT_DIR",
+                "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+                "NODE_EXTRA_CA_CERTS",
+            }
+            provider_auth = {
+                "codex": {"CODEX_HOME", "OPENAI_API_KEY"},
+                "claude_code": {"CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
+                "gemini": {
+                    "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
+                    "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
+                },
+                "hermes": {"HERMES_HOME"},
+            }[self.provider_id]
+            allowed = common | provider_auth
+            env = {key: value for key, value in os.environ.items() if key in allowed or key.startswith("LC_")}
             env.update({"HERMES_SAFE_MODE": "1", "HERMES_IGNORE_RULES": "1"})
+            if self.provider_id == "gemini":
+                gemini_settings = root / "gemini-system-settings.json"
+                gemini_settings.write_text(json.dumps({
+                    "tools": {"core": []},
+                    "admin": {
+                        "mcp": {"enabled": False},
+                        "extensions": {"enabled": False},
+                        "skills": {"enabled": False},
+                    },
+                    "hooks": {"enabled": False},
+                    "context": {"includeDirectories": [], "loadMemoryFromIncludeDirectories": False},
+                }), encoding="utf-8")
+                gemini_settings.chmod(0o600)
+                env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(gemini_settings)
             try:
-                process = self._popen(
-                    self._command(schema_path, output_path), cwd=root, env=env, shell=False,
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, start_new_session=True,
-                )
-                started = time.monotonic()
-                while True:
-                    try:
-                        stdout, stderr = process.communicate(input=prompt, timeout=0.2)
-                        break
-                    except subprocess.TimeoutExpired:
-                        prompt = None
-                        if self._cancelled() or time.monotonic() - started > self._timeout_seconds:
+                with prompt_path.open("r", encoding="utf-8") as prompt_stream, \
+                        stdout_path.open("w+", encoding="utf-8", errors="replace") as stdout_stream, \
+                        stderr_path.open("w+", encoding="utf-8", errors="replace") as stderr_stream:
+                    process = self._popen(
+                        self._command(schema_path, output_path), cwd=root, env=env, shell=False,
+                        stdin=prompt_stream, stdout=stdout_stream, stderr=stderr_stream,
+                        text=True, start_new_session=True,
+                    )
+
+                    def terminate() -> None:
+                        try:
+                            if hasattr(os, "killpg"):
+                                os.killpg(process.pid, signal.SIGTERM)
+                            else:
+                                process.terminate()
+                            process.wait(timeout=2)
+                        except (OSError, subprocess.TimeoutExpired):
                             try:
                                 if hasattr(os, "killpg"):
-                                    os.killpg(process.pid, signal.SIGTERM)
+                                    os.killpg(process.pid, signal.SIGKILL)
                                 else:
-                                    process.terminate()
-                                process.wait(timeout=2)
-                            except (OSError, subprocess.TimeoutExpired):
-                                try:
-                                    if hasattr(os, "killpg"):
-                                        os.killpg(process.pid, signal.SIGKILL)
-                                    else:
-                                        process.kill()
-                                except (OSError, AttributeError):
-                                    pass
-                            code = "provider_cancelled" if self._cancelled() else "provider_timeout"
-                            message = "Local agent request was cancelled." if code == "provider_cancelled" else "Local agent timed out."
-                            raise ProviderError(code, message, code == "provider_timeout")
+                                    process.kill()
+                            except (OSError, AttributeError):
+                                pass
+
+                    if callable(getattr(process, "poll", None)):
+                        started = time.monotonic()
+                        while process.poll() is None:
+                            oversized = any(
+                                candidate.exists() and candidate.stat().st_size > _MAX_RESPONSE_BYTES
+                                for candidate in (stdout_path, stderr_path, output_path)
+                            )
+                            if oversized:
+                                terminate()
+                                raise ProviderError(
+                                    "provider_response_too_large",
+                                    "Local agent response exceeded the safe limit.", False,
+                                )
+                            if self._cancelled() or time.monotonic() - started > self._timeout_seconds:
+                                terminate()
+                                code = "provider_cancelled" if self._cancelled() else "provider_timeout"
+                                message = "Local agent request was cancelled." if code == "provider_cancelled" else "Local agent timed out."
+                                raise ProviderError(code, message, False)
+                            time.sleep(0.05)
+                        stdout_stream.seek(0)
+                        stderr_stream.seek(0)
+                        stdout = stdout_stream.read(_MAX_RESPONSE_BYTES + 1)
+                        stderr = stderr_stream.read(_MAX_RESPONSE_BYTES + 1)
+                    else:
+                        # Test doubles use communicate(); production Popen instances take the bounded file path above.
+                        started = time.monotonic()
+                        while True:
+                            try:
+                                stdout, stderr = process.communicate(input=prompt, timeout=0.2)
+                                break
+                            except subprocess.TimeoutExpired:
+                                prompt = None
+                                if self._cancelled() or time.monotonic() - started > self._timeout_seconds:
+                                    terminate()
+                                    code = "provider_cancelled" if self._cancelled() else "provider_timeout"
+                                    message = "Local agent request was cancelled." if code == "provider_cancelled" else "Local agent timed out."
+                                    raise ProviderError(code, message, False)
                 if process.returncode:
                     detail = _bounded_text(stderr)
                     needs_auth = "auth" in detail.lower() or "login" in detail.lower()
@@ -401,8 +488,8 @@ class LocalAgentCandidateProvider:
                         f"{self.provider_id} needs authentication." if needs_auth else f"{self.provider_id} could not complete the request.",
                         False,
                     )
-                if len(stdout.encode("utf-8")) > _MAX_RESPONSE_BYTES:
-                    raise ProviderError("provider_response_too_large", "Local agent response exceeded the safe limit.", True)
+                if len(stdout.encode("utf-8")) > _MAX_RESPONSE_BYTES or len(stderr.encode("utf-8")) > _MAX_RESPONSE_BYTES:
+                    raise ProviderError("provider_response_too_large", "Local agent response exceeded the safe limit.", False)
                 return _extract_local_document(self.provider_id, stdout, output_path)
             except ProviderError:
                 raise
@@ -410,7 +497,7 @@ class LocalAgentCandidateProvider:
                 raise ProviderError(
                     "provider_malformed_response",
                     f"{self.provider_id} returned invalid structured output: {_bounded_text(str(exc))}",
-                    True,
+                    False,
                 ) from exc
 
 
