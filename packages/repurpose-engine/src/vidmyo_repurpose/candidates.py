@@ -861,13 +861,22 @@ def generate_candidates(
         raise cancellation_error()
     if provider is None:
         try:
-            provider = provider_factory(settings.provider_id, settings.model_id)
+            provider = (
+                provider_factory(settings.provider_id, settings.model_id, cancelled=cancelled)
+                if provider_factory is make_candidate_provider
+                else provider_factory(settings.provider_id, settings.model_id)
+            )
         except ProviderError as exc:
+            next_action = (
+                "Add the OpenRouter key and retry with the same explicit model."
+                if settings.provider_id == "openrouter"
+                else "Check the selected agent installation and authentication, then retry without changing providers."
+            )
             raise _error(
                 exc.code,
                 f"Candidate generation could not start with {settings.provider_id}/{settings.model_id}: "
                 f"{_feedback(exc)}.",
-                "Configure OPENROUTER_API_KEY and retry with the same explicit model.",
+                next_action,
             ) from exc
     if provider.provider_id != settings.provider_id or provider.model_id != settings.model_id:
         raise ContractValidationError(

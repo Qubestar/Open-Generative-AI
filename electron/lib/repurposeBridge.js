@@ -5,6 +5,13 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { getSecret: defaultGetSecret } = require('./secrets');
 const { resolveRuntimePaths } = require('./runtimePaths');
+const agentsLib = require('./agents');
+
+const LOCAL_ANALYSIS_PROVIDERS = new Set(
+  agentsLib.KNOWN_AGENTS.filter(agent => agent.repurposeName).map(agent => agent.id),
+);
+const ANALYSIS_PROVIDERS = new Set(['openrouter', ...LOCAL_ANALYSIS_PROVIDERS]);
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 
 let corePromise = null;
 function defaultCore() {
@@ -64,6 +71,7 @@ function createRepurposeBridge({
   app,
   core = defaultCore,
   getSecret = defaultGetSecret,
+  agents = agentsLib,
   execFileImpl,
   engineDir = null,
 } = {}) {
@@ -83,6 +91,14 @@ function createRepurposeBridge({
       if (!path.isAbsolute(value.modelCache)) throw new Error('modelCache must be an absolute path');
       normalized.modelCache = path.resolve(value.modelCache);
     }
+    if (value.analysisProvider) {
+      if (!ANALYSIS_PROVIDERS.has(value.analysisProvider)) throw new Error('analysisProvider is not supported');
+      normalized.analysisProvider = value.analysisProvider;
+    }
+    if (value.openRouterModel) {
+      if (!MODEL_ID.test(value.openRouterModel)) throw new Error('openRouterModel is invalid');
+      normalized.openRouterModel = value.openRouterModel;
+    }
     return normalized;
   };
   const readConfig = () => {
@@ -90,7 +106,7 @@ function createRepurposeBridge({
   };
   const writeConfig = update => {
     if (!update || typeof update !== 'object' || Array.isArray(update)) throw new Error('Repurpose config must be an object');
-    const allowed = ['modelCache'];
+    const allowed = ['modelCache', 'analysisProvider', 'openRouterModel'];
     for (const key of Object.keys(update)) if (!allowed.includes(key)) throw new Error(`Unknown Repurpose config field: ${key}`);
     const next = { ...readConfig() };
     for (const key of allowed) {
@@ -144,11 +160,29 @@ function createRepurposeBridge({
       const jobStore = await store();
       job = jobStore.get(jobId);
       if (!job || job.type !== mod.REPURPOSE_JOB_TYPE) throw new Error(`No such Repurpose job: ${jobId}`);
-      const openRouterKey = ['generate_candidates', 'rank'].includes(job.params.stage) ? getSecret('openrouter') : null;
+      let analysisProvider = job.params.options?.provider || null;
+      if (job.params.stage === 'rank' && !analysisProvider) {
+        try {
+          const candidate = JSON.parse(fs.readFileSync(
+            path.join(job.params.projectDir, 'artifacts', 'candidate-artifact.v1.json'), 'utf8',
+          ));
+          analysisProvider = candidate.provider?.id || null;
+        } catch { /* the worker will report the invalid prerequisite */ }
+      }
+      const extraEnv = {};
+      if (analysisProvider === 'openrouter') {
+        const openRouterKey = getSecret('openrouter');
+        if (openRouterKey) extraEnv.OPENROUTER_API_KEY = openRouterKey;
+      } else if (ANALYSIS_PROVIDERS.has(analysisProvider)) {
+        const detected = (await agents.detectAll()).find(agent => agent.id === analysisProvider);
+        if (!detected?.installed) throw new Error(`${detected?.repurposeName || analysisProvider} CLI is not installed`);
+        if (!detected.authed) throw new Error(`${detected.repurposeName || detected.name} needs authentication`);
+        extraEnv.VIDMYO_AGENT_CLI = detected.path;
+      }
       return mod.runRepurposeJob(jobStore, jobId, {
         python: mod.DEFAULT_REPURPOSE_PYTHON,
         engineDir: trustedEngineDir || mod.DEFAULT_REPURPOSE_ENGINE_DIR,
-        extraEnv: openRouterKey ? { OPENROUTER_API_KEY: openRouterKey } : {},
+        extraEnv,
         onChild: child => { entry.child = child; },
         onEvent: event => send({ ...event, state: jobStore.get(jobId)?.state || 'running' }),
       });
@@ -235,7 +269,22 @@ function createRepurposeBridge({
         const stageOptions = {
           ...options,
           ...(stage === 'transcribe' && cfg.modelCache && !options.model_cache ? { model_cache: cfg.modelCache } : {}),
+          ...(stage === 'generate_candidates' && !options.provider && cfg.analysisProvider ? {
+            provider: cfg.analysisProvider,
+            model: cfg.analysisProvider === 'openrouter' ? cfg.openRouterModel : 'configured-default',
+          } : {}),
         };
+        if (stage === 'generate_candidates' && !stageOptions.provider) throw new Error('Choose an AI agent before finding moments');
+        if (stage === 'generate_candidates' && stageOptions.provider === 'openrouter' && !stageOptions.model) {
+          throw new Error('Choose an OpenRouter model before finding moments');
+        }
+        if (stage === 'generate_candidates' && LOCAL_ANALYSIS_PROVIDERS.has(stageOptions.provider)) {
+          const detected = (await agents.detectAll()).find(agent => agent.id === stageOptions.provider);
+          if (!detected?.installed) throw new Error(`${detected?.repurposeName || stageOptions.provider} CLI is not installed`);
+          if (!detected.authed) throw new Error(`${detected.repurposeName || detected.name} needs authentication`);
+          const version = String(detected.version || 'unknown').replace(/[^A-Za-z0-9._/-]/g, '_').slice(0, 80);
+          stageOptions.model = `configured-default@${version}.run-${Date.now()}`;
+        }
         const job = mod.createRepurposeJob(jobStore, { projectDir, stage, options: stageOptions });
         void launch(job.id).catch(() => {});
         return { ok: true, job: { ...publicJob(job), active: true } };
@@ -355,12 +404,20 @@ function createRepurposeBridge({
       try {
         const mod = await core();
         const cfg = readConfig();
-        const readiness = await mod.inspectRepurposeReadiness({
-          python: mod.DEFAULT_REPURPOSE_PYTHON,
-          engineDir: trustedEngineDir || mod.DEFAULT_REPURPOSE_ENGINE_DIR,
-          modelCache: cfg.modelCache || null,
-          ...(execFileImpl ? { execFileImpl } : {}),
-        });
+        const [readiness, detectedAgents] = await Promise.all([
+          mod.inspectRepurposeReadiness({
+            python: mod.DEFAULT_REPURPOSE_PYTHON,
+            engineDir: trustedEngineDir || mod.DEFAULT_REPURPOSE_ENGINE_DIR,
+            modelCache: cfg.modelCache || null,
+            ...(execFileImpl ? { execFileImpl } : {}),
+          }),
+          agents.detectAll(),
+        ]);
+        readiness.analysis = {
+          openrouter: { id: 'openrouter', name: 'OpenRouter', installed: true, authed: Boolean(getSecret('openrouter')) },
+          agents: detectedAgents.filter(agent => agent.supportsRepurpose),
+          preferredAgent: await agents.preferredAgentId(detectedAgents),
+        };
         return { ok: true, readiness };
       } catch (error) { return fail(error); }
     });

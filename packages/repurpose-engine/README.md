@@ -141,6 +141,18 @@ progress stream, or bounded error detail. The adapter is non-streaming and
 requires strict JSON Schema support from the explicitly selected model and
 route; it never switches to another provider or paid model.
 
+The desktop app can instead set `provider` to `codex`, `claude_code`,
+`gemini`, or `hermes` with model identity `configured-default`. Repurpose uses
+the existing Vidmyo agent detector, the user's existing CLI authentication and
+configured model, and an isolated temporary working directory. Codex and
+Claude use their structured-output modes; Gemini output is normalized and
+validated locally; Hermes runs through its installed Python runtime with an
+empty tool allowlist and fallback disabled. The source video never crosses
+this boundary, but transcript excerpts do reach the selected agent's model
+service. Antigravity is displayed as part of the Gemini family and requires
+the Gemini CLI for headless execution. Vidmyo does not install, authenticate,
+or silently replace any selected provider.
+
 Candidate generation uses deterministic 1,500-word, segment-aligned windows
 with a segment-expanded 300-word overlap. `auto` content type classifies
 deterministic beginning/middle/ending transcript samples; explicit podcast,

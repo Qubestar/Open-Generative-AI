@@ -216,6 +216,61 @@ function ReadinessPanel({ readiness, config, setModelCache, saveModelCache }) {
   );
 }
 
+function AnalysisProviderPanel({ readiness, config, lockedProvider, lockedModel, busy, saveAnalysisConfig, setOpenRouterModel }) {
+  const agents = readiness?.analysis?.agents || [];
+  const detected = agents.filter(agent => agent.installed || agent.desktopApp);
+  const visibleAgents = lockedProvider && lockedProvider !== 'openrouter' && !detected.some(agent => agent.id === lockedProvider)
+    ? [...detected, agents.find(agent => agent.id === lockedProvider) || { id: lockedProvider, name: lockedProvider }]
+    : detected;
+  const selected = lockedProvider || config.analysisProvider || '';
+  const agent = agents.find(item => item.id === selected);
+  const openRouter = readiness?.analysis?.openrouter;
+  const status = selected === 'openrouter'
+    ? (openRouter?.authed ? 'OpenRouter key is ready.' : 'Add an OpenRouter key in Settings before running this stage.')
+    : agent
+      ? (agent.authed ? `${agent.repurposeName || agent.name} is ready.` : `${agent.repurposeName || agent.name} needs authentication.`)
+      : 'Choose OpenRouter or an installed local agent.';
+  return (
+    <section className="rep-analysis-provider" aria-label="AI agent selection">
+      <div>
+        <p className="rep-kicker">Analysis provider</p>
+        <h2>Choose your AI agent</h2>
+        <p>Vidmyo sends transcript excerpts to this provider for “Find moments” and “Rank.” Video processing stays local.</p>
+      </div>
+      <label className="rep-analysis-provider__select">
+        <span>AI agent</span>
+        <select
+          value={selected}
+          disabled={busy || Boolean(lockedProvider)}
+          onChange={event => saveAnalysisConfig({ analysisProvider: event.target.value || null })}
+        >
+          <option value="">Choose an agent…</option>
+          <option value="openrouter">OpenRouter</option>
+          {visibleAgents.map(item => (
+            <option key={item.id} value={item.id} disabled={!item.installed && item.id !== lockedProvider}>
+              {item.repurposeName || item.name}{item.installed ? '' : ` — ${item.id === 'gemini' ? 'Gemini CLI required' : 'CLI setup required'}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      {selected === 'openrouter' && (
+        <label className="rep-analysis-provider__model">
+          <span>OpenRouter model</span>
+          <input
+            value={lockedModel || config.openRouterModel || ''}
+            disabled={busy || Boolean(lockedProvider)}
+            placeholder="for example: openai/gpt-5"
+            onChange={event => setOpenRouterModel(event.target.value)}
+            onBlur={event => saveAnalysisConfig({ openRouterModel: event.target.value || null })}
+          />
+        </label>
+      )}
+      <span className={`rep-analysis-provider__status ${selected && ((selected === 'openrouter' && openRouter?.authed) || agent?.authed) ? 'is-ready' : 'is-attention'}`}>{status}</span>
+      {lockedProvider && <small>This project is locked to the agent that generated its candidates.</small>}
+    </section>
+  );
+}
+
 export default function RepurposeStudio() {
   const bridge = typeof window !== 'undefined' ? window.repurpose : null;
   const [summary, setSummary] = useState(null);
@@ -275,10 +330,19 @@ export default function RepurposeStudio() {
   useEffect(() => {
     if (!bridge) return undefined;
     let cancelled = false;
-    Promise.all([bridge.readiness(), bridge.getConfig()]).then(([ready, stored]) => {
+    Promise.all([bridge.readiness(), bridge.getConfig()]).then(async ([ready, stored]) => {
       if (cancelled) return;
       if (ready.ok) setReadiness(ready.readiness);
-      if (stored.ok) setConfig(stored.config || {});
+      if (stored.ok) {
+        let nextConfig = stored.config || {};
+        const preferred = ready.readiness?.analysis?.preferredAgent;
+        const preferredReady = ready.readiness?.analysis?.agents?.find(agent => agent.id === preferred && agent.installed);
+        if (!nextConfig.analysisProvider && preferredReady) {
+          const saved = await bridge.setConfig({ analysisProvider: preferredReady.id });
+          if (saved.ok) nextConfig = saved.config;
+        }
+        if (!cancelled) setConfig(nextConfig);
+      }
     });
     const unsubscribe = bridge.onProgress(event => {
       setProgressByJob(current => mergeRepurposeProgress(current, event));
@@ -334,10 +398,29 @@ export default function RepurposeStudio() {
   const renderEligibility = repurposeRenderEligibility(summary?.manifest);
   const runtimeBlocked = !readiness || !readiness.ok;
   const modelReady = Boolean(readiness?.model?.ok || readiness?.model?.model_ready || readiness?.model?.status === 'ready');
+  const lockedProvider = artifacts.candidate?.provider?.id || null;
+  const lockedModel = artifacts.candidate?.provider?.model || null;
+  const analysisProvider = lockedProvider || config.analysisProvider || '';
+  const selectedAgent = readiness?.analysis?.agents?.find(agent => agent.id === analysisProvider);
+  const providerBlockReason = !analysisProvider
+    ? 'Choose an AI agent before finding moments.'
+    : analysisProvider === 'openrouter'
+      ? !(lockedModel || config.openRouterModel)
+        ? 'Enter an OpenRouter model before finding moments.'
+        : !readiness?.analysis?.openrouter?.authed
+          ? 'Add an OpenRouter key in Settings before finding moments.'
+          : null
+      : !selectedAgent?.installed
+        ? `${selectedAgent?.repurposeName || analysisProvider} CLI is not installed.`
+        : !selectedAgent.authed
+          ? `${selectedAgent.repurposeName || selectedAgent.name} needs authentication.`
+          : null;
   const launchBlockReason = stage => runtimeBlocked
     ? 'Complete the missing local runtime setup before starting this stage.'
     : stage === 'transcribe' && !modelReady
       ? 'Point Vidmyo to a cache containing the local small transcription model.'
+      : ['generate_candidates', 'rank'].includes(stage) && providerBlockReason
+        ? providerBlockReason
       : null;
 
   const runStage = stage => act(async () => {
@@ -347,6 +430,9 @@ export default function RepurposeStudio() {
       captions_enabled: renderSettings.captionsEnabled,
       caption_style: renderSettings.captionStyle,
       platforms: renderSettings.platforms,
+    } : stage === 'generate_candidates' ? {
+      provider: analysisProvider,
+      model: analysisProvider === 'openrouter' ? config.openRouterModel : 'configured-default',
     } : {};
     if (stage === 'render' && !renderEligibility.ok) throw new Error(renderEligibility.reason);
     const result = await bridge.runStage(summary.dir, stage, options);
@@ -392,6 +478,11 @@ export default function RepurposeStudio() {
     const ready = await bridge.readiness();
     if (ready.ok) setReadiness(ready.readiness);
   });
+  const saveAnalysisConfig = update => act(async () => {
+    const result = await bridge.setConfig(update);
+    if (!result.ok) throw new Error(result.error);
+    setConfig(result.config || {});
+  });
 
   if (!bridge?.isElectron) return <DesktopRequired />;
   if (!summary) return <EmptyProject {...{ form, setForm, chooseSource, chooseProject, createProject, openProject, busy, error }} />;
@@ -414,6 +505,10 @@ export default function RepurposeStudio() {
       </header>
 
       {error && <div className="rep-alert rep-workspace__alert" role="alert">{error}</div>}
+      <AnalysisProviderPanel {...{
+        readiness, config, lockedProvider, lockedModel, busy, saveAnalysisConfig,
+        setOpenRouterModel: value => setConfig(current => ({ ...current, openRouterModel: value })),
+      }} />
       <CutRail {...{ stages, progressByJob, runStage, resumeJob, cancelJob, busy, launchBlockReason }} />
 
       <div className="rep-workspace__grid">
