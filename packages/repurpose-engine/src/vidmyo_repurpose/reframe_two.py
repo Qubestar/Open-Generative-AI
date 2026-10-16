@@ -438,8 +438,11 @@ def upgrade_reframe_previews(
     progress({"phase": "validating_inputs", "fraction": 0.02, "cache_hit": False, "message": "validating completed Issue 6 and Issue 7 artifacts"})
     project, boundary, reframe_v1, validated = _load(request, ffprobe)
     options = request["options"]
-    if not isinstance(options, dict) or set(options) - {"candidate_ids"}:
-        raise ContractValidationError("options: only candidate_ids is supported")
+    if not isinstance(options, dict) or set(options) - {"candidate_ids", "framing_mode"}:
+        raise ContractValidationError("options: only candidate_ids and framing_mode are supported")
+    framing_mode = reframe_v1["settings"].get("framing_mode", "auto_crop")
+    if options.get("framing_mode", framing_mode) != framing_mode:
+        raise ContractValidationError("options.framing_mode: must match the completed v1 reframe; run Frame vertical again")
     validated_by_id = {item["v1"]["candidate_id"]: item for item in validated}
     default_ids = [item for item in reframe_v1["requested_candidate_ids"] if item in validated_by_id]
     requested = options.get("candidate_ids", default_ids)
@@ -447,6 +450,7 @@ def upgrade_reframe_previews(
         raise ContractValidationError("options.candidate_ids: must be unique completed reframe v1 candidate ids")
     tolerance = float(boundary["settings"]["duration_tolerance_seconds"])
     settings = {
+        "framing_mode": framing_mode,
         "output_width": OUTPUT_WIDTH,
         "output_height": OUTPUT_HEIGHT,
         "panel_width": PANEL_WIDTH,
@@ -493,7 +497,19 @@ def upgrade_reframe_previews(
             "v1_output_path": v1["output"]["path"],
             "v1_output_fingerprint": v1["output"]["fingerprint"],
         }
-        if v1["mode"] == "track":
+        if v1["mode"] == "fit_full":
+            plan = {
+                "mode": "fit_full_reuse", "fallback_reason": None,
+                "paired_coverage": 0.0, "mean_pair_confidence": 0.0, "safe_zone_fraction": 1.0,
+                "samples": [], "segments": [],
+            }
+        elif v1["mode"] == "stack_sides":
+            plan = {
+                "mode": "stack_sides_reuse", "fallback_reason": None,
+                "paired_coverage": 0.0, "mean_pair_confidence": 0.0, "safe_zone_fraction": 1.0,
+                "samples": [], "segments": [],
+            }
+        elif v1["mode"] == "track":
             plan = {
                 "mode": "single_speaker_reuse", "fallback_reason": None,
                 "paired_coverage": 0.0, "mean_pair_confidence": 0.0, "safe_zone_fraction": v1["safe_zone_fraction"],
@@ -510,7 +526,7 @@ def upgrade_reframe_previews(
                 "samples": [], "segments": [],
             }
         output_key = _hash({"input": input_record, "versions": VERSIONS, "settings": settings, "plan": plan})
-        if plan["mode"] in {"single_speaker_reuse", "fallback_reuse"}:
+        if plan["mode"] in {"single_speaker_reuse", "fallback_reuse", "fit_full_reuse", "stack_sides_reuse"}:
             output = {
                 "origin": "v1_reuse", "requested": is_requested,
                 "state": "completed" if is_requested else "not_requested",

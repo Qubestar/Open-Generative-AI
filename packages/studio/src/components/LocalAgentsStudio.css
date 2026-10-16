@@ -1,0 +1,8 @@
+.agents-workspace { max-width: 1180px; margin: 0 auto; padding: 32px 24px 60px; display: flex; flex-direction: column; gap: 20px; }
+.agents-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.agents-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 16px; }
+.agent-card-header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.agent-card-header > div:first-child { flex: 1 0 100% !important; }
+.agents-workspace button { min-height: 36px; }
+.agents-workspace button:focus-visible { outline: 2px solid var(--vm-accent); outline-offset: 3px; }
+@media (max-width: 600px) { .agents-workspace { padding: 20px 16px 40px; } .agents-heading { align-items: start; flex-direction: column; } }

@@ -29,7 +29,7 @@
       "required": ["schema", "repair", "encoder"],
       "properties": {
         "schema": {"const": "boundary-artifact.v1"},
-        "repair": {"const": "word-silence-repair.v1"},
+        "repair": {"enum": ["word-silence-repair.v1", "word-silence-repair.v2"]},
         "encoder": {"const": "preview-h264-aac.v1"}
       }
     },

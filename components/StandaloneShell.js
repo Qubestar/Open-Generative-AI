@@ -2,23 +2,56 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { StoryStudio, RepurposeStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, AppsStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio } from 'studio';
+import { VfxStudio, StoryStudio, AnimationsStudio, ChannelsStudio, RepurposeStudio, CleanerStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio, PromoReviewStudio, CartoonStudio, AutoEditorPanel, PublisherQueuePanel, ScreenStudio, TranslateStudio } from 'studio';
 import axios from 'axios';
+import styles from './StandaloneShell.module.css';
+import { readAppearance, saveAppearance } from '../packages/studio/src/appearance.mjs';
+import { BookOpen, FolderKanban, Scissors, Film, Image as ImageIcon, Video, Bot, Sparkles, MonitorPlay, Megaphone, CloudUpload, Languages } from 'lucide-react';
 
-// The five cloud generation studios (Image/Video/Lip Sync/Cinema/Marketing) are muapi-backed,
-// so they're hidden — Vidmyo is a clean Video Delta test host with no reachable muapi UI.
-// (Their render branches + imports stay below, harmless; re-add a line here to restore one.)
+// Public navigation. Legacy studios retain their routes without occupying the workspace rail.
 const TABS = [
-  { id: 'story', label: 'Story' },
-  { id: 'repurpose', label: 'Repurpose' },
+  { id: 'channels', label: 'Channels' },
+  { id: 'story', label: 'Stickman' },
+  { id: 'animations', label: 'Animations' },
+  { id: 'cleaner', label: 'Cleaner' },
+  { id: 'repurpose', label: 'Clipper' },
+  { id: 'translate', label: 'Translate' },
   { id: 'image', label: 'Image' },
   { id: 'video', label: 'Video' },
-  { id: 'workflows', label: 'Workflows' },
+  { id: 'vfx', label: 'VFX' },
+  { id: 'marketing', label: 'Marketing' },
+  { id: 'screen-studio', label: 'Screen Studio' },
+  // Luke kept a Publish tab (2026-09-26); the queue is also shown in Cleaner → review.
+  { id: 'publisher', label: 'Publish' },
   { id: 'agents', label: 'Agents' },
-  { id: 'apps', label: 'Explore Apps' },
 ];
 
 const STORAGE_KEY = 'vidmyo_cloud_key';
+
+// Dev-only panel route (V2.6 Phase 3, item 5). The Marketing/Auto-Editor/
+// Publisher screens are reachable in the product only through flows that need
+// Electron or a real Cleaner project. In a development build they can be
+// opened directly with ?panel=<id> so they can be verified in a browser.
+// The block below is stripped from production builds by NODE_ENV.
+const DEV_PANELS = {
+  marketing: 'marketing',
+  promo: 'promo',
+  cartoon: 'cartoon',
+  autoeditor: 'autoeditor',
+  publisher: 'publisher',
+  screenstudio: 'screenstudio',
+};
+
+function renderDevPanel(panel, dir) {
+  if (panel === 'marketing') return <MarketingStudio />;
+  if (panel === 'promo') return <PromoReviewStudio />;
+  if (panel === 'cartoon') return <CartoonStudio />;
+  if (panel === 'autoeditor') return <AutoEditorPanel projectDir={dir || null} />;
+  if (panel === 'publisher') return <PublisherQueuePanel />;
+  if (panel === 'screenstudio') return <ScreenStudio />;
+  return null;
+}
+const TAB_ICONS = { channels: FolderKanban, story: BookOpen, animations: Film, cleaner: Scissors, repurpose: Film, translate: Languages, image: ImageIcon, video: Video, vfx: Sparkles, marketing: Megaphone, 'screen-studio': MonitorPlay, publisher: CloudUpload, agents: Bot };
 
 export default function StandaloneShell() {
   const params = useParams();
@@ -46,19 +79,51 @@ export default function StandaloneShell() {
   const getInitialTab = () => {
     if (idFromParams || slug.includes('workflow')) return 'workflows';
     if (slug.includes('agents')) return 'agents';
-    if (slug.includes('apps')) return 'apps';
     const firstSegment = slug[0];
     if (firstSegment && TABS.find(t => t.id === firstSegment)) return firstSegment;
-    return 'story';  // Story is the entry point (was 'videodelta' before that tab was removed)
+    return 'channels';
   };
   
   const [apiKey, setApiKey] = useState(null);
   const [activeTab, setActiveTab] = useState(getInitialTab());
+  const [devPanel, setDevPanel] = useState(null);
+  const [devPanelDir, setDevPanelDir] = useState(null);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production') return;
+    let panel = null;
+    let dir = null;
+    try {
+      const query = new URLSearchParams(window.location.search);
+      panel = query.get('panel');
+      dir = query.get('dir');
+    } catch {
+      panel = null;
+    }
+    if (panel && DEV_PANELS[panel]) {
+      setDevPanel(panel);
+      setDevPanelDir(dir);
+    }
+  }, []);
+  const [imageVideoHandoff, setImageVideoHandoff] = useState(null);
+  const [channelCreativeHandoff, setChannelCreativeHandoff] = useState(null);
   
   const [balance, setBalance] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [hasMounted, setHasMounted] = useState(false);
+  const [appearance, setAppearance] = useState('dark');
+  useEffect(() => {
+    let storage;
+    try { storage = window.localStorage; } catch { /* Private browser storage may be blocked. */ }
+    setAppearance(readAppearance(storage));
+  }, []);
+  const changeAppearance = event => {
+    let storage;
+    try { storage = window.localStorage; } catch { /* Keep the in-memory selection. */ }
+    setAppearance(saveAppearance(storage, event.target.value));
+  };
+  useEffect(() => { document.documentElement.dataset.appearance = appearance; }, [appearance]);
 
   // Drag and Drop State
   const [isDragging, setIsDragging] = useState(false);
@@ -67,16 +132,16 @@ export default function StandaloneShell() {
   // Sync tab with URL if user navigates manually or via browser back/forward
   useEffect(() => {
     const info = getWorkflowInfo();
-    if (info.id) {
+    if (info.id || slug.includes('workflow')) {
         setActiveTab('workflows');
     } else if (slug.includes('agents')) {
         setActiveTab('agents');
-    } else if (slug.includes('apps')) {
-        setActiveTab('apps');
     } else {
         const firstSegment = slug[0];
         if (firstSegment && TABS.find(t => t.id === firstSegment)) {
           setActiveTab(firstSegment);
+        } else {
+          setActiveTab('channels');
         }
     }
   }, [slug, getWorkflowInfo]);
@@ -85,6 +150,22 @@ export default function StandaloneShell() {
     setActiveTab(tabId);
     router.push(`/studio/${tabId}`);
   };
+
+  const handleUseImageInVideo = useCallback((handoff) => {
+    setImageVideoHandoff(handoff);
+    setActiveTab('video');
+    router.push('/studio/video');
+  }, [router]);
+
+  const handleImageHandoffConsumed = useCallback(() => setImageVideoHandoff(null), []);
+  const handleChannelCreative = useCallback((handoff) => {
+    if (!handoff?.brief) return;
+    const tab = handoff.section === 'animation' ? 'animations' : 'story';
+    setChannelCreativeHandoff({ ...handoff, section: tab === 'animations' ? 'animation' : 'story' });
+    setActiveTab(tab);
+    router.push(`/studio/${tab}`);
+  }, [router]);
+  const handleChannelHandoffConsumed = useCallback(() => setChannelCreativeHandoff(null), []);
 
   // Auto-hide header when inside a specific workflow view
   useEffect(() => {
@@ -173,7 +254,7 @@ export default function StandaloneShell() {
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (activeTab === 'repurpose') {
+    if (activeTab === 'repurpose' || activeTab === 'cleaner' || activeTab === 'vfx' || activeTab === 'translate') {
       setIsDragging(false);
       return;
     }
@@ -194,7 +275,7 @@ export default function StandaloneShell() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-    if (activeTab === 'repurpose') return;
+    if (activeTab === 'repurpose' || activeTab === 'cleaner' || activeTab === 'vfx' || activeTab === 'translate') return;
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
@@ -217,7 +298,8 @@ export default function StandaloneShell() {
 
   return (
     <div 
-      className="h-screen bg-[#030303] flex flex-col overflow-hidden text-white relative"
+      className={`${styles.workspace} ${!isHeaderVisible ? styles.expanded : ''}`}
+      data-appearance={appearance}
       onDragOver={handleDragOver}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -243,11 +325,11 @@ export default function StandaloneShell() {
       {/* Header */}
       {isHeaderVisible && (
         <header
-          className="flex-shrink-0 h-14 border-b border-white/[0.03] flex items-center justify-between px-6 bg-black/20 backdrop-blur-md z-40"
+          className={styles.rail}
           style={{ WebkitAppRegion: 'drag' }}  /* frameless Electron window: header = drag handle */
         >
           {/* Left: Logo */}
-          <div className="flex items-center gap-2">
+          <div className={styles.brand}>
             {/* Beat Wave mark — voiceover waveform meets the V */}
             <svg width="30" height="30" viewBox="0 0 512 512" aria-label="Vidmyo">
               <rect width="512" height="512" rx="115" fill="#17171B"/>
@@ -258,35 +340,30 @@ export default function StandaloneShell() {
               </g>
               <path d="M266 138 L342 374 L418 138" stroke="#FFFFFF" strokeWidth="50" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
             </svg>
-            <span className="text-sm font-bold tracking-tight hidden sm:block">Vidmyo</span>
+            <span className={styles.brandName}>Vidmyo<span className={styles.brandCaption}>CREATOR STUDIO</span></span>
           </div>
 
           {/* Center: Navigation */}
-          <nav className="absolute left-1/2 -translate-x-1/2 flex items-center gap-6" style={{ WebkitAppRegion: 'no-drag' }}>
+          <nav aria-label="Studios" className={styles.navigation} style={{ WebkitAppRegion: 'no-drag' }}>
             {TABS.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => handleTabChange(tab.id)}
-                className={`relative py-4 text-[13px] font-medium transition-all whitespace-nowrap px-1 ${
-                  activeTab === tab.id
-                    ? 'text-[#7c3aed]'
-                    : 'text-white/50 hover:text-white'
-                }`}
+                aria-current={activeTab === tab.id ? 'page' : undefined}
+                className={`${styles.navItem} ${activeTab === tab.id ? styles.active : ''}`}
               >
-                {tab.label}
-                {activeTab === tab.id && (
-                  <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#7c3aed] rounded-full" />
-                )}
+                {(() => { const Icon = TAB_ICONS[tab.id]; return <Icon size={19} aria-hidden="true" />; })()}
+                <span>{tab.label}</span>
               </button>
             ))}
           </nav>
 
           {/* Right: Actions */}
-          <div className="flex items-center gap-4" style={{ WebkitAppRegion: 'no-drag' }}>
+          <div className={styles.actions} style={{ WebkitAppRegion: 'no-drag' }}>
             <button
               onClick={() => setShowSettings(true)}
               title="Settings"
-              className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-white/10 bg-white/5 text-[13px] font-bold text-white/80 hover:text-white hover:bg-white/10 hover:border-white/20 transition-colors"
+              className={styles.settings}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
@@ -299,22 +376,35 @@ export default function StandaloneShell() {
       )}
 
       {/* Studio Content */}
-      <div className="flex-1 min-h-0 relative overflow-hidden">
-        {activeTab === 'image'   && <CloudImageStudio />}
-        {activeTab === 'video'   && <CloudVideoStudio />}
-        {activeTab === 'story' && <StoryStudio />}
-        {activeTab === 'repurpose' && <RepurposeStudio />}
-        {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
-        {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
-        {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
-        {activeTab === 'workflows' && <WorkflowStudio apiKey={apiKey} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />}
-        {activeTab === 'agents' && <LocalAgentsStudio />}
-        {activeTab === 'apps' && <AppsStudio apiKey={apiKey} />}
-      </div>
+      <main className={styles.content} aria-label={`${TABS.find(tab => tab.id === activeTab)?.label || 'Studio'} workspace`}>
+        {!devPanel && (
+          <>
+          {activeTab === 'channels' && <ChannelsStudio onOpenCreative={handleChannelCreative} />}
+          {activeTab === 'image'   && <CloudImageStudio onUseInVideo={handleUseImageInVideo} />}
+          {activeTab === 'video'   && <CloudVideoStudio imageHandoff={imageVideoHandoff} onImageHandoffConsumed={handleImageHandoffConsumed} />}
+          {activeTab === 'story' && <StoryStudio initialHandoff={channelCreativeHandoff} onHandoffConsumed={handleChannelHandoffConsumed} onOpenSettings={() => setShowSettings(true)} onNavigateAgents={() => handleTabChange('agents')} />}
+          {activeTab === 'animations' && <AnimationsStudio initialHandoff={channelCreativeHandoff} onHandoffConsumed={handleChannelHandoffConsumed} onOpenSettings={() => setShowSettings(true)} onNavigateAgents={() => handleTabChange('agents')} />}
+          {activeTab === 'cleaner' && <CleanerStudio />}
+          {activeTab === 'vfx' && <VfxStudio onOpenSettings={() => setShowSettings(true)} />}
+          {activeTab === 'repurpose' && <RepurposeStudio />}
+          {activeTab === 'translate' && <TranslateStudio />}
+          {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
+          {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
+          {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
+          {activeTab === 'screen-studio' && <ScreenStudio />}
+          {activeTab === 'publisher' && <PublisherQueuePanel />}
+          {activeTab === 'workflows' && <WorkflowStudio apiKey={apiKey} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />}
+          {activeTab === 'agents' && <LocalAgentsStudio />}
+          </>
+        )}
+        {devPanel && renderDevPanel(devPanel, devPanelDir)}
+      </main>
 
       {/* Settings Modal — provider keys over the canonical @vidmyo/core catalog */}
       {showSettings && (
         <SettingsModal
+          appearance={appearance}
+          onAppearanceChange={changeAppearance}
           onClose={() => setShowSettings(false)}
           onCloudKeyChange={(key) => (key ? handleKeySave(key) : handleKeyChange())}
         />

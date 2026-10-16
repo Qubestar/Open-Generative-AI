@@ -68,6 +68,7 @@
       "required": ["output_width", "output_height", "panel_width", "panel_height", "confidence_threshold", "paired_coverage_threshold", "safe_zone_margin", "safe_zone_target", "dead_zone_fraction", "smoothing_alpha", "maximum_step_fraction", "minimum_hold_seconds", "association_ambiguity_fraction", "duration_tolerance_seconds"],
       "properties": {
         "output_width": {"const": 1080}, "output_height": {"const": 1920},
+        "framing_mode": {"enum": ["auto_crop", "stack_sides", "fit_full"]},
         "panel_width": {"const": 1080}, "panel_height": {"const": 960},
         "confidence_threshold": {"const": 0.75}, "paired_coverage_threshold": {"const": 0.8},
         "safe_zone_margin": {"const": 0.1}, "safe_zone_target": {"const": 0.95},
@@ -93,13 +94,13 @@
               "path": {"type": "string", "minLength": 1}, "fingerprint": {"$ref": "#/$defs/hash"},
               "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
               "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1},
-              "v1_mode": {"enum": ["track", "fallback"]},
+              "v1_mode": {"enum": ["track", "fallback", "stack_sides", "fit_full"]},
               "v1_fallback_reason": {"type": ["string", "null"]},
               "v1_output_path": {"type": "string", "minLength": 1},
               "v1_output_fingerprint": {"$ref": "#/$defs/hash"}
             }
           },
-          "mode": {"enum": ["single_speaker_reuse", "two_speaker_split", "fallback_reuse"]},
+          "mode": {"enum": ["single_speaker_reuse", "two_speaker_split", "fallback_reuse", "fit_full_reuse", "stack_sides_reuse"]},
           "fallback_reason": {"type": ["string", "null"]},
           "paired_coverage": {"type": "number", "minimum": 0, "maximum": 1},
           "mean_pair_confidence": {"type": "number", "minimum": 0, "maximum": 1},

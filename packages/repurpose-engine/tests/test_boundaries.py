@@ -130,9 +130,33 @@ def test_repair_uses_nearby_silence_without_losing_words():
         [{"start_seconds": 0.0, "end_seconds": 0.75}, {"start_seconds": 31.0, "end_seconds": 31.4}],
         100.0,
     )
-    assert span["start_seconds"] == 0.75
+    assert span["start_seconds"] == 0.9
     assert span["end_seconds"] == 31.0
-    assert evidence["start_reason"] == evidence["end_reason"] == "nearby_silence"
+    assert evidence["start_reason"] == "word_boundary"
+    assert evidence["end_reason"] == "nearby_silence"
+
+
+def test_silence_snap_never_includes_words_outside_the_candidate():
+    item = {"candidate": candidate("clip_001", 3, 30)}
+    words = {
+        f"word_{index:06d}": {
+            "start_seconds": float(index), "end_seconds": index + 0.8,
+        }
+        for index in range(1, 34)
+    }
+    span, evidence = repair_span(
+        item,
+        words,
+        [
+            {"start_seconds": 1.0, "end_seconds": 1.5},
+            {"start_seconds": 31.5, "end_seconds": 32.0},
+        ],
+        100.0,
+    )
+
+    assert span["start_seconds"] == words["word_000002"]["end_seconds"]
+    assert span["end_seconds"] == words["word_000031"]["start_seconds"]
+    assert evidence["start_reason"] == evidence["end_reason"] == "word_boundary"
 
 
 def test_manual_word_override_is_exact_and_duration_checked():
@@ -155,6 +179,23 @@ def test_default_extracts_only_recommended_and_records_every_candidate(tmp_path)
     assert by_id["clip_001"]["extraction"]["state"] == "completed"
     assert by_id["clip_002"]["extraction"]["state"] == "not_requested"
     assert validate_document("boundary_artifact", result.artifact) is result.artifact
+
+
+def test_boundary_contract_accepts_sub_microsecond_rounding_without_losing_words(tmp_path):
+    request, _, _ = prepared_project(tmp_path)
+    media = MediaRunner()
+    result = repair_and_extract(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    document = deepcopy(result.artifact)
+    repaired = document["candidates"][1]["repaired_span"]
+    proposed = document["candidates"][1]["proposed_span"]
+
+    proposed["start_seconds"] = repaired["start_seconds"] - 4e-13
+    proposed["end_seconds"] = repaired["end_seconds"] + 4e-13
+    assert validate_document("boundary_artifact", document) is document
+
+    proposed["start_seconds"] = repaired["start_seconds"] - 0.001
+    with pytest.raises(ContractValidationError, match="cannot lose proposed words"):
+        validate_document("boundary_artifact", document)
 
 
 def test_explicit_nonrecommended_candidate_extracts_on_demand(tmp_path):

@@ -20,7 +20,7 @@ ENGINE_VERSION = "0.1.0"
 BOUNDARY_ARTIFACT_RELATIVE_PATH = Path("artifacts") / "boundary-artifact.v1.json"
 PREVIEW_DIRECTORY = Path("artifacts") / "preview-clips"
 SCHEMA_VERSION = "boundary-artifact.v1"
-REPAIR_VERSION = "word-silence-repair.v1"
+REPAIR_VERSION = "word-silence-repair.v2"
 ENCODER_VERSION = "preview-h264-aac.v1"
 MIN_DURATION = 20.0
 MAX_DURATION = 120.0
@@ -179,16 +179,32 @@ def repair_span(candidate: Mapping[str, Any], words: Mapping[str, Any], silences
     start_silence = end_silence = None
     start_reason = end_reason = "manual_word_override" if override else "word_boundary"
     if not override:
+        word_ids = list(words)
+        first_index, last_index = word_ids.index(first_id), word_ids.index(last_id)
+        previous_end = (
+            float(words[word_ids[first_index - 1]]["end_seconds"])
+            if first_index > 0 else 0.0
+        )
+        next_start = (
+            float(words[word_ids[last_index + 1]]["start_seconds"])
+            if last_index + 1 < len(word_ids) else source_duration
+        )
         before = [item for item in silences if start - SILENCE_SEARCH <= item["end_seconds"] <= start]
         after = [item for item in silences if end <= item["start_seconds"] <= end + SILENCE_SEARCH]
         if before:
             selected = sorted(before, key=lambda item: (start - item["end_seconds"], -item["end_seconds"]))[0]
-            if end - selected["end_seconds"] <= MAX_DURATION:
-                start, start_silence, start_reason = selected["end_seconds"], selected, "nearby_silence"
+            repaired_start = max(float(selected["end_seconds"]), previous_end)
+            if end - repaired_start <= MAX_DURATION:
+                start = repaired_start
+                if repaired_start == float(selected["end_seconds"]):
+                    start_silence, start_reason = selected, "nearby_silence"
         if after:
             selected = sorted(after, key=lambda item: (item["start_seconds"] - end, item["start_seconds"]))[0]
-            if selected["start_seconds"] - start <= MAX_DURATION:
-                end, end_silence, end_reason = selected["start_seconds"], selected, "nearby_silence"
+            repaired_end = min(float(selected["start_seconds"]), next_start)
+            if repaired_end - start <= MAX_DURATION:
+                end = repaired_end
+                if repaired_end == float(selected["start_seconds"]):
+                    end_silence, end_reason = selected, "nearby_silence"
     start, end = max(0.0, start), min(source_duration, end)
     return (
         {"first_word_id": first_id, "last_word_id": last_id, "start_seconds": round(start, 6), "end_seconds": round(end, 6)},

@@ -55,6 +55,7 @@
       "required": ["output_width", "output_height", "sample_interval_seconds", "confidence_threshold", "coverage_threshold", "safe_zone_margin", "safe_zone_target", "dead_zone_fraction", "smoothing_alpha", "maximum_step_fraction", "minimum_hold_seconds", "duration_tolerance_seconds"],
       "properties": {
         "output_width": {"const": 1080}, "output_height": {"const": 1920},
+        "framing_mode": {"enum": ["auto_crop", "stack_sides", "fit_full"]},
         "sample_interval_seconds": {"const": 0.5}, "confidence_threshold": {"const": 0.75},
         "coverage_threshold": {"const": 0.8}, "safe_zone_margin": {"const": 0.1},
         "safe_zone_target": {"const": 0.95}, "dead_zone_fraction": {"const": 0.05},
@@ -81,7 +82,7 @@
               "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1}
             }
           },
-          "mode": {"enum": ["track", "fallback"]},
+          "mode": {"enum": ["track", "fallback", "stack_sides", "fit_full"]},
           "fallback_reason": {"type": ["string", "null"], "enum": [null, "no_face", "multiple_faces", "low_confidence", "insufficient_face_coverage", "unsafe_crop"]},
           "coverage": {"type": "number", "minimum": 0, "maximum": 1},
           "mean_confidence": {"type": "number", "minimum": 0, "maximum": 1},

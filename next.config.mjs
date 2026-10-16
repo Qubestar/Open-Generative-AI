@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // The dev-only Next.js route indicator overlaps the Settings entry; errors
+  // are still surfaced with it disabled.
+  devIndicators: false,
   transpilePackages: ['studio', 'ai-agent', 'workflow-builder'],
   images: {
     remotePatterns: [

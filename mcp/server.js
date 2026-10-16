@@ -20,6 +20,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { registerTools } from './lib/tools.js';
 import { createRepurposeMcpService } from './lib/repurposeService.js';
+import { createCleanerMcpService } from './lib/cleanerService.js';
 
 // Provider id -> the env var this standalone server reads it from.
 const ENV_KEY = { fal: 'FAL_KEY', agnes: 'AGNES_API_KEY', openrouter: 'OPENROUTER_API_KEY' };
@@ -27,6 +28,7 @@ const ENV_KEY = { fal: 'FAL_KEY', agnes: 'AGNES_API_KEY', openrouter: 'OPENROUTE
 const server = new McpServer({ name: 'vidmyo', version: '0.4.0' });
 const secrets = (providerId) => process.env[ENV_KEY[providerId]] || '';
 const repurposeService = createRepurposeMcpService({ secrets });
+const cleanerService = createCleanerMcpService({ repurposeService });
 
 registerTools(server, {
   secrets,
@@ -36,6 +38,7 @@ registerTools(server, {
   }),
   keyHint: 'this MCP server\'s environment (FAL_KEY / AGNES_API_KEY), or use Vidmyo\'s hosted HTTP MCP for keychain keys',
   repurposeService,
+  cleanerService,
 });
 
 const transport = new StdioServerTransport();

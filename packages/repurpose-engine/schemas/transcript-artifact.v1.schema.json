@@ -36,7 +36,7 @@
         "language_confidence"
       ],
       "properties": {
-        "engine": { "const": "faster-whisper" },
+        "engine": { "enum": ["faster-whisper", "parakeet"] },
         "library_version": { "type": "string", "minLength": 1 },
         "model": { "type": "string", "minLength": 1 },
         "device": { "type": "string", "minLength": 1 },

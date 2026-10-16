@@ -14,6 +14,7 @@ const repo = path.resolve(import.meta.dirname, '../../..');
 test('runtime paths never substitute developer locations in a packaged app', () => {
   const dev = resolveRuntimePaths({ repoRoot: repo, isPackaged: false });
   assert.equal(dev.mcpDir, path.join(repo, 'mcp'));
+  assert.equal(dev.coreDir, path.join(repo, 'packages', 'core'));
   assert.equal(dev.repurposeEngineDir, path.join(repo, 'packages', 'repurpose-engine'));
   assert.equal(dev.webDir, null);
 
@@ -22,8 +23,17 @@ test('runtime paths never substitute developer locations in a packaged app', () 
   });
   assert.equal(packaged.webDir, '/Applications/Vidmyo/Resources/web');
   assert.equal(packaged.mcpDir, '/Applications/Vidmyo/Resources/mcp');
+  assert.equal(packaged.coreDir, '/Applications/Vidmyo/Resources/packages/core');
   assert.equal(packaged.repurposeEngineDir, '/Applications/Vidmyo/Resources/packages/repurpose-engine');
   assert.doesNotMatch(JSON.stringify(packaged), /developer\/source\/mcp|developer\/source\/packages/);
+});
+
+test('desktop analysis bridges import ESM core from the resolved external runtime', () => {
+  for (const file of ['cleanerBridge.js', 'repurposeBridge.js']) {
+    const source=fs.readFileSync(path.join(repo,'electron/lib',file),'utf8');
+    assert.match(source,/path\.join\(runtime\.coreDir, 'index\.js'\)/);
+    assert.doesNotMatch(source,/path\.join\(__dirname, '\.\.', '\.\.', 'packages', 'core', 'index\.js'\)/);
+  }
 });
 
 test('web host starts one owned standalone process, waits for /studio, and terminates it', async () => {
@@ -65,6 +75,9 @@ test('desktop package manifest includes bounded runtime resources and excludes s
   const pkg = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'));
   const resources = Object.fromEntries(pkg.build.extraResources.map(item => [item.to, item]));
   assert.ok(resources.web);
+  assert.deepEqual(resources['assets/templates'].filter, ['vidmyo-video-tracker-v1.csv']);
+  assert.ok(resources['packages/animation-engine'], 'Animation renderer must ship with the app');
+  assert.ok(resources['packages/animation-engine'].filter.includes('!**/node_modules/**/*'));
   assert.ok(resources.mcp.filter.includes('node_modules/**/*'));
   assert.ok(resources.mcp.filter.includes('!node_modules/**/test/**/*'));
   assert.ok(resources.mcp.filter.includes('!node_modules/**/tests/**/*'));

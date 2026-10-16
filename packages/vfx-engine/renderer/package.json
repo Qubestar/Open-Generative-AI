@@ -1,0 +1,22 @@
+{
+  "name": "perfect-vfx-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Perfect VFX render engine: consumes an Edit Decision Spec + theme tokens + brand kit, outputs one baked MP4 with source parity.",
+  "scripts": {
+    "render": "remotion render",
+    "studio": "remotion studio"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.489",
+    "@remotion/google-fonts": "4.0.489",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.489",
+    "ffmpeg-static": "5.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.23",
+    "@types/react-dom": "18.3.7"
+  }
+}

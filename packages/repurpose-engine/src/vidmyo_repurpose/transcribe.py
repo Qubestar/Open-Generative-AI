@@ -151,7 +151,26 @@ def resolve_model_cache(options: dict[str, Any] | None = None, override: str | P
 
 
 def model_directory(model: str, cache_dir: Path) -> Path:
+    cache_dir = cache_dir.expanduser().resolve()
+    # A user-selected Hugging Face snapshot is already a complete CTranslate2
+    # model directory. Managed Vidmyo caches keep the historical <cache>/<model>
+    # layout, so both forms remain supported without copying model weights.
+    if (cache_dir / "config.json").is_file() and (cache_dir / "model.bin").is_file():
+        return cache_dir
     return cache_dir / normalize_model_name(model)
+
+
+def direct_model_matches(model: str, directory: Path) -> bool:
+    model = normalize_model_name(model).lower()
+    expected_names = {
+        model,
+        f"faster-whisper-{model}",
+        f"models--systran--faster-whisper-{model}",
+    }
+    return any(
+        candidate.name.lower() in expected_names
+        for candidate in (directory, *directory.parents[:4])
+    )
 
 
 def faster_whisper_version() -> str | None:
@@ -198,7 +217,11 @@ def inspect_model(model: str = DEFAULT_MODEL, cache_dir: Path | None = None) -> 
     except (OSError, json.JSONDecodeError, AttributeError):
         marker_valid = False
     required_files = [directory / "config.json", directory / "model.bin"]
-    model_ready = dependency_available and marker_valid and all(path.is_file() for path in required_files)
+    direct_files = directory == cache_dir and all(path.is_file() for path in required_files)
+    direct_model = direct_files and direct_model_matches(model, directory)
+    model_ready = dependency_available and all(path.is_file() for path in required_files) and (
+        marker_valid or direct_model
+    )
     setup_command = _setup_command(model, cache_dir)
     return {
         "ok": model_ready,
@@ -211,11 +234,15 @@ def inspect_model(model: str = DEFAULT_MODEL, cache_dir: Path | None = None) -> 
         "model": model,
         "model_cache": str(cache_dir),
         "model_path": str(directory),
+        "model_source": "direct" if direct_files else "vidmyo_cache",
+        "model_identity_matches": not direct_files or direct_model,
         "model_ready": model_ready,
-        "setup_command": None if model_ready else setup_command,
+        "setup_command": None if model_ready or direct_files else setup_command,
         "message": (
             f"faster-whisper model '{model}' is ready locally."
             if model_ready
+            else f"The selected model '{model}' does not match the direct model folder {directory}."
+            if direct_files
             else f"Model '{model}' is not fully available locally. Run exactly: {setup_command}"
         ),
     }
@@ -257,6 +284,12 @@ def setup_model(
     if existing["model_ready"]:
         progress({"phase": "ready", "percent": 100, "message": "model already ready"})
         return existing
+    if existing["model_source"] == "direct":
+        raise _error(
+            "transcription_model_mismatch",
+            existing["message"],
+            "Choose the model name that matches this direct model folder, then retry.",
+        )
     if not _supported_library_version(faster_whisper_version()):
         raise _error(
             "faster_whisper_not_installed",
@@ -264,7 +297,9 @@ def setup_model(
             "Install the Vidmyo Repurpose package dependencies, then rerun setup-model.",
         )
     cache_dir.mkdir(parents=True, exist_ok=True)
-    destination = model_directory(model, cache_dir)
+    # setup-model always owns a managed <cache>/<model> destination. Direct
+    # model directories return above as ready and are never rewritten.
+    destination = cache_dir / model
     staging: Path | None = Path(tempfile.mkdtemp(prefix=f".{model}.", dir=cache_dir))
     backup: Path | None = None
     try:
@@ -486,6 +521,9 @@ def normalize_segments(
         segment_id = f"segment_{len(segments) + 1:06d}"
         start = _number(_value(backend_segment, "start"), "segment.start")
         end = _number(_value(backend_segment, "end"), "segment.end")
+        if normalized_words:
+            start = min(start, *(word[0] for word in normalized_words))
+            end = max(end, *(word[1] for word in normalized_words))
         word_ids: list[str] = []
         for word_start, word_end, text, confidence in normalized_words:
             word_id = f"word_{len(words) + 1:06d}"
@@ -621,10 +659,15 @@ def transcribe_project(
         raise cancellation_error()
     readiness = inspect_model(settings.model, model_cache)
     if not readiness["model_ready"]:
+        next_action = (
+            "Choose the model name that matches the selected direct model folder."
+            if readiness.get("model_source") == "direct"
+            else f"Run exactly: {readiness['setup_command']}"
+        )
         raise _error(
             "transcription_model_not_ready",
             f"The local faster-whisper model '{settings.model}' is not ready.",
-            f"Run exactly: {readiness['setup_command']}",
+            next_action,
         )
     version = library_version()
     if not _supported_library_version(version):

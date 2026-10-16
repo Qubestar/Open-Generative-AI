@@ -6,14 +6,14 @@
 // In packaged builds packages/core ships in the asar (see package.json
 // build.files) — core has zero npm dependencies.
 
-const { ipcMain, dialog, app, BrowserWindow } = require('electron');
+const { ipcMain, dialog, app, BrowserWindow, safeStorage, shell } = require('electron');
+const { confirmNarration } = require('./narrationConsent');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 const { getSecret } = require('./secrets');
-const agentsLib = require('./agents');
 
 let corePromise = null;
 function core() {
@@ -83,12 +83,32 @@ async function summarize(project) {
 
 const fail = (err) => ({ ok: false, error: String((err && err.message) || err) });
 
+function requireProjectDirectory(dir, { creating = false } = {}) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) {
+    throw new Error('Choose an absolute project folder first.');
+  }
+  const resolved = path.resolve(dir);
+  let stat;
+  try { stat = fs.statSync(resolved); } catch { throw new Error(`Project folder does not exist: ${resolved}`); }
+  if (!stat.isDirectory()) throw new Error(`Project path is not a folder: ${resolved}`);
+  const manifest = path.join(resolved, 'project.json');
+  if (creating && fs.existsSync(manifest)) {
+    throw new Error(`Refusing to overwrite existing manifest: ${manifest}`);
+  }
+  if (!creating && !fs.existsSync(manifest)) {
+    throw new Error(`This folder is not a Vidmyo Story project: ${resolved}`);
+  }
+  return resolved;
+}
+
 const MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
   '.mp4': 'video/mp4', '.wav': 'audio/wav', '.webm': 'video/webm',
 };
 
 function register() {
+  const nativeGoogle = require('./googleOAuth').createGoogleOAuth({ app, dialog, safeStorage, shell });
+  require('./storySheets').createStorySheets({ app, dialog, readConfig, writeConfig, nativeGoogle }).register(ipcMain);
   ipcMain.handle('story:pick-dir', async () => {
     const res = await dialog.showOpenDialog({
       title: 'Choose a folder for the story project',
@@ -99,14 +119,18 @@ function register() {
 
   ipcMain.handle('story:create', async (_evt, { dir, brief = {}, style = 'doodle-v1' } = {}) => {
     try {
+      const resolved = requireProjectDirectory(dir, { creating: true });
+      if (!brief || typeof brief !== 'object' || Array.isArray(brief)) throw new Error('Story brief is invalid.');
+      if (JSON.stringify(brief).length > 100000) throw new Error('Story brief is too large.');
+      if (style !== 'doodle-v1') throw new Error('Legacy Story projects require the doodle-v1 style.');
       const { Project } = await core();
-      const project = Project.create(dir, { brief, style });
+      const project = Project.create(resolved, { brief, style });
       return await summarize(project);
     } catch (err) { return fail(err); }
   });
 
   ipcMain.handle('story:get', async (_evt, dir) => {
-    try { return await summarize(await openProject(dir)); } catch (err) { return fail(err); }
+    try { return await summarize(await openProject(requireProjectDirectory(dir))); } catch (err) { return fail(err); }
   });
 
   ipcMain.handle('story:set-script', async (_evt, dir, text) => {
@@ -269,197 +293,6 @@ function register() {
     }
   });
 
-  // ── Tracker sheet (read-only; Vidmyo never writes the production tracker)
-  // Two access paths, tried in order:
-  //   1. Public CSV export — works for any link-shared sheet, no Google auth.
-  //      This is the sellable-product path: the user pastes a sheet URL.
-  //   2. The gws CLI (Google Workspace, authenticated) — dev-machine fallback
-  //      for private sheets.
-  // Default sheet is the Doodle 1 queue; override via story:set-sheet.
-  const DEFAULT_SHEET_ID = '1ZrdLMkdC1-OXxaPwgMGZW7dUO9bSNcQRNETP7D5d4jo';
-
-  const sheetIdFromInput = (input) => {
-    const m = String(input || '').match(/\/d\/([\w-]{20,})/);
-    return m ? m[1] : (/^[\w-]{20,}$/.test(String(input || '').trim()) ? String(input).trim() : null);
-  };
-
-  // Minimal RFC-correct CSV parser (quoted fields may contain commas,
-  // quotes, and newlines — sheet descriptions do).
-  function parseCsv(text) {
-    const rows = [];
-    let row = [], field = '', inQuotes = false;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      if (inQuotes) {
-        if (c === '"') {
-          if (text[i + 1] === '"') { field += '"'; i++; }
-          else inQuotes = false;
-        } else field += c;
-      } else if (c === '"') inQuotes = true;
-      else if (c === ',') { row.push(field); field = ''; }
-      else if (c === '\n' || c === '\r') {
-        if (c === '\r' && text[i + 1] === '\n') i++;
-        row.push(field); field = '';
-        rows.push(row); row = [];
-      } else field += c;
-    }
-    if (field || row.length) { row.push(field); rows.push(row); }
-    return rows;
-  }
-
-  async function readSheetValues(sheetId, range) {
-    // Path 1: public CSV export (link-shared sheets).
-    try {
-      const res = await fetch(
-        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&range=${encodeURIComponent(range)}`,
-        { redirect: 'follow' },
-      );
-      const text = await res.text();
-      if (res.ok && !text.trimStart().startsWith('<')) {
-        return { values: parseCsv(text), via: 'public-link' };
-      }
-    } catch { /* fall through to gws */ }
-    // Path 2: authenticated gws CLI.
-    const data = await gwsRead(sheetId, range).catch((err) => {
-      throw new Error(`Could not read the sheet. Make it link-readable (Share → Anyone with the link → Viewer) or sign in with gws. (${err.message})`);
-    });
-    return { values: data.values || [], via: 'gws' };
-  }
-
-  function gwsRead(sheetId, range) {
-    return new Promise((resolve, reject) => {
-      execFile('gws', ['sheets', '+read', '--spreadsheet', sheetId, '--range', range, '--format', 'json'],
-        { timeout: 20000, env: { ...process.env, PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin` } },
-        (err, stdout) => {
-          if (err) { reject(new Error(`gws failed: ${String(err.message).slice(0, 300)}`)); return; }
-          try {
-            // gws may print a keyring notice before the JSON.
-            const jsonStart = stdout.indexOf('{');
-            resolve(JSON.parse(stdout.slice(jsonStart)));
-          } catch (e) { reject(new Error(`gws returned unparseable output`)); }
-        });
-    });
-  }
-
-  ipcMain.handle('story:set-sheet', async (_evt, input) => {
-    const id = sheetIdFromInput(input);
-    if (!id) return fail(new Error('Paste a Google Sheet URL (or its ID).'));
-    const cfg = readConfig();
-    cfg.sheetId = id;
-    writeConfig(cfg);
-    return { ok: true, sheetId: id };
-  });
-
-  ipcMain.handle('story:sheet-rows', async () => {
-    try {
-      const sheetId = readConfig().sheetId || DEFAULT_SHEET_ID;
-      const data = await readSheetValues(sheetId, 'A1:E60');
-      const rows = (data.values || []).slice(1)
-        .map((r, i) => ({
-          row: i + 2, // 1-based sheet row (header is row 1)
-          status: r[0] || '',
-          videoNum: r[1] || '',
-          title: r[2] || '',
-          hook: r[3] || '',
-          topic: r[4] || '',
-        }))
-        .filter((r) => r.title);
-      const cfg = readConfig();
-      const base = (cfg.sheetBases || {})[sheetId] || null;
-      return { ok: true, sheetId, via: data.via, base, rows };
-    } catch (err) { return fail(err); }
-  });
-
-  // Per-sheet base folder: video projects are auto-created as subfolders here
-  // (matching the pipeline's videos/NN-slug/ convention) so the user picks a
-  // location once, not per video.
-  ipcMain.handle('story:get-base', async () => {
-    const cfg = readConfig();
-    const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
-    return { ok: true, sheetId, base: (cfg.sheetBases || {})[sheetId] || null };
-  });
-
-  ipcMain.handle('story:set-base', async () => {
-    const res = await dialog.showOpenDialog({
-      title: 'Choose the folder where video projects are created (each video gets its own subfolder)',
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    if (res.canceled || !res.filePaths[0]) return { ok: false, error: 'cancelled' };
-    const cfg = readConfig();
-    const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
-    cfg.sheetBases = cfg.sheetBases || {};
-    cfg.sheetBases[sheetId] = res.filePaths[0];
-    writeConfig(cfg);
-    return { ok: true, sheetId, base: res.filePaths[0] };
-  });
-
-  ipcMain.handle('story:create-from-sheet', async (_evt, { row, base } = {}) => {
-    try {
-      if (!row) return fail(new Error('row is required'));
-      const cfg = readConfig();
-      const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
-      const resolvedBase = base || (cfg.sheetBases || {})[sheetId];
-      if (!resolvedBase) return { ok: false, error: 'no-base' }; // renderer prompts set-base
-      if (!fs.existsSync(resolvedBase)) return fail(new Error(`Base folder no longer exists: ${resolvedBase}`));
-
-      const data = await readSheetValues(sheetId, `A${row}:E${row}`);
-      const r = data.values?.[0];
-      if (!r || !r[2]) return fail(new Error(`Sheet row ${row} has no Working Title`));
-
-      const { Project, projectSubfolder } = await core();
-      const dir = path.join(resolvedBase, projectSubfolder(r[1], r[2]));
-      // Idempotent: clicking the same video reopens its existing project.
-      if (fs.existsSync(path.join(dir, 'project.json'))) {
-        return await summarize(Project.load(dir));
-      }
-      const project = Project.create(dir, {
-        brief: {
-          topic: r[2],
-          hook: r[3] || '',
-          angle: r[4] || '',
-          videoNum: r[1] || '',
-          sheetRow: row,
-          sheetId,
-        },
-      });
-      return await summarize(project);
-    } catch (err) { return fail(err); }
-  });
-
-  // Select a tracker row and hand the whole video to a connected agent:
-  // create the subfolder + brief, then launch the preferred agent with an
-  // autonomous kickoff. No manual pipeline steps.
-  ipcMain.handle('story:delegate-sheet-row', async (_evt, { row, base, agentId } = {}) => {
-    try {
-      if (!row) return fail(new Error('row is required'));
-      const cfg = readConfig();
-      const sheetId = cfg.sheetId || DEFAULT_SHEET_ID;
-      const resolvedBase = base || (cfg.sheetBases || {})[sheetId];
-      if (!resolvedBase) return { ok: false, error: 'no-base' };
-      if (!fs.existsSync(resolvedBase)) return fail(new Error(`Base folder no longer exists: ${resolvedBase}`));
-
-      const data = await readSheetValues(sheetId, `A${row}:E${row}`);
-      const r = data.values?.[0];
-      if (!r || !r[2]) return fail(new Error(`Sheet row ${row} has no Working Title`));
-
-      const { Project, projectSubfolder } = await core();
-      const dir = path.join(resolvedBase, projectSubfolder(r[1], r[2]));
-      if (!fs.existsSync(path.join(dir, 'project.json'))) {
-        Project.create(dir, {
-          brief: { topic: r[2], hook: r[3] || '', angle: r[4] || '', videoNum: r[1] || '', sheetRow: row, sheetId },
-        });
-      }
-
-      const chosen = agentId || await agentsLib.preferredAgentId();
-      if (!chosen) {
-        return { ok: false, error: 'no-agent', dir,
-          hint: 'No coding agent detected. Install/connect one in the Agents tab, or open the project to build it manually.' };
-      }
-      const launch = await agentsLib.launchAgent(chosen, dir, { autonomous: true });
-      return { ok: launch.ok, dir, topic: r[2], agent: chosen, launch };
-    } catch (err) { return fail(err); }
-  });
-
   // ── ElevenLabs voiceover (paid alternative to local Kokoro) ─────────────
   // Key from the keychain ('elevenlabs' in Settings). Voice/model overridable
   // via story-config.json { elevenLabsVoiceId, elevenLabsModelId }. Output is
@@ -471,6 +304,8 @@ function register() {
     const voiceId = cfg.elevenLabsVoiceId || 'pNInz6obpgDQGcFmaJgB'; // premade "Adam" — calm narrator
     const modelId = cfg.elevenLabsModelId || 'eleven_multilingual_v2';
     const text = fs.readFileSync(scriptFile, 'utf8');
+
+    await confirmNarration(dialog, { modelId, voiceId, text });
 
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
       method: 'POST',
@@ -542,4 +377,4 @@ function register() {
   });
 }
 
-module.exports = { register };
+module.exports = { register, makePipeline, readConfig, requireProjectDirectory };

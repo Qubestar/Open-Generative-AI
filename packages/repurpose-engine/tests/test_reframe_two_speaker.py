@@ -62,6 +62,40 @@ def test_stable_pair_is_assigned_left_to_upper_and_right_to_lower():
     assert all(segment["upper"]["width"] == 1214 and segment["upper"]["height"] == 1080 for segment in plan["segments"])
 
 
+def test_full_frame_is_reused_without_two_speaker_crop(tmp_path):
+    request = prepared_two_speaker(tmp_path)
+    first_request = {**request, "input_artifacts": [request["input_artifacts"][1]], "options": {"framing_mode": "fit_full"}}
+    media = ReframeMedia()
+    first = reframe_previews(first_request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    request["options"] = {"framing_mode": "fit_full"}
+    media.ffmpeg_calls.clear()
+    result = upgrade_reframe_previews(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert media.ffmpeg_calls == []
+    item = result.artifact["candidates"][0]
+    assert item["mode"] == "fit_full_reuse"
+    assert item["output"]["path"] == first.artifact["candidates"][0]["output"]["path"]
+    assert item["output"]["fingerprint"] == first.artifact["candidates"][0]["output"]["fingerprint"]
+    assert validate_document("reframe_artifact_v2", result.artifact) is result.artifact
+    request["options"] = {"framing_mode": "auto_crop"}
+    with pytest.raises(ContractValidationError, match="must match"):
+        upgrade_reframe_previews(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+
+
+def test_explicit_side_stack_is_reused_without_face_analysis(tmp_path):
+    request = prepared_two_speaker(tmp_path)
+    first_request = {**request, "input_artifacts": [request["input_artifacts"][1]], "options": {"framing_mode": "stack_sides"}}
+    media = ReframeMedia()
+    first = reframe_previews(first_request, detector=FakeDetector(), ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    request["options"] = {"framing_mode": "stack_sides"}
+    media.ffmpeg_calls.clear()
+    result = upgrade_reframe_previews(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    item = result.artifact["candidates"][0]
+    assert media.ffmpeg_calls == []
+    assert item["mode"] == "stack_sides_reuse"
+    assert item["output"]["path"] == first.artifact["candidates"][0]["output"]["path"]
+    assert validate_document("reframe_artifact_v2", result.artifact) is result.artifact
+
+
 def test_both_panel_tracks_obey_movement_limit():
     times = [index * 0.5 for index in range(20)]
     detections = [pair(360 + index * 10, 1120 + index * 10) for index in range(20)]

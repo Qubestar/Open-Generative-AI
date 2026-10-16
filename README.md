@@ -37,6 +37,8 @@ One-click installers — no Node.js or terminal required.
 
 All releases: [github.com/Qubestar/Vidmyo/releases](https://github.com/Qubestar/Vidmyo/releases)
 
+Story can import a brief from Google Sheets. Viewer shared links work without account setup; private-account browsing depends on Google Connect being provisioned in that build. See the [Google Sheets connection guide](docs/google-sheets-connection.md) for user steps and the clean-install release gate.
+
 ### macOS Installation Guide
 
 Because the app is not notarized by Apple, macOS Gatekeeper will block it on first launch. Follow these steps:

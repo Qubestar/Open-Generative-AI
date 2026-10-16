@@ -1,3 +1,4 @@
+import {createVfxMcpService} from './vfxService.js';
 // Vidmyo MCP tool surface — shared by BOTH hosts:
 //   - mcp/server.js        stdio, standalone (works with Vidmyo closed; keys from env)
 //   - electron/lib/mcpHost.js  loopback HTTP, hosted inside Vidmyo (keys from the OS
@@ -20,18 +21,35 @@ import {
   getImageSource, resolveImageModel, JobStore, runJob,
   GENERATION_SOURCES, getGenerationSource, resolveGenerationModel,
   buildGenerationParams, makeGenerationAdapter,
+  vidmyoHome,
 } from '../../packages/core/index.js';
 import { createRepurposeMcpService } from './repurposeService.js';
+import { createCleanerMcpService } from './cleanerService.js';
+import { createTranslateMcpService } from './translateService.js';
+import { createGenerationConsent } from './generationConsent.js';
 
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
-const fail = (err) => ({ isError: true, content: [{ type: 'text', text: String(err.message || err) }] });
+export function publicMcpError(error) {
+  const raw = String(error?.message || error || 'Operation failed');
+  if (/not approved|human confirmation|human review|awaiting.*review/i.test(raw)) return 'Paid generation was not approved. Review the request in Vidmyo; no provider request was submitted.';
+  if (/cancel/i.test(raw)) return 'Operation cancelled.';
+  if (/not found|missing|does not exist|no such file/i.test(raw)) return 'Required project input was not found.';
+  if (/permission|access denied|EACCES/i.test(raw)) return 'Vidmyo cannot access the requested project resource.';
+  if (/invalid|must |expected|requires?/i.test(raw)) return 'The request did not match the tool contract.';
+  if (/auth|sign[ -]?in|credential|api.?key|token/i.test(raw)) return 'The configured provider is not connected.';
+  if (/quota|rate.?limit|credits?|billing/i.test(raw)) return 'The provider usage limit prevented this operation.';
+  return 'The operation failed. Review the project in Vidmyo and retry.';
+}
+const fail = (err) => ({ isError: true, content: [{ type: 'text', text: publicMcpError(err) }] });
+// Parked by launch-scope decision. No host/env/agent override in this release.
+const VIDEO_DELTA_ENABLED = false;
 
 const mcpResult = value => ({
   structuredContent: value,
   content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
 });
 const mcpFailure = error => {
-  const value = { contract_version: 1, error: String(error?.message || error).slice(0, 1000) };
+  const value = { contract_version: 1, error: publicMcpError(error) };
   return { isError: true, structuredContent: value, content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
 };
 
@@ -157,12 +175,90 @@ export function registerRepurposeTools(server, service) {
   }, call(args => service.getJob({ jobId: args.job_id })));
 }
 
+export function registerVfxTools(server, service = createVfxMcpService()) {
+  const call = handler => async args => {try {return mcpResult(await handler(args));} catch(error) {return mcpFailure(error);}};
+  server.registerTool('vfx_open', {
+    title: 'Open VFX Project',
+    description: 'Inspect an existing desktop VFX project, local transcript, reviewed shots, director/motion rules and theme board paths. Create and prepare the project in the VFX tab first. No provider call.',
+    inputSchema: z.object({project_dir: absolutePathSchema}).strict(),
+    annotations: {readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  }, call(args => service.open(args.project_dir)));
+  server.registerTool('vfx_submit_plan', {
+    title: 'Submit VFX Beat Plan',
+    description: 'Submit a complete Perfect VFX renderer spec to an existing prepared project. Validates anchors, timing, cut boundaries and shot/layout gating. Invalidates earlier output. Human reviews and renders in the VFX tab; this never renders or approves its own plan.',
+    inputSchema: z.object({project_dir: absolutePathSchema,spec: z.record(z.string(),z.unknown())}).strict(),
+    annotations: {readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:false},
+  }, call(args => service.submitPlan(args.project_dir,args.spec)));
+}
+
+export function registerCleanerTools(server, service) {
+  const call = handler => async args => {
+    try { return mcpResult(await handler(args)); } catch (error) { return mcpFailure(error); }
+  };
+  const cleanerProject = absolutePathSchema.describe('Absolute path to a local Cleaner project');
+  const cutSchema = z.object({
+    segment_id: z.string().regex(/^segment_\d{6}$/),
+    category: z.enum(['retake', 'false_start', 'direction', 'non_speech']),
+    reason: z.string().min(1).max(240),
+  }).strict();
+
+  server.registerTool('cleaner_create', {
+    title: 'Create Cleaner Project',
+    description: 'Create a review-first talking-head cleanup project. This records the edit brief but makes no AI call and never publishes.',
+    inputSchema: z.object({
+      project_dir: cleanerProject, source_path: absolutePathSchema,
+      script_mode: z.enum(['exact', 'rough', 'freestyle']),
+      script_text: z.string().max(200000).optional(), include_mp4: z.boolean().default(true),
+      save_mode: z.enum(['downloads', 'source', 'custom']).default('custom'),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.create({ projectDir: args.project_dir, sourcePath: args.source_path, scriptMode: args.script_mode, scriptText: args.script_text, includeMp4: args.include_mp4, saveMode: args.save_mode })));
+
+  server.registerTool('cleaner_prepare', {
+    title: 'Prepare Cleaner Transcript',
+    description: 'Run or resume the next local inspect/transcribe stage. Poll the returned Repurpose job, then call again until ready_for_decisions. No editorial AI call is made.',
+    inputSchema: z.object({ project_dir: cleanerProject, transcription: z.object({ model: z.string().optional(), language: z.string().optional(), model_cache: absolutePathSchema.optional() }).strict().default({}) }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.prepare({ projectDir: args.project_dir, stageOptions: args.transcription })));
+
+  server.registerTool('cleaner_get', {
+    title: 'Get Cleaner Project', description: 'Read bounded Cleaner stages and plan summary.',
+    inputSchema: z.object({ project_dir: cleanerProject }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.get({ projectDir: args.project_dir })));
+
+  server.registerTool('cleaner_get_transcript', {
+    title: 'Read Cleaner Transcript',
+    description: 'Read a bounded page of transcript segments so the current agent can conservatively identify retakes and false starts without receiving any hidden skill file.',
+    inputSchema: z.object({ project_dir: cleanerProject, offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(200).default(120) }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.getTranscript({ projectDir: args.project_dir, offset: args.offset, limit: args.limit })));
+
+  server.registerTool('cleaner_submit_plan', {
+    title: 'Submit Cleaner Cut Plan',
+    description: 'Submit only clear transcript segment removals. Omitted segments are kept. The user still reviews every decision before export.',
+    inputSchema: z.object({ project_dir: cleanerProject, cuts: z.array(cutSchema).max(5000) }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.submitPlan({ projectDir: args.project_dir, cuts: args.cuts })));
+
+  server.registerTool('cleaner_set_decision', {
+    title: 'Override Cleaner Decision', description: 'Keep or cut one transcript segment in the reversible review plan.',
+    inputSchema: z.object({ project_dir: cleanerProject, segment_id: z.string().regex(/^segment_\d{6}$/), decision: z.enum(['keep', 'cut']) }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.setDecision({ projectDir: args.project_dir, segmentId: args.segment_id, decision: args.decision })));
+
+  server.registerTool('cleaner_render', {
+    title: 'Render Cleaner Project', description: 'Render the approved cleanup plan to one local MP4. Never uploads or publishes.',
+    inputSchema: z.object({ project_dir: cleanerProject }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.render({ projectDir: args.project_dir })));
+}
+
 // ── Story Studio tools (v0.2) ───────────────────────────────────────────────
 // The agent-facing pipeline: agents do the thinking (script per the channel
 // rules, fact-checking, prompts); these tools run the deterministic stages.
 // The sheet is a read-only queue; project.json is the source of truth.
 
-const DEFAULT_SHEET_ID = '1ZrdLMkdC1-OXxaPwgMGZW7dUO9bSNcQRNETP7D5d4jo';
 // ../.. — this file sits in mcp/lib/, so the repo root is two levels up.
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
@@ -180,16 +276,21 @@ function makePipeline() {
   return new DoodlePipeline({ venvPython });
 }
 
-function storySummary(project) {
+export function storySummary(project) {
   const m = project.manifest;
+  const brief = m.brief && typeof m.brief === 'object' ? m.brief : {};
   return {
     dir: project.dir,
-    brief: m.brief,
-    style: m.style,
+    brief: {
+      topic: typeof brief.topic === 'string' ? brief.topic.slice(0, 300) : '',
+      hook: typeof brief.hook === 'string' ? brief.hook.slice(0, 500) : '',
+      angle: typeof brief.angle === 'string' ? brief.angle.slice(0, 500) : '',
+    },
+    style: typeof m.style === 'string' ? m.style.slice(0, 80) : null,
     script_words: m.script ? m.script.trim().split(/\s+/).length : 0,
     voiceover: m.voiceover.source ? { source: m.voiceover.source, artifact: m.voiceover.artifact } : null,
     scenes: m.scenes.map((s) => ({
-      id: s.id, beat: s.beat, prompt: s.prompt,
+      id: s.id, beat: s.beat,
       artifact: s.image.artifact, approved: s.image.approved,
       narration_span: s.narrationSpan,
     })),
@@ -206,14 +307,122 @@ function storySummary(project) {
  * @param {() => {imageSource: string, imageModel: string|null}} ctx.imageConfig
  * @param {string} [ctx.keyHint]  where a missing key should be added, in host terms
  */
+const translateInputSchema = z.union([
+  z.string().min(1).max(4096).describe('An http(s) video URL, or an absolute path to a local video file'),
+  z.object({
+    type: z.enum(['url', 'file', 'media']).optional(),
+    uri: z.string().min(1).max(4096),
+  }).strict(),
+]).describe('Video to translate: a URL, a local file path, or an existing Vidmyo media reference');
+
+export function registerTranslateTools(server, service) {
+  const call = handler => async args => {
+    try { return mcpResult(await handler(args)); } catch (error) { return mcpFailure(error); }
+  };
+
+  server.registerTool('translate_capabilities', {
+    title: 'Translate Video Capabilities',
+    description: 'Read which source/target language pairs, voice-clone languages and optional stages (source separation, subtitle burn-in, lip sync) the local Translate Video stack currently supports. Call this before translating so you can explain any fallback. Local only; no provider call.',
+    inputSchema: z.object({}).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(() => service.capabilities()));
+
+  server.registerTool('translate_video', {
+    title: 'Translate Video',
+    description: 'Translate/dub one video into another language locally (transcription, translation, translated voice, background handling, subtitles, render). Returns a job_id immediately; a full dub takes minutes, so poll translate_get_job and do NOT submit the same video twice. Heavy work runs one job at a time. Accepts a supported http(s) video URL or an absolute local video path; private/link-local URLs and non-video files are rejected. Speech, transcripts and voices stay on this machine. Voice cloning requires a voice profile the user created with the speaker\'s permission; when cloning is unavailable the job continues with the standard local voice and reports a warning.',
+    inputSchema: z.object({
+      input: translateInputSchema,
+      target_language: z.string().min(2).max(35).describe('Target language code, e.g. "pl", "es", "en"'),
+      source_language: z.string().min(2).max(35).default('auto').describe('"auto" to detect, or an ISO code'),
+      translate_audio: z.boolean().default(true).describe('Produce translated speech; false = subtitles only'),
+      clone_voice: z.boolean().default(true).describe('Preserve the original speaker voice where a voice profile is available'),
+      voice_id: z.string().min(1).max(512).optional().describe('Local voice profile id to clone (required for real cloning)'),
+      preserve_background: z.boolean().default(true),
+      background_mode: z.enum(['duck', 'keep', 'replace', 'separate']).default('duck')
+        .describe('duck = lower the original under the dub (keeps music); separate = remove the original voice with local Demucs; keep = original at full level; replace = dub only'),
+      subtitles: z.boolean().default(true).describe('Write a translated SRT artifact'),
+      burn_subtitles: z.boolean().default(false).describe('Burn subtitles into the video (needs libass)'),
+      lip_sync: z.boolean().default(false).describe('Experimental; skipped with a warning when no backend is configured'),
+      quality: z.enum(['fast', 'quality']).default('quality').describe('Transcription/translation fidelity vs speed'),
+      translation_model: z.string().min(1).max(200).optional().describe('Override the local translation model'),
+      transcription_model: z.string().min(1).max(200).optional().describe('Override the local Whisper model'),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, call(args => service.start({
+    input: args.input,
+    options: {
+      source_language: args.source_language,
+      target_language: args.target_language,
+      translate_audio: args.translate_audio,
+      clone_voice: args.clone_voice,
+      voice_id: args.voice_id || null,
+      preserve_background: args.preserve_background,
+      background_mode: args.background_mode,
+      subtitles: args.subtitles,
+      burn_subtitles: args.burn_subtitles,
+      lip_sync: args.lip_sync,
+      quality: args.quality,
+      translation_model: args.translation_model || null,
+      transcription_model: args.transcription_model || null,
+    },
+  })));
+
+  server.registerTool('translate_get_job', {
+    title: 'Get Translate Video Job',
+    description: 'Poll one durable Translate Video job: state, current stage, per-stage checklist, language pair, progress, project-relative outputs, warnings, measured timings and failure reason. Distinct from get_repurpose_job and get_generation_job; it rejects other Vidmyo job types.',
+    inputSchema: z.object({
+      job_id: z.string().regex(/^job_[\w-]+$/).max(100),
+      include_transcript: z.boolean().default(false).describe('Also return the translated line list (bounded)'),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(async args => {
+    const job = await service.get(args.job_id);
+    if (!args.include_transcript) return job;
+    try {
+      return { ...job, transcript: service.readArtifact(args.job_id, 'artifacts/translation.json') };
+    } catch { return job; }
+  }));
+
+  server.registerTool('translate_list_jobs', {
+    title: 'List Translate Video Jobs',
+    description: 'Read recent Translate Video history (newest first) with the language pair, state and progress of each job. Use one entry to decide what to poll or retry.',
+    inputSchema: z.object({
+      state: z.enum(['queued', 'running', 'done', 'error', 'cancelled']).optional(),
+      limit: z.number().int().min(1).max(50).default(20),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.list({ state: args.state || null, limit: args.limit })));
+
+  server.registerTool('translate_cancel_job', {
+    title: 'Cancel Translate Video Job',
+    description: 'Cancel a queued or running translate job. Completed stages and their artifacts stay on disk, so a later retry resumes instead of starting over. Never deletes media.',
+    inputSchema: z.object({ job_id: z.string().regex(/^job_[\w-]+$/).max(100) }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.cancel(args.job_id)));
+
+  server.registerTool('translate_retry_job', {
+    title: 'Retry Translate Video Job',
+    description: 'Retry a failed or cancelled translate job. Returns a NEW job id over the same project: stages that already produced an artifact are not re-run (a late render or subtitle failure never repeats transcription or translation). Poll translate_get_job with the returned id.',
+    inputSchema: z.object({ job_id: z.string().regex(/^job_[\w-]+$/).max(100) }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.retry(args.job_id)));
+}
+
 export function registerTools(server, ctx = {}) {
   const secrets = ctx.secrets || (() => '');
   const imageConfig = ctx.imageConfig || (() => ({ imageSource: 'flow', imageModel: null }));
+  const approveGeneration = createGenerationConsent(ctx.confirmGeneration);
   const keyHint = ctx.keyHint || 'the host that launched this MCP server';
   const repurposeService = ctx.repurposeService || createRepurposeMcpService({ secrets });
+  const cleanerService = ctx.cleanerService || createCleanerMcpService({ repurposeService });
+  const translateService = ctx.translateService || createTranslateMcpService({});
 
   registerRepurposeTools(server, repurposeService);
+  registerCleanerTools(server, cleanerService);
+  registerTranslateTools(server, translateService);
+  registerVfxTools(server, ctx.vfxService);
 
+  if (VIDEO_DELTA_ENABLED) {
   server.tool(
     'list_capabilities',
     'What the local Video Delta engine can do (engines, motions, defaults, and shot-length '
@@ -336,15 +545,16 @@ export function registerTools(server, ctx = {}) {
       try { return ok(await videoDelta.job(job_id)); } catch (e) { return fail(e); }
     },
   );
+  }
   server.tool(
     'story_sheet_rows',
     'List the video briefs on the tracker sheet (read-only). Rows have 1-based sheet row '
     + 'numbers, status (e.g. "Planned"), video #, working title, hook, and topic/angle. '
     + 'Pick a Planned row and pass its row number to story_create.',
-    { sheet: z.string().optional().describe('sheet URL or id (default: the Doodle 1 tracker)') },
+    { sheet: z.string().min(1).describe('explicit Google Sheet URL or id') },
     async ({ sheet }) => {
       try {
-        const sheetId = sheet ? (sheetIdFromInput(sheet) || sheet) : DEFAULT_SHEET_ID;
+        const sheetId = sheetIdFromInput(sheet) || sheet;
         const data = await readSheetValues(sheetId, 'A1:E60');
         return ok({ sheetId, via: data.via, rows: trackerRows(data.values) });
       } catch (e) { return fail(e); }
@@ -360,13 +570,14 @@ export function registerTools(server, ctx = {}) {
       dir: z.string().describe('absolute path for the project folder (created if missing)'),
       topic: z.string().optional(),
       sheet_row: z.number().int().optional().describe('1-based tracker row to take the brief from'),
-      sheet: z.string().optional().describe('sheet URL/id when using sheet_row (default: Doodle 1)'),
+      sheet: z.string().optional().describe('explicit Google Sheet URL/id; required with sheet_row'),
     },
     async ({ dir, topic, sheet_row, sheet }) => {
       try {
         let brief = { topic: topic || 'untitled' };
         if (sheet_row) {
-          const sheetId = sheet ? (sheetIdFromInput(sheet) || sheet) : DEFAULT_SHEET_ID;
+          if (!sheet) throw new Error('sheet must be supplied with sheet_row');
+          const sheetId = sheetIdFromInput(sheet) || sheet;
           const data = await readSheetValues(sheetId, `A${sheet_row}:E${sheet_row}`);
           const r = data.values?.[0];
           if (!r || !r[2]) throw new Error(`Sheet row ${sheet_row} has no Working Title`);
@@ -477,7 +688,7 @@ export function registerTools(server, ctx = {}) {
     + 'for, and attach it to the scene. The image is NOT auto-approved: look at it, then call '
     + 'story_approve_scene. Errors when the source is Google Flow — Flow has no API, so '
     + 'generate there and attach with story_accept_artifact instead. Paid: each call spends '
-    + 'the account\'s credits, so do not retry blindly on a content/validation error.',
+    + 'the account\'s credits and requires human confirmation in the Vidmyo desktop host. Do not retry blindly.',
     {
       dir: z.string(),
       scene_id: z.string().describe('explicit sNNN id — never a line number'),
@@ -504,6 +715,7 @@ export function registerTools(server, ctx = {}) {
         const imageModel = resolveImageModel(source.id, model || cfg.imageModel);
         // The doodle style locks 16:9; each provider's dialect lives in core/generation.js.
         const params = buildGenerationParams(source.id, 'image', { prompt: scene.prompt, aspect: '16:9' });
+        await approveGeneration({ kind:'image', provider:source.id, model:imageModel, params });
         const adapter = makeGenerationAdapter(source.id, { key, model: imageModel, kind: 'image' });
 
         const store = new JobStore();
@@ -560,7 +772,7 @@ export function registerTools(server, ctx = {}) {
     throw new Error(`No cloud ${kind} source has an API key — add a fal.ai or Agnes AI key in ${keyHint}.`);
   };
 
-  const ARTIFACTS = path.join(os.homedir(), '.vidmyo', 'artifacts');
+  const ARTIFACTS = path.join(vidmyoHome(), 'artifacts');
 
   const readImageAsDataUrl = (p) => {
     const ext = path.extname(p).slice(1).toLowerCase() || 'png';
@@ -574,7 +786,7 @@ export function registerTools(server, ctx = {}) {
     + 'AI, their stored key). BLOCKS until the image is ready (seconds) and returns the '
     + 'absolute file path. Paid per image — never retry blindly on a content/validation '
     + 'error. For Story scene images prefer story_generate_scene (it attaches the result '
-    + 'to the project).',
+    + 'to the project). Requires native human approval in the running Vidmyo desktop host.',
     {
       prompt: z.string().describe('what to draw'),
       source: z.enum(['fal', 'agnes']).optional().describe('omit = the user\'s configured/default source'),
@@ -587,6 +799,7 @@ export function registerTools(server, ctx = {}) {
         const { source, key } = resolveGenerationRequest('image', requestedSource);
         const resolvedModel = resolveGenerationModel(source.id, 'image', model);
         const params = buildGenerationParams(source.id, 'image', { prompt, aspect });
+        await approveGeneration({ kind:'image', provider:source.id, model:resolvedModel, params });
         const adapter = makeGenerationAdapter(source.id, { key, model: resolvedModel, kind: 'image' });
         const store = new JobStore();
         const job = store.create({ type: 'image', provider: source.id, params });
@@ -607,7 +820,7 @@ export function registerTools(server, ctx = {}) {
     + 'job_id IMMEDIATELY; renders take minutes, so poll get_generation_job. On Agnes\'s '
     + 'free plan status advances at most once per minute — poll patiently, and NEVER '
     + 're-submit because a poll looked slow (each submit is paid). This is the CLOUD path; '
-    + 'create_video/create_film run the free local Video Delta engine instead.',
+    + 'local AI video synthesis is not available in this release. Requires native human approval in the running Vidmyo desktop host.',
     {
       prompt: z.string().describe('what happens in the clip'),
       source: z.enum(['fal', 'agnes']).optional().describe('omit = the default source with a key'),
@@ -626,6 +839,7 @@ export function registerTools(server, ctx = {}) {
           prompt, aspect, durationSeconds: duration_seconds || null,
           image: hasImage ? readImageAsDataUrl(image_path) : null,
         });
+        await approveGeneration({ kind:'video', provider:source.id, model:resolvedModel, params });
         const adapter = makeGenerationAdapter(source.id, { key, model: resolvedModel, kind: 'video' });
         const store = new JobStore();
         const job = store.create({ type: 'video', provider: source.id, params });

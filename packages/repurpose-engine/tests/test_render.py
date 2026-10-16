@@ -21,6 +21,8 @@ from vidmyo_repurpose.render import (
     RenderError,
     RenderResult,
     _run_output,
+    _caption_stream,
+    _encode,
     build_caption_overlay,
     build_caption_cues,
     render_platform_outputs,
@@ -49,8 +51,8 @@ class RenderMedia:
         return subprocess.CompletedProcess(command, 0, json.dumps(document), "")
 
 
-def prepared_render(tmp_path: Path, *, style="clean", selected=True):
-    two_request = prepared_two_speaker(tmp_path)
+def prepared_render(tmp_path: Path, *, style="clean", selected=True, candidate_ids=None):
+    two_request = prepared_two_speaker(tmp_path, candidate_ids=candidate_ids)
     reframe_media = ReframeMedia()
     v2 = upgrade_reframe_previews(two_request, ffmpeg=reframe_media.ffmpeg, ffprobe=reframe_media.ffprobe)
     manifest_path = tmp_path / "repurpose.json"
@@ -109,8 +111,73 @@ def test_clean_and_bold_overlays_measure_visible_phrase_with_symmetric_padding(t
         assert overlay["backing_right"] - overlay["text_right"] == overlay["visible_padding_right"]
 
 
+def test_caption_position_variants_move_the_overlay_without_changing_the_frame(tmp_path):
+    import cv2
+    import numpy as np
+
+    bottoms = []
+    for position in ("upper", "middle", "lower"):
+        path = tmp_path / f"clean_{position}.png"
+        build_caption_overlay("Position preview", f"clean_{position}", path)
+        image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        assert image.shape[:2] == (1920, 1080)
+        visible_y, _ = np.where(image[:, :, 3] != 0)
+        bottoms.append(int(visible_y.max()))
+
+    assert bottoms[0] < bottoms[1] < bottoms[2]
+
+
 def test_no_usable_words_produce_no_fabricated_caption_cues():
     assert build_caption_cues([], clip_start=20.0, clip_duration=30.0) == []
+
+
+def test_many_captions_use_one_stream_and_clear_gaps_and_tail(tmp_path):
+    overlays = [{"path": tmp_path / f"phrase {index}'s.png", "start_seconds": index + 0.2,
+                 "end_seconds": index + 0.8} for index in range(63)]
+    timeline = _caption_stream(overlays, tmp_path, 64).read_text()
+    assert timeline.count("duration 0.600000") == 63
+    assert "duration 0.200000" in timeline  # Initially blank.
+    assert "duration 1.200000" in timeline  # Blank tail after last caption.
+    assert "phrase 0'\\''s.png" in timeline
+    media = RenderMedia()
+    _run_output(tmp_path / "source.mp4", tmp_path / "output.mp4", 29.9, 0.15,
+                overlays=overlays, video_args=["-c:v", "libx264"], ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    command = media.ffmpeg_calls[0]
+    assert command.count("-i") == 2
+    assert "-loop" not in command
+    assert command[command.index("-filter_complex") + 1].count("overlay=") == 1
+    assert not list(tmp_path.glob(".caption-stream-*"))
+
+
+def test_render_reports_each_encoding_phase_before_candidate_completion(tmp_path):
+    request = prepared_render(tmp_path)
+    media = RenderMedia()
+    events = []
+    render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe, progress=events.append)
+    fractions = [event["fraction"] for event in events]
+    assert fractions == sorted(fractions)
+    encoding = [event for event in events if event["phase"] == "encoding_output"]
+    assert len(encoding) == 8
+    assert all(0.02 < event["fraction"] < 1 for event in encoding)
+    assert "master" in encoding[0]["message"]
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg required")
+def test_default_encoder_reports_live_progress_and_cancels(tmp_path):
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi",
+               "-i", "color=size=32x32:rate=10:duration=10", "-f", "null", "-"]
+    events = []
+    with pytest.raises(RenderError, match="cancelled"):
+        _encode(command, 10, events.append, lambda: bool(events))
+    assert events and events[0] < 1
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg required")
+def test_encoder_stall_is_bounded_and_does_not_leave_a_child():
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-readrate", "0.01", "-f", "lavfi",
+               "-i", "color=size=32x32:rate=1:duration=10", "-f", "null", "-"]
+    with pytest.raises(RenderError, match="no encoding progress"):
+        _encode(command, 10, lambda _: None, lambda: False, stall_seconds=0.4)
 
 
 def test_render_creates_captioned_master_and_all_platform_exports(tmp_path):
@@ -122,8 +189,25 @@ def test_render_creates_captioned_master_and_all_platform_exports(tmp_path):
     assert item["caption"]["state"] == "completed"
     assert [entry["preset_id"] for entry in item["exports"]] == ["youtube_shorts", "tiktok", "instagram_reels"]
     assert len(media.ffmpeg_calls) == 4
-    assert "overlay=0:0:enable=" in media.ffmpeg_calls[0][media.ffmpeg_calls[0].index("-filter_complex") + 1]
+    command = media.ffmpeg_calls[0]
+    assert command.count("-i") == 2
+    assert "-loop" not in command
+    assert command[command.index("-filter_complex") + 1].count("overlay=") == 1
     assert validate_document("render_artifact", result.artifact) is result.artifact
+
+
+def test_nonrecommended_preview_can_be_framed_and_exported_with_manual_approval(tmp_path):
+    request = prepared_render(tmp_path, candidate_ids=["clip_001", "clip_002"])
+    ranking = json.loads((tmp_path / "artifacts/ranking-artifact.v1.json").read_text())
+    assert "clip_002" not in ranking["shortlist_candidate_ids"]
+    boundary = json.loads((tmp_path / BOUNDARY_ARTIFACT_RELATIVE_PATH).read_text())
+    assert boundary["requested_candidate_ids"] == ["clip_001", "clip_002"]
+    request["options"] = {"candidate_ids": ["clip_002"], "platforms": ["youtube_shorts"]}
+    media = RenderMedia()
+    result = render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert result.artifact["requested_candidate_ids"] == ["clip_002"]
+    assert result.artifact["candidates"][0]["state"] == "completed"
+    assert result.artifact["candidates"][0]["exports"][0]["output"]["path"].endswith("clip_002.clean.youtube_shorts.mp4")
 
 
 def test_bold_style_uses_separate_deterministic_paths(tmp_path):
@@ -133,6 +217,19 @@ def test_bold_style_uses_separate_deterministic_paths(tmp_path):
     item = result.artifact["candidates"][0]
     assert item["master"]["path"].endswith("clip_001.bold.master.mp4")
     assert item["caption"]["path"].endswith("clip_001.bold.json")
+
+
+def test_caption_position_variant_is_part_of_the_validated_render_identity(tmp_path):
+    request = prepared_render(tmp_path)
+    request["options"] = {"caption_style": "clean_middle", "platforms": ["youtube_shorts"]}
+    media = RenderMedia()
+    result = render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    item = result.artifact["candidates"][0]
+
+    assert result.artifact["settings"]["caption_style"] == "clean_middle"
+    assert item["caption"]["path"].endswith("clip_001.clean_middle.json")
+    assert item["master"]["path"].endswith("clip_001.clean_middle.master.mp4")
+    assert validate_document("render_artifact", result.artifact) is result.artifact
 
 
 def test_disabled_captions_create_valid_uncaptioned_outputs_with_reason(tmp_path):
@@ -212,12 +309,8 @@ def test_tampered_caption_overlay_invalidates_and_rebuilds_its_master(tmp_path):
 def test_cancellation_checkpoints_and_resumes_missing_exports(tmp_path):
     request = prepared_render(tmp_path)
     media = RenderMedia()
-    checks = 0
-
     def cancelled():
-        nonlocal checks
-        checks += 1
-        return checks > 2
+        return len(media.ffmpeg_calls) >= 2  # Stop after the master and first export.
 
     with pytest.raises(RenderError, match="cancelled"):
         render_platform_outputs(request, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe, cancelled=cancelled)
@@ -327,6 +420,42 @@ def test_cli_converts_local_io_failure_to_ordered_error_event(tmp_path, monkeypa
     assert [event["event"] for event in events] == ["accepted", "error"]
     assert events[-1]["payload"]["code"] == "render_local_io_failed"
     assert validate_event_stream(events) == events
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="FFmpeg required")
+def test_real_caption_stream_shows_phrases_only_during_their_cues(tmp_path):
+    import cv2
+    source = tmp_path / "source.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        "color=black:s=1080x1920:r=10:d=1.6", "-f", "lavfi", "-i", "sine=duration=1.6",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(source),
+    ], capture_output=True, check=True, timeout=20)
+    overlays = []
+    for start, end, style in [(0.2, 0.5, "clean_upper"), (0.8, 1.1, "bold_lower")]:
+        overlay = build_caption_overlay("Visible caption", style, tmp_path / f"{style}.png")
+        overlays.append({**overlay, "start_seconds": start, "end_seconds": end})
+    destination = tmp_path / "output.mp4"
+    events = []
+    _run_output(source, destination, 1.6, 0.15, ffmpeg=None,
+                ffprobe=lambda cmd: subprocess.run(cmd, capture_output=True, text=True, timeout=10),
+                video_args=["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"],
+                overlays=overlays, progress=events.append)
+    assert events[0] == 0 and events[-1] == 1 and any(0 < value < 1 for value in events)
+    capture = cv2.VideoCapture(str(destination))
+    frames = []
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            frames.append(frame)
+    finally:
+        capture.release()
+    assert len(frames) == 16
+    assert max(frames[index].max() for index in (0, 1, 5, 6, 7, 11, 13, 15)) < 15
+    assert frames[3][:1250].max() > 200 and frames[3][1300:].max() < 15
+    assert frames[9][1300:].max() > 200 and frames[9][:1250].max() < 15
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="FFmpeg required")

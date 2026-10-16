@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import CaptionStudio from './CaptionStudio';
+import { CAPTION_LOOKS, captionChoice, captionVariant, settingsFromRenderArtifact } from '../captionStudioModel.mjs';
 import {
   bestRepurposeJob,
   deriveRepurposeStages,
@@ -9,6 +11,12 @@ import {
   mergeRepurposeProgress,
   normalizeRepurposeError,
   repurposeRenderEligibility,
+  repurposeCandidateSelectable,
+  repurposeFramingChanged,
+  repurposeRuntimeBlockReason,
+  readRepurposeReadiness,
+  repurposeReviewNextStep,
+  reviewCandidates,
 } from '../repurposeModel.mjs';
 
 const PLATFORMS = [
@@ -24,6 +32,16 @@ const CONTENT_TYPES = [
   ['talking_head', 'Talking head'],
   ['tutorial', 'Tutorial'],
 ];
+
+const TRANSCRIPTION_MODELS = ['tiny', 'base', 'base.en', 'small', 'small.en', 'medium', 'medium.en'];
+
+const RERUN_IMPACT = {
+  generate_candidates: 'This replaces the current candidates and clears their approvals. Rank, previews, vertical framing, and Finish will need to run again.',
+  rank: 'This updates the recommendations. Cut previews, vertical framing, and Finish will need to run again.',
+  repair_boundaries: 'This rebuilds the cuts. Vertical framing and Finish will need to run again.',
+  reframe: 'This rebuilds the vertical previews. Finish will need to run again.',
+  render: 'This renders the selected clips again with the current Finish settings.',
+};
 
 function Icon({ name, size = 18 }) {
   const paths = {
@@ -50,7 +68,7 @@ function DesktopRequired() {
     <main className="repurpose-studio rep-empty">
       <div className="rep-empty__mark"><Icon name="film" size={30} /></div>
       <p className="rep-kicker">Local media workspace</p>
-      <h1>Repurpose runs in the Vidmyo desktop app.</h1>
+      <h1>Clipper runs in the Vidmyo desktop app.</h1>
       <p>The desktop app keeps source videos and generated clips on this computer and provides the local Python and FFmpeg bridge.</p>
     </main>
   );
@@ -66,7 +84,7 @@ function EmptyProject({ form, setForm, chooseSource, chooseProject, createProjec
   return (
     <main className="repurpose-studio rep-empty-state">
       <section className="rep-empty-state__intro">
-        <p className="rep-kicker">Repurpose / local beta</p>
+        <p className="rep-kicker">Clipper / local beta</p>
         <h1>Find the cuts worth keeping.</h1>
         <p>Turn one long recording into reviewed vertical clips. Analysis, previews, captions, and exports stay on this computer.</p>
         <div className="rep-empty-state__rail" aria-hidden="true">
@@ -77,7 +95,7 @@ function EmptyProject({ form, setForm, chooseSource, chooseProject, createProjec
         </button>
       </section>
 
-      <section className="rep-setup" aria-label="Create a Repurpose project">
+      <section className="rep-setup" aria-label="Create a Clipper project">
         <div className="rep-section-heading">
           <span className="rep-timecode">NEW / 01</span>
           <div><h2>Start from a local video</h2><p>Choose the source and where Vidmyo should keep its working files.</p></div>
@@ -94,9 +112,11 @@ function EmptyProject({ form, setForm, chooseSource, chooseProject, createProjec
         <div className="rep-field-row">
           <label><span>Clips to find</span><input type="number" min="1" max="20" value={form.requestedClipCount} onChange={event => setForm(current => ({ ...current, requestedClipCount: event.target.value }))} /></label>
           <label><span>Recording type</span><select value={form.contentType} onChange={event => setForm(current => ({ ...current, contentType: event.target.value }))}>{CONTENT_TYPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-          <label><span>Caption treatment</span><select value={form.captionStyle} onChange={event => setForm(current => ({ ...current, captionStyle: event.target.value }))}><option value="clean">Clean</option><option value="bold">Bold</option></select></label>
+          <label><span>Caption treatment</span><select value={form.captionStyle} onChange={event => setForm(current => ({ ...current, captionStyle: event.target.value }))}>{CAPTION_LOOKS.map(look => <option key={look.id} value={look.id}>{look.name}</option>)}</select></label>
+          <label><span>Caption position</span><select value={form.captionPosition} onChange={event => setForm(current => ({ ...current, captionPosition: event.target.value }))}><option value="upper">Higher</option><option value="middle">Middle</option><option value="lower">Lower</option></select></label>
         </div>
         <fieldset className="rep-platforms"><legend>Delivery formats</legend>{PLATFORMS.map(([id, label]) => <label key={id}><input type="checkbox" checked={form.targetPlatforms.includes(id)} onChange={() => togglePlatform(id)} /><span>{label}</span></label>)}</fieldset>
+        <p className="rep-delivery__hint">One selected format creates one universal 9:16 MP4 per clip. Select all three only when you need separately encoded platform files.</p>
         <label className="rep-switch"><input type="checkbox" checked={form.captionsEnabled} onChange={event => setForm(current => ({ ...current, captionsEnabled: event.target.checked }))} /><span>Render captions on finished clips</span></label>
         <button className="rep-button rep-button--primary rep-setup__submit" onClick={createProject} disabled={busy || !form.sourcePath || !form.projectDir || !form.targetPlatforms.length}>
           {busy ? 'Creating project…' : 'Create project'} <Icon name="arrow" />
@@ -106,7 +126,7 @@ function EmptyProject({ form, setForm, chooseSource, chooseProject, createProjec
   );
 }
 
-function CutRail({ stages, progressByJob, runStage, resumeJob, cancelJob, busy, launchBlockReason }) {
+function CutRail({ stages, progressByJob, runStage, rerunStage, resumeJob, cancelJob, busy, launchBlockReason }) {
   return (
     <section className="rep-cut-rail" aria-label="Repurpose stages">
       <div className="rep-cut-rail__line" aria-hidden="true" />
@@ -116,17 +136,20 @@ function CutRail({ stages, progressByJob, runStage, resumeJob, cancelJob, busy, 
         const fraction = Number(liveProgress?.payload?.fraction ?? stage.progress?.fraction);
         const percent = Number.isFinite(fraction) ? Math.max(0, Math.min(100, Math.round(fraction * 100))) : null;
         return (
-          <article key={stage.id} className={`rep-stage rep-stage--${stage.state}${stage.runnable ? ' is-runnable' : ''}`}>
+          <article key={stage.id} className={`rep-stage rep-stage--${stage.state}${stage.runnable || stage.rerunnable ? ' is-runnable' : ''}`}>
             <button
               className="rep-stage__head"
-              onClick={() => stage.runnable && !blockReason ? runStage(stage.id) : stage.resumable ? resumeJob(stage.job.id) : undefined}
-              disabled={busy || (!stage.runnable && !stage.resumable) || (stage.runnable && Boolean(blockReason))}
+              onClick={() => stage.runnable
+                ? runStage(stage.id)
+                : stage.rerunnable ? rerunStage(stage.id)
+                : stage.resumable ? resumeJob(stage.job.id) : undefined}
+              disabled={busy || (!stage.runnable && !stage.rerunnable && !stage.resumable)}
               title={stage.runnable && blockReason ? blockReason : undefined}
-              aria-label={`${stage.label}: ${stage.state}${stage.runnable ? '. Run stage' : stage.resumable ? '. Resume stage' : ''}`}
+              aria-label={`${stage.label}: ${stage.state}${stage.runnable ? '. Run stage' : stage.rerunnable ? '. Run again' : stage.resumable ? '. Resume stage' : ''}`}
             >
               <span className="rep-stage__number">{String(stage.index + 1).padStart(2, '0')}</span>
               <span className="rep-stage__node">{stage.state === 'completed' ? <Icon name="check" size={14} /> : stage.state === 'running' || stage.state === 'queued' ? <span className="rep-pulse" /> : null}</span>
-              <span className="rep-stage__copy"><b>{stage.label}</b><small>{stage.runnable && blockReason ? 'Setup required' : stage.runnable ? 'Ready — click to run' : stage.state === 'blocked' ? 'Waiting' : stage.state}</small></span>
+              <span className="rep-stage__copy"><b>{stage.label}</b><small>{stage.runnable && blockReason ? 'Setup required' : stage.runnable ? 'Ready — click to run' : stage.rerunnable ? 'Completed — click to run again' : stage.state === 'blocked' ? 'Waiting' : stage.state}</small></span>
             </button>
             {(stage.state === 'running' || stage.state === 'queued') && (
               <div className="rep-stage__progress">
@@ -143,7 +166,7 @@ function CutRail({ stages, progressByJob, runStage, resumeJob, cancelJob, busy, 
   );
 }
 
-function CandidateCard({ candidate, active, onOpen, onDecision, onSelect, disabled }) {
+function CandidateCard({ candidate, active, onOpen, onDecision, onSelect, onGeneratePreview, canGeneratePreview, generating, disabled }) {
   const rank = candidate.metadata?.ranking;
   const duration = formatRepurposeDuration(candidate.durationSeconds);
   return (
@@ -163,16 +186,20 @@ function CandidateCard({ candidate, active, onOpen, onDecision, onSelect, disabl
           </span>
         </span>
       </button>
+      <div className="rep-candidate__preview">
+        {candidate.preview ? <span>{candidate.reframeV2?.output?.state === 'completed' ? 'Vertical preview ready' : 'Horizontal preview ready'}</span>
+          : <button onClick={onGeneratePreview} disabled={disabled || !canGeneratePreview}>{generating ? 'Generating preview…' : 'Generate preview'}</button>}
+      </div>
       <div className="rep-candidate__actions" aria-label={`Review ${candidate.id}`}>
         <button className={candidate.decision === 'approved' ? 'is-approved' : ''} onClick={() => onDecision('approved')} disabled={disabled}><Icon name="check" size={14} /> Approve</button>
         <button className={candidate.decision === 'rejected' ? 'is-rejected' : ''} onClick={() => onDecision('rejected')} disabled={disabled}><Icon name="x" size={14} /> Reject</button>
-        <label className={candidate.selected ? 'is-selected' : ''}><input type="checkbox" checked={candidate.selected} onChange={event => onSelect(event.target.checked)} disabled={disabled || candidate.decision !== 'approved'} />Use in render</label>
+        <label className={candidate.selected ? 'is-selected' : ''} title={candidate.decision !== 'approved' ? 'Approve this clip first.' : 'Select this clip for export. Previews and vertical framing are required before Finish.'}><input type="checkbox" checked={candidate.selected} onChange={event => onSelect(event.target.checked)} disabled={!repurposeCandidateSelectable(candidate, disabled)} />Use in render</label>
       </div>
     </article>
   );
 }
 
-function Monitor({ candidate, previewUrl, previewBusy, previewError, loadPreview }) {
+function Monitor({ candidate, previewUrl, previewBusy, previewError, loadPreview, generatePreview, canGeneratePreview, busy }) {
   return (
     <section className="rep-monitor" aria-label="Clip monitor">
       <div className="rep-monitor__screen">
@@ -180,14 +207,15 @@ function Monitor({ candidate, previewUrl, previewBusy, previewError, loadPreview
           <div className="rep-monitor__placeholder">
             <span className="rep-monitor__safe" />
             <div className="rep-monitor__play"><Icon name="play" size={24} /></div>
-            <p>{previewBusy ? 'Loading local preview…' : candidate?.preview ? 'Preview ready on this computer' : 'A preview appears after the cut stage.'}</p>
+            <p>{previewBusy ? 'Loading local preview…' : candidate?.preview ? 'Preview ready on this computer' : candidate ? 'This candidate has no preview yet.' : 'Choose a candidate to review.'}</p>
             {candidate?.preview && !previewBusy && <button onClick={loadPreview}>Load preview</button>}
+            {candidate && !candidate.preview && <button onClick={() => generatePreview(candidate.id)} disabled={busy || !canGeneratePreview}>Generate preview</button>}
           </div>
         )}
       </div>
       <div className="rep-monitor__strip">
         <span className="rep-timecode">{candidate ? candidate.id.toUpperCase() : 'NO CLIP'}</span>
-        <span>{candidate?.reframeV2?.mode?.replaceAll('_', ' ') || candidate?.reframeV1?.mode || '9:16 monitor'}</span>
+        <span>{candidate?.reframeV2?.output?.state === 'completed' ? 'Vertical · 9:16' : candidate?.preview ? 'Horizontal · source' : 'No preview'}</span>
         <span>{candidate?.preview ? 'Local preview' : 'Waiting for media'}</span>
       </div>
       {previewError && <p className="rep-monitor__error" role="alert">{previewError}</p>}
@@ -195,7 +223,7 @@ function Monitor({ candidate, previewUrl, previewBusy, previewError, loadPreview
   );
 }
 
-function ReadinessPanel({ readiness, config, setModelCache, saveModelCache }) {
+function ReadinessPanel({ readiness, config, setModelCache, setTranscriptionModel, saveModelConfig, setupModel, recheckRuntime, busy, setupBusy, open, onToggle }) {
   const checks = [
     ['Python', readiness?.python?.ok],
     ['Engine', readiness?.engine?.ok],
@@ -203,14 +231,21 @@ function ReadinessPanel({ readiness, config, setModelCache, saveModelCache }) {
     ['FFprobe', readiness?.ffprobe?.ok],
   ];
   const modelReady = Boolean(readiness?.model?.ok || readiness?.model?.model_ready || readiness?.model?.status === 'ready');
+  const modelName = config.transcriptionModel || readiness?.model?.model || 'small';
   return (
-    <details className="rep-readiness">
+    <details className="rep-readiness" open={open} onToggle={event => onToggle(event.currentTarget.open)}>
       <summary><Icon name="settings" size={15} /><span>Local setup</span><StatusMark state={readiness?.ok ? (modelReady ? 'ready' : 'attention') : 'blocked'} /></summary>
       <div className="rep-readiness__body">
         <div className="rep-readiness__checks">{checks.map(([name, ok]) => <span key={name} className={ok ? 'is-ok' : 'is-missing'}>{ok ? '✓' : '×'} {name}</span>)}</div>
-        <p>{modelReady ? 'The local transcription model is ready.' : 'Runtime is available, but the transcription model is not cached. Vidmyo will not download it automatically.'}</p>
-        <label><span>Model cache folder</span><input value={config.modelCache || ''} onChange={event => setModelCache(event.target.value)} placeholder="Absolute path to an existing model cache" /></label>
-        <button onClick={saveModelCache}>Save cache location</button>
+        {readiness && !readiness.ok && <p role="alert">{repurposeRuntimeBlockReason(readiness)}</p>}
+        {['python', 'engine', 'ffmpeg', 'ffprobe'].filter(key => readiness?.[key] && !readiness[key].ok).map(key => <p key={key} className="rep-readiness__path">{key}: {readiness[key].error || readiness[key].output || 'Check did not complete.'}</p>)}
+        <button onClick={recheckRuntime} disabled={busy || setupBusy}>Recheck local setup</button>
+        <p>{modelReady ? `The local ${modelName} transcription model is ready.` : `Transcription needs a local ${modelName} speech model. Select an existing model folder or a Vidmyo cache root, then save.`}</p>
+        {readiness?.model?.model_path && <p className="rep-readiness__path">Resolved model: {readiness.model.model_path}</p>}
+        <label><span>Transcription model</span><select value={modelName} onChange={event => setTranscriptionModel(event.target.value)}>{TRANSCRIPTION_MODELS.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
+        <label><span>Model folder or cache root</span><input value={config.modelCache || ''} onChange={event => setModelCache(event.target.value)} placeholder={readiness?.model?.model_cache || 'Absolute path to a local model or cache'} /></label>
+        <button onClick={saveModelConfig} disabled={busy}>Save model settings</button>
+        {!modelReady && <button onClick={setupModel} disabled={busy}>{setupBusy ? `Installing ${modelName}…` : `Install ${modelName} model…`}</button>}
       </div>
     </details>
   );
@@ -282,13 +317,19 @@ export default function RepurposeStudio() {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState('');
+  const [mediaOverride, setMediaOverride] = useState(null);
+  const [previewRetry, setPreviewRetry] = useState(0);
+  const [reviewFilter, setReviewFilter] = useState('recommended');
   const [busy, setBusy] = useState(false);
+  const [setupBusy, setSetupBusy] = useState(false);
   const [error, setError] = useState('');
+  const [readinessOpen, setReadinessOpen] = useState(false);
   const [form, setForm] = useState({
     sourcePath: '', projectDir: '', requestedClipCount: 5, contentType: 'auto',
-    targetPlatforms: ['youtube_shorts', 'tiktok', 'instagram_reels'], captionsEnabled: true, captionStyle: 'clean',
+    targetPlatforms: ['youtube_shorts'], captionsEnabled: true, captionStyle: 'clean', captionPosition: 'middle',
   });
-  const [renderSettings, setRenderSettings] = useState({ projectDir: null, captionsEnabled: true, captionStyle: 'clean', platforms: [] });
+  const [renderSettings, setRenderSettings] = useState({ projectDir: null, captionsEnabled: true, captionStyle: 'clean', captionPosition: 'middle', captionBackground: true, captionColor: 'preset', captionFont: 'preset', upscaleMode: 'off', platforms: ['youtube_shorts'], separatePlatformFiles: false });
+  const [framingSettings, setFramingSettings] = useState({ projectDir: null, mode: 'auto_crop' });
 
   const loadArtifacts = useCallback(async nextSummary => {
     if (!bridge || !nextSummary?.dir) return;
@@ -305,17 +346,31 @@ export default function RepurposeStudio() {
       const response = await bridge.readArtifact(nextSummary.dir, artifactPath);
       return [key, response.ok ? response.value : null];
     }));
-    setArtifacts(Object.fromEntries(entries));
+    const loaded = Object.fromEntries(entries);
+    setArtifacts(loaded);
+    setRenderSettings(current => current.projectDir === nextSummary.dir && !current.restored
+      ? { ...settingsFromRenderArtifact(loaded.render, current), restored: true } : current);
+    setFramingSettings(current => current.projectDir === nextSummary.dir ? current : {
+      projectDir: nextSummary.dir, mode: loaded.reframeV2?.settings?.framing_mode || 'auto_crop',
+    });
   }, [bridge]);
 
   const acceptSummary = useCallback(async next => {
     if (!next?.ok) throw new Error(next?.error || 'The project could not be opened.');
     setSummary(next);
+    const captions = captionChoice(next.manifest.render_defaults.captions.style);
     setRenderSettings(current => current.projectDir === next.dir ? current : {
       projectDir: next.dir,
       captionsEnabled: next.manifest.render_defaults.captions.enabled,
-      captionStyle: next.manifest.render_defaults.captions.style,
-      platforms: [...next.manifest.target_platforms],
+      captionStyle: captions.style,
+      captionPosition: captions.position,
+      captionBackground: captions.background,
+      captionColor: 'preset',
+      captionFont: 'preset',
+      upscaleMode: 'off',
+      restored: false,
+      platforms: ['youtube_shorts'],
+      separatePlatformFiles: false,
     });
     setActiveCandidateId(current => current && next.manifest.candidates.some(item => item.id === current) ? current : next.manifest.candidates[0]?.id || null);
     await loadArtifacts(next);
@@ -330,19 +385,21 @@ export default function RepurposeStudio() {
   useEffect(() => {
     if (!bridge) return undefined;
     let cancelled = false;
-    Promise.all([bridge.readiness(), bridge.getConfig()]).then(async ([ready, stored]) => {
+    Promise.all([readRepurposeReadiness(bridge), bridge.getConfig()]).then(async ([ready, stored]) => {
       if (cancelled) return;
-      if (ready.ok) setReadiness(ready.readiness);
+      setReadiness(ready);
       if (stored.ok) {
         let nextConfig = stored.config || {};
-        const preferred = ready.readiness?.analysis?.preferredAgent;
-        const preferredReady = ready.readiness?.analysis?.agents?.find(agent => agent.id === preferred && agent.installed);
+        const preferred = ready.analysis?.preferredAgent;
+        const preferredReady = ready.analysis?.agents?.find(agent => agent.id === preferred && agent.installed);
         if (!nextConfig.analysisProvider && preferredReady) {
           const saved = await bridge.setConfig({ analysisProvider: preferredReady.id });
           if (saved.ok) nextConfig = saved.config;
         }
         if (!cancelled) setConfig(nextConfig);
       }
+    }).catch(failure => {
+      if (!cancelled) setError(normalizeRepurposeError(failure));
     });
     const unsubscribe = bridge.onProgress(event => {
       setProgressByJob(current => mergeRepurposeProgress(current, event));
@@ -357,8 +414,6 @@ export default function RepurposeStudio() {
     const timer = setInterval(refresh, 2000);
     return () => clearInterval(timer);
   }, [activeJob?.id, refresh, summary?.dir]);
-
-  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
 
   const act = async action => {
     setBusy(true); setError('');
@@ -379,6 +434,21 @@ export default function RepurposeStudio() {
     if (!picked.ok) return;
     await acceptSummary(await bridge.get(picked.dir));
   });
+  const closeProject = () => {
+    if (activeJob) {
+      setError('Wait for the current stage to finish or cancel it before leaving this project.');
+      return;
+    }
+    setSummary(null);
+    setArtifacts({});
+    setProgressByJob({});
+    setActiveCandidateId(null);
+    setPreviewUrl(null);
+    setPreviewError('');
+    setMediaOverride(null);
+    setError('');
+    setForm(current => ({ ...current, sourcePath: '', projectDir: '' }));
+  };
   const createProject = () => act(async () => {
     const requestedClipCount = Number(form.requestedClipCount);
     if (!Number.isInteger(requestedClipCount) || requestedClipCount < 1 || requestedClipCount > 20) throw new Error('Clips to find must be a whole number from 1 to 20.');
@@ -388,26 +458,57 @@ export default function RepurposeStudio() {
       requestedClipCount,
       contentType: form.contentType,
       targetPlatforms: form.targetPlatforms,
-      renderDefaults: { captions: { enabled: form.captionsEnabled, style: form.captionStyle } },
+      renderDefaults: { captions: { enabled: form.captionsEnabled, style: captionVariant(form) } },
     }));
   });
 
   const stages = useMemo(() => deriveRepurposeStages(summary?.manifest, summary?.jobs), [summary]);
   const candidates = useMemo(() => joinRepurposeCandidates(summary?.manifest, artifacts), [summary, artifacts]);
-  const activeCandidate = candidates.find(item => item.id === activeCandidateId) || candidates[0] || null;
-  const renderEligibility = repurposeRenderEligibility(summary?.manifest);
-  const runtimeBlocked = !readiness || !readiness.ok;
-  const modelReady = Boolean(readiness?.model?.ok || readiness?.model?.model_ready || readiness?.model?.status === 'ready');
+  const visibleCandidates = useMemo(() => reviewCandidates(candidates, reviewFilter), [candidates, reviewFilter]);
+  const recommendedCount = candidates.filter(candidate => candidate.metadata?.ranking?.recommended).length;
+  const hasRanking = summary?.manifest.stages.rank.state === 'completed';
+  const reviewNextStep = repurposeReviewNextStep(summary?.manifest);
+  const activeCandidate = visibleCandidates.find(item => item.id === activeCandidateId) || visibleCandidates[0] || null;
+  const framingChanged = repurposeFramingChanged(summary?.manifest, artifacts.reframeV2, framingSettings.mode);
+  const renderEligibility = framingChanged
+    ? { ok: false, candidateIds: [], reason: 'Framing changed. Run Frame vertical again before Finish.' }
+    : repurposeRenderEligibility(summary?.manifest, candidates);
+  const mediaPath = mediaOverride && mediaOverride.candidateId === activeCandidate?.id ? mediaOverride.path : activeCandidate?.preview?.path;
+
+  useEffect(() => { setReviewFilter('recommended'); setMediaOverride(null); }, [summary?.dir]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let url = null;
+    setPreviewUrl(null); setPreviewError(''); setPreviewBusy(Boolean(mediaPath));
+    if (mediaPath && bridge && summary?.dir) {
+      Promise.resolve().then(() => bridge.readMedia(summary.dir, mediaPath)).then(result => {
+        if (cancelled) return;
+        if (!result.ok) throw new Error(result.error);
+        url = URL.createObjectURL(new Blob([result.bytes], { type: result.mime }));
+        setPreviewUrl(url);
+      }).catch(failure => {
+        if (!cancelled) setPreviewError(normalizeRepurposeError(failure));
+      }).finally(() => { if (!cancelled) setPreviewBusy(false); });
+    }
+    return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
+  }, [bridge, summary?.dir, activeCandidate?.id, mediaPath, activeCandidate?.preview?.fingerprint, previewRetry]);
   const lockedProvider = artifacts.candidate?.provider?.id || null;
   const lockedModel = artifacts.candidate?.provider?.model || null;
   const analysisProvider = lockedProvider || config.analysisProvider || '';
-  const selectedAgent = readiness?.analysis?.agents?.find(agent => agent.id === analysisProvider);
-  const providerBlockReason = !analysisProvider
+  const launchBlockReason = (stage, current = readiness) => {
+    const runtimeReason = repurposeRuntimeBlockReason(current);
+    if (runtimeReason) return runtimeReason;
+    const modelReady = Boolean(current?.model?.ok || current?.model?.model_ready || current?.model?.status === 'ready');
+    if (stage === 'transcribe' && !modelReady) return 'Point Vidmyo to a cache containing the selected local transcription model.';
+    if (!['generate_candidates', 'rank'].includes(stage)) return null;
+    const selectedAgent = current?.analysis?.agents?.find(agent => agent.id === analysisProvider);
+    return !analysisProvider
     ? 'Choose an AI agent before finding moments.'
     : analysisProvider === 'openrouter'
       ? !(lockedModel || config.openRouterModel)
         ? 'Enter an OpenRouter model before finding moments.'
-        : !readiness?.analysis?.openrouter?.authed
+        : !current?.analysis?.openrouter?.authed
           ? 'Add an OpenRouter key in Settings before finding moments.'
           : null
       : !selectedAgent?.installed
@@ -415,22 +516,33 @@ export default function RepurposeStudio() {
         : !selectedAgent.authed
           ? `${selectedAgent.repurposeName || selectedAgent.name} needs authentication.`
           : null;
-  const launchBlockReason = stage => runtimeBlocked
-    ? 'Complete the missing local runtime setup before starting this stage.'
-    : stage === 'transcribe' && !modelReady
-      ? 'Point Vidmyo to a cache containing the local small transcription model.'
-      : ['generate_candidates', 'rank'].includes(stage) && providerBlockReason
-        ? providerBlockReason
-      : null;
+  };
+
+  const checkRuntime = async () => {
+    const current = await readRepurposeReadiness(bridge);
+    setReadiness(current);
+    const reason = repurposeRuntimeBlockReason(current);
+    if (reason) {
+      setReadinessOpen(true);
+      throw new Error(reason);
+    }
+    return current;
+  };
+  const recheckRuntime = () => act(checkRuntime);
 
   const runStage = stage => act(async () => {
-    if (launchBlockReason(stage)) throw new Error(launchBlockReason(stage));
+    const currentReadiness = await checkRuntime();
+    const reason = launchBlockReason(stage, currentReadiness);
+    if (reason) { setReadinessOpen(true); throw new Error(reason); }
     const options = stage === 'render' ? {
       candidate_ids: renderEligibility.candidateIds,
       captions_enabled: renderSettings.captionsEnabled,
-      caption_style: renderSettings.captionStyle,
+      caption_style: captionVariant(renderSettings),
+      caption_color: renderSettings.captionColor,
+      caption_font: renderSettings.captionFont,
       platforms: renderSettings.platforms,
-    } : stage === 'generate_candidates' ? {
+      upscale_mode: renderSettings.upscaleMode,
+    } : stage === 'reframe' ? { framing_mode: framingSettings.mode } : stage === 'generate_candidates' ? {
       provider: analysisProvider,
       model: analysisProvider === 'openrouter' ? config.openRouterModel : 'configured-default',
     } : {};
@@ -439,7 +551,13 @@ export default function RepurposeStudio() {
     if (!result.ok) throw new Error(result.error);
     setSummary(current => ({ ...current, jobs: [result.job, ...current.jobs] }));
   });
+  const rerunStage = stage => {
+    const label = stages.find(item => item.id === stage)?.label || stage;
+    if (!confirm(`Run ${label} again?\n\n${RERUN_IMPACT[stage] || 'Later stages may need to run again.'}`)) return;
+    runStage(stage);
+  };
   const resumeJob = jobId => act(async () => {
+    await checkRuntime();
     const result = await bridge.resumeJob(jobId);
     if (!result.ok) throw new Error(result.error);
     await refresh();
@@ -451,33 +569,46 @@ export default function RepurposeStudio() {
   });
   const setDecision = (candidateId, decision) => act(async () => acceptSummary(await bridge.setCandidateDecision(summary.dir, candidateId, decision)));
   const setSelected = (candidateId, selected) => act(async () => acceptSummary(await bridge.selectCandidate(summary.dir, candidateId, selected)));
-
-  const loadMedia = mediaPath => act(async () => {
-    if (!mediaPath) throw new Error('This clip does not have playable local media yet.');
-    setPreviewBusy(true); setPreviewError('');
-    try {
-      const result = await bridge.readMedia(summary.dir, mediaPath);
-      if (!result.ok) throw new Error(result.error);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(URL.createObjectURL(new Blob([result.bytes], { type: result.mime })));
-    } catch (previewFailure) {
-      setPreviewError(normalizeRepurposeError(previewFailure));
-    } finally { setPreviewBusy(false); }
+  const canGeneratePreview = summary?.manifest.stages.rank.state === 'completed';
+  const generatePreview = candidateId => act(async () => {
+    await checkRuntime();
+    if (!canGeneratePreview || activeJob) throw new Error('Finish the current stage before generating a preview.');
+    selectCandidate(candidateId);
+    const result = await bridge.runStage(summary.dir, 'repair_boundaries', { additional_candidate_ids: [candidateId] });
+    if (!result.ok) throw new Error(result.error);
+    setSummary(current => ({ ...current, jobs: [result.job, ...current.jobs] }));
   });
-  const loadPreview = () => loadMedia(activeCandidate?.preview?.path);
+  const loadPreview = () => setPreviewRetry(value => value + 1);
 
   const selectCandidate = id => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(null); setPreviewError(''); setActiveCandidateId(id);
+    setPreviewUrl(null); setPreviewError(''); setMediaOverride(null); setActiveCandidateId(id);
   };
 
-  const saveModelCache = () => act(async () => {
-    const result = await bridge.setConfig({ modelCache: config.modelCache?.trim() || null });
+  const saveModelConfig = () => act(async () => {
+    const result = await bridge.setConfig({
+      modelCache: config.modelCache?.trim() || null,
+      transcriptionModel: config.transcriptionModel || readiness?.model?.model || 'small',
+    });
     if (!result.ok) throw new Error(result.error);
     setConfig(result.config || {});
     const ready = await bridge.readiness();
     if (ready.ok) setReadiness(ready.readiness);
   });
+  const setupModel = async () => {
+    const modelName = config.transcriptionModel || readiness?.model?.model || 'small';
+    if (!confirm(`Download and verify the local ${modelName} transcription model? This is a one-time download.`)) return;
+    setSetupBusy(true);
+    try {
+      await act(async () => {
+        const result = await bridge.setupModel();
+        if (!result.ok) throw new Error(result.error);
+        const ready = await bridge.readiness();
+        if (!ready.ok) throw new Error(ready.error);
+        setReadiness(ready.readiness);
+        setReadinessOpen(false);
+      });
+    } finally { setSetupBusy(false); }
+  };
   const saveAnalysisConfig = update => act(async () => {
     const result = await bridge.setConfig(update);
     if (!result.ok) throw new Error(result.error);
@@ -489,18 +620,20 @@ export default function RepurposeStudio() {
 
   const sourceName = String(summary.manifest.source.uri || '').split(/[\\/]/).pop();
   const completedCount = stages.filter(stage => stage.manifestState === 'completed').length;
+  const finishedCandidates = candidates.filter(candidate => candidate.exports.length);
   return (
     <main className="repurpose-studio rep-workspace">
       <header className="rep-project-head">
         <div>
-          <p className="rep-kicker">Repurpose / {summary.manifest.id.slice(-8)}</p>
+          <p className="rep-kicker">Clipper / {summary.manifest.id.slice(-8)}</p>
           <h1>{sourceName || 'Untitled recording'}</h1>
           <p className="rep-project-head__path">{summary.dir}</p>
         </div>
         <div className="rep-project-head__meta">
           <span><b>{summary.manifest.requested_clip_count}</b> cuts requested</span>
           <span><b>{completedCount}/7</b> stages complete</span>
-          <button onClick={openProject} disabled={busy}><Icon name="folder" /> Switch project</button>
+          <button onClick={closeProject} disabled={busy || Boolean(activeJob)}><Icon name="x" /> New project</button>
+          <button onClick={openProject} disabled={busy || Boolean(activeJob)}><Icon name="folder" /> Open another</button>
         </div>
       </header>
 
@@ -509,7 +642,7 @@ export default function RepurposeStudio() {
         readiness, config, lockedProvider, lockedModel, busy, saveAnalysisConfig,
         setOpenRouterModel: value => setConfig(current => ({ ...current, openRouterModel: value })),
       }} />
-      <CutRail {...{ stages, progressByJob, runStage, resumeJob, cancelJob, busy, launchBlockReason }} />
+      <CutRail {...{ stages, progressByJob, runStage, rerunStage, resumeJob, cancelJob, busy, launchBlockReason }} />
 
       <div className="rep-workspace__grid">
         <aside className="rep-review-list">
@@ -517,15 +650,23 @@ export default function RepurposeStudio() {
             <div><p className="rep-kicker">Review queue</p><h2>{candidates.length ? `${candidates.length} candidate${candidates.length === 1 ? '' : 's'}` : 'No candidates yet'}</h2></div>
             <span className="rep-timecode">{candidates.filter(item => item.selected).length} selected</span>
           </div>
+          <div className="rep-review-filters" role="group" aria-label="Candidate views">
+            <button aria-pressed={hasRanking && reviewFilter === 'recommended'} onClick={() => { setActiveCandidateId(activeCandidate?.id || null); setReviewFilter('recommended'); setMediaOverride(null); }} disabled={!hasRanking}>{hasRanking ? `Recommended (${recommendedCount})` : 'Recommended — awaiting Rank'}</button>
+            <button aria-pressed={!hasRanking || reviewFilter === 'all'} onClick={() => { setActiveCandidateId(activeCandidate?.id || null); setReviewFilter('all'); setMediaOverride(null); }}>All candidates ({candidates.length})</button>
+          </div>
+          <div className="rep-review-help">
+            <p>{hasRanking ? (recommendedCount ? 'AI recommendations are ready. You can also choose any clip in All candidates.' : 'Rank found no clips meeting the recommendation threshold. You can still approve and select your own.') : 'These moments have not been ranked yet. Run Rank to get AI recommendations; it uses your chosen AI agent.'} Approve a clip, then check Use in render—even before previews are ready.</p>
+            {reviewNextStep && <button className="rep-button rep-button--quiet" disabled={busy || Boolean(activeJob)} onClick={() => runStage(reviewNextStep.id)}>{reviewNextStep.id === 'rank' ? 'Rank candidates' : reviewNextStep.id === 'repair_boundaries' ? 'Cut previews for recommendations + selected clips' : 'Frame vertical'} <Icon name="arrow" size={14} /></button>}
+          </div>
           <div className="rep-review-list__scroll">
-            {!candidates.length ? <div className="rep-list-empty"><Icon name="film" /><p>Run “Find moments” to create transcript-grounded candidates.</p></div> : candidates.map(candidate => (
-              <CandidateCard key={candidate.id} candidate={candidate} active={candidate.id === activeCandidate?.id} onOpen={() => selectCandidate(candidate.id)} onDecision={decision => setDecision(candidate.id, decision)} onSelect={selected => setSelected(candidate.id, selected)} disabled={busy || Boolean(activeJob)} />
+            {!visibleCandidates.length ? <div className="rep-list-empty"><Icon name="film" /><p>{candidates.length ? 'No recommendations yet. Open All candidates to choose your own.' : 'Run “Find moments” to create transcript-grounded candidates.'}</p></div> : visibleCandidates.map(candidate => (
+              <CandidateCard key={candidate.id} candidate={candidate} active={candidate.id === activeCandidate?.id} onOpen={() => selectCandidate(candidate.id)} onDecision={decision => setDecision(candidate.id, decision)} onSelect={selected => setSelected(candidate.id, selected)} onGeneratePreview={() => generatePreview(candidate.id)} canGeneratePreview={canGeneratePreview} generating={activeJob?.stage === 'repair_boundaries' && candidate.id === activeCandidateId} disabled={busy || Boolean(activeJob)} />
             ))}
           </div>
         </aside>
 
         <div className="rep-center">
-          <Monitor {...{ candidate: activeCandidate, previewUrl, previewBusy, previewError, loadPreview }} />
+          <Monitor {...{ candidate: activeCandidate, previewUrl, previewBusy, previewError, loadPreview, generatePreview, canGeneratePreview, busy: busy || Boolean(activeJob) }} />
           <section className="rep-clip-notes">
             <div className="rep-panel-head"><div><p className="rep-kicker">Editorial note</p><h2>{activeCandidate?.metadata?.hook || activeCandidate?.metadata?.title || 'Choose a candidate'}</h2></div>{activeCandidate && <StatusMark state={activeCandidate.decision} />}</div>
             <p>{activeCandidate?.metadata?.selection_reason || activeCandidate?.metadata?.summary || 'Candidate reasoning and transcript evidence will appear here.'}</p>
@@ -534,26 +675,43 @@ export default function RepurposeStudio() {
         </div>
 
         <aside className="rep-delivery">
-          <ReadinessPanel readiness={readiness} config={config} setModelCache={value => setConfig(current => ({ ...current, modelCache: value }))} saveModelCache={saveModelCache} />
+          <ReadinessPanel readiness={readiness} config={config} setModelCache={value => setConfig(current => ({ ...current, modelCache: value }))} setTranscriptionModel={value => setConfig(current => ({ ...current, transcriptionModel: value }))} saveModelConfig={saveModelConfig} setupModel={setupModel} recheckRuntime={recheckRuntime} busy={busy} setupBusy={setupBusy} open={readinessOpen} onToggle={setReadinessOpen} />
           <section className="rep-delivery__card">
             <p className="rep-kicker">Finish settings</p><h2>Local exports</h2>
+            <label className="rep-delivery__select"><span>Vertical framing</span><select value={framingSettings.mode} onChange={event => setFramingSettings(current => ({ ...current, mode: event.target.value }))} disabled={busy || Boolean(activeJob)}><option value="auto_crop">Auto crop · follow speakers</option><option value="stack_sides">Stack left + right</option><option value="fit_full">Fit full frame · black bars</option></select></label>
+            <p className="rep-delivery__hint">{framingSettings.mode === 'fit_full' ? 'Keeps the whole picture centered in 9:16, with black space above and below a horizontal video for your notes. Notes are not added automatically.' : framingSettings.mode === 'stack_sides' ? 'Splits a side-by-side source down the middle, placing the left side above the right side. Best for two people or two important views already arranged left and right.' : 'Crops to follow the speaker, with two-speaker layouts when suitable.'} Choose a layout, then run Frame vertical.</p>
+            {framingChanged && <button className="rep-button rep-button--quiet" disabled={busy || Boolean(activeJob)} onClick={() => rerunStage('reframe')}>Apply framing · run Frame vertical</button>}
             <label className="rep-delivery__toggle"><input type="checkbox" checked={renderSettings.captionsEnabled} onChange={event => setRenderSettings(current => ({ ...current, captionsEnabled: event.target.checked }))} disabled={busy || Boolean(activeJob)} /><span>Burn in captions</span></label>
-            <label className="rep-delivery__select"><span>Caption treatment</span><select value={renderSettings.captionStyle} onChange={event => setRenderSettings(current => ({ ...current, captionStyle: event.target.value }))} disabled={busy || Boolean(activeJob) || !renderSettings.captionsEnabled}><option value="clean">Clean</option><option value="bold">Bold</option></select></label>
-            <fieldset className="rep-delivery__targets"><legend>Delivery formats</legend>{PLATFORMS.map(([platform, label]) => <label key={platform}><input type="checkbox" checked={renderSettings.platforms.includes(platform)} onChange={() => setRenderSettings(current => ({ ...current, platforms: current.platforms.includes(platform) ? current.platforms.filter(item => item !== platform) : [...current.platforms, platform] }))} disabled={busy || Boolean(activeJob) || (renderSettings.platforms.length === 1 && renderSettings.platforms[0] === platform)} /><span>{label}</span></label>)}</fieldset>
+            <CaptionStudio settings={renderSettings} onChange={setRenderSettings} disabled={busy || Boolean(activeJob) || !renderSettings.captionsEnabled} previewUrl={mediaOverride ? null : previewUrl} />
+            <div className="rep-upscale">
+              <p className="rep-kicker">Resolution & upscaling <span>LOCAL</span></p>
+              <label className="rep-delivery__select"><span>Export resolution</span><select aria-label="Export resolution" value={renderSettings.upscaleMode === 'off' ? 'off' : '4k'} onChange={event => setRenderSettings(current => ({ ...current, upscaleMode: event.target.value === 'off' ? 'off' : 'lanczos_4k_sharp' }))} disabled={busy || Boolean(activeJob)}><option value="off">1080 × 1920</option><option value="4k">4K · 2160 × 3840</option></select></label>
+              {renderSettings.upscaleMode !== 'off' && <label className="rep-delivery__toggle"><input type="checkbox" checked={renderSettings.upscaleMode === 'lanczos_4k_sharp'} onChange={event => setRenderSettings(current => ({ ...current, upscaleMode: event.target.checked ? 'lanczos_4k_sharp' : 'lanczos_4k' }))} disabled={busy || Boolean(activeJob)} /><span>Gentle sharpening</span></label>}
+              <p className="rep-delivery__hint">{renderSettings.upscaleMode === 'off' ? 'Original vertical output. Choose 4K to upscale selected clips—even ones you already finished.' : '2× Lanczos upscale, not AI restoration. Cannot recover missing source detail. Larger files and slower exports. Your original 1080p files stay on disk.'}</p>
+            </div>
+            <fieldset className="rep-delivery__targets"><legend>Output files</legend>
+              <label><input type="radio" name="output-files" checked={!renderSettings.separatePlatformFiles} onChange={() => setRenderSettings(current => ({ ...current, separatePlatformFiles: false, platforms: ['youtube_shorts'] }))} disabled={busy || Boolean(activeJob)} /><span>One universal MP4</span></label>
+              <label><input type="radio" name="output-files" checked={renderSettings.separatePlatformFiles} onChange={() => setRenderSettings(current => ({ ...current, separatePlatformFiles: true, platforms: PLATFORMS.map(([id]) => id) }))} disabled={busy || Boolean(activeJob)} /><span>Separate platform files</span></label>
+            </fieldset>
+            <p className="rep-delivery__hint">One universal 9:16 MP4 works on Shorts, TikTok, and Reels. Separate files create three versions per selected clip.</p>
             <p className="rep-delivery__hint">{renderEligibility.ok ? `${renderEligibility.candidateIds.length} approved clip${renderEligibility.candidateIds.length === 1 ? '' : 's'} ready to finish.` : renderEligibility.reason}</p>
+            <button className="rep-button rep-button--primary rep-setup__submit" onClick={() => runStage('render')} disabled={busy || Boolean(activeJob) || !renderEligibility.ok}>{summary.manifest.stages.render.state === 'completed' ? 'Render again with these settings' : 'Finish selected clips'} <Icon name="arrow" /></button>
           </section>
           <section className="rep-exports">
-            <div className="rep-panel-head"><div><p className="rep-kicker">Delivery shelf</p><h2>{summary.manifest.outputs.length ? `${summary.manifest.outputs.length} exports` : 'Nothing rendered'}</h2></div></div>
+            <div className="rep-panel-head"><div><p className="rep-kicker">Delivery shelf</p><h2>{finishedCandidates.length ? `${finishedCandidates.length} finished clip${finishedCandidates.length === 1 ? '' : 's'}` : 'Nothing rendered'}</h2></div></div>
             <div className="rep-exports__list">
-              {candidates.flatMap(candidate => candidate.exports.map(entry => ({ candidate, entry }))).map(({ candidate, entry }) => (
-                <article key={`${candidate.id}-${entry.preset_id}`}>
+              {finishedCandidates.map(candidate => {
+                const entry = candidate.exports.find(item => item.preset_id === 'youtube_shorts') || candidate.exports[0];
+                return (
+                <article key={candidate.id}>
                   <span className="rep-export__icon"><Icon name="film" /></span>
-                  <span><b>{candidate.metadata?.title || candidate.id}</b><small>{PLATFORMS.find(([id]) => id === entry.preset_id)?.[1] || entry.preset_id} · {entry.output?.width}×{entry.output?.height}</small></span>
-                  <button onClick={() => { selectCandidate(candidate.id); loadMedia(entry.output.path); }} aria-label={`Play ${candidate.id} ${entry.preset_id}`}><Icon name="play" /></button>
+                  <span><b>{candidate.metadata?.title || candidate.id}</b><small>{candidate.exports.length === 1 ? 'Universal MP4' : `${candidate.exports.length} platform files`} · {entry.output?.width}×{entry.output?.height}</small></span>
+                  <button onClick={() => { setReviewFilter('all'); setActiveCandidateId(candidate.id); setMediaOverride({ candidateId: candidate.id, path: entry.output.path }); }} aria-label={`Play ${candidate.id} ${entry.preset_id}`}><Icon name="play" /></button>
                   <button onClick={() => bridge.reveal(summary.dir, entry.output.path)} aria-label={`Show ${candidate.id} ${entry.preset_id} in folder`}><Icon name="reveal" /></button>
                 </article>
-              ))}
+              )})}
               {!summary.manifest.outputs.length && <p>Finished platform files stay here on this computer.</p>}
+              {summary.manifest.outputs.length > 0 && !candidates.some(candidate => candidate.exports.length) && <p>Earlier exports are preserved. Finish again for the updated selection. <button onClick={() => bridge.reveal(summary.dir, summary.manifest.outputs[0])}>Show earlier exports</button></p>}
             </div>
           </section>
         </aside>

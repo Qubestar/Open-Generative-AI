@@ -80,7 +80,7 @@
       "required": ["schema", "prompt", "scoring", "dedupe"],
       "properties": {
         "schema": { "const": "ranking-artifact.v1" },
-        "prompt": { "const": "ranking-prompt.v1" },
+        "prompt": { "enum": ["ranking-prompt.v1", "ranking-prompt.v2"] },
         "scoring": { "const": "transcript-scoring.v1" },
         "dedupe": { "const": "candidate-dedupe.v1" }
       }
@@ -139,7 +139,7 @@
         "repeated_topic_penalty", "nearby_time_penalty", "nearby_time_seconds"
       ],
       "properties": {
-        "hard_gate": { "const": 40.0 },
+        "hard_gate": { "enum": [40.0, 70.0] },
         "temporal_iou": { "const": 0.7 },
         "temporal_containment": { "const": 0.85 },
         "semantic_similarity": { "const": 0.8 },

@@ -58,8 +58,9 @@ export class DoodlePipeline {
     return this.exec('bash', [this._script('setup_env.sh')]);
   }
 
-  async tts(scriptFile, outWav, { voice = 'am_onyx', speed = null } = {}) {
+  async tts(scriptFile, outWav, { voice = 'am_onyx', speed = null, lang = null } = {}) {
     const args = [this._script('tts_kokoro.py'), scriptFile, outWav, '--voice', voice];
+    if (lang != null) args.push('--lang', lang);
     if (speed != null) args.push('--speed', String(speed));
     await this.exec(this.venvPython, args);
     if (!fs.existsSync(outWav)) throw new Error(`tts produced no file: ${outWav}`);

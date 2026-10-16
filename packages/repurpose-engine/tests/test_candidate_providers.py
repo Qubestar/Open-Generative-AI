@@ -131,18 +131,26 @@ def test_unsupported_provider_and_invalid_or_implicit_model_never_fallback():
 
 
 @pytest.mark.parametrize(
-    ("provider_id", "stdout"),
+    ("provider_id", "stdout", "model_id"),
     [
-        ("codex", ""),
-        ("claude_code", json.dumps({"structured_output": {"ok": True}})),
-        ("gemini", json.dumps({"response": json.dumps({"ok": True})})),
-        ("hermes", json.dumps({"ok": True})),
+        ("codex", "", "configured-default"),
+        ("codex", "", "vendor/codex-model"),
+        ("claude_code", json.dumps({"structured_output": {"ok": True}}), "configured-default"),
+        ("claude_code", json.dumps({"structured_output": {"ok": True}}), "vendor/claude-model"),
+        ("gemini", json.dumps({"response": json.dumps({"ok": True})}), "configured-default"),
+        ("gemini", json.dumps({"response": json.dumps({"ok": True})}), "vendor/gemini-model"),
+        ("hermes", json.dumps({"ok": True}), "configured-default"),
+        ("hermes", json.dumps({"ok": True}), "vendor/hermes-model"),
     ],
 )
 def test_local_agents_are_tool_restricted_structured_and_prompt_free_in_argv(
-    tmp_path, monkeypatch, provider_id, stdout,
+    tmp_path, monkeypatch, provider_id, stdout, model_id,
 ):
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-reach-agent")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-agent")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-reach-agent")
+    monkeypatch.setenv("GEMINI_API_KEY", "must-not-reach-agent")
+    monkeypatch.setenv("GOOGLE_API_KEY", "must-not-reach-agent")
     cli = tmp_path / provider_id
     if provider_id == "hermes":
         runtime = tmp_path / "hermes-runtime"
@@ -171,7 +179,7 @@ def test_local_agents_are_tool_restricted_structured_and_prompt_free_in_argv(
         return Process()
 
     provider = LocalAgentCandidateProvider(
-        provider_id, "configured-default", cli_path=str(cli), popen=popen,
+        provider_id, model_id, cli_path=str(cli), popen=popen,
     )
     assert provider.structured(structured_request()) == {"ok": True}
     assert captured["kwargs"]["shell"] is False
@@ -189,8 +197,10 @@ def test_local_agents_are_tool_restricted_structured_and_prompt_free_in_argv(
         assert "--strict-mcp-config" in captured["args"]
         assert ["--setting-sources", ""] == captured["args"][captured["args"].index("--setting-sources"):][:2]
     elif provider_id == "gemini":
-        assert "--sandbox" in captured["args"]
-        assert ["-p", ""] == captured["args"][-2:]
+        assert "--sandbox" not in captured["args"]
+        assert "-p" not in captured["args"]
+        assert "--prompt" not in captured["args"]
+        assert captured["args"][-2:] == ["--approval-mode", "default"]
         settings = captured["gemini_settings"]
         assert settings["tools"]["core"] == []
         assert settings["admin"]["mcp"]["enabled"] is False
@@ -198,13 +208,246 @@ def test_local_agents_are_tool_restricted_structured_and_prompt_free_in_argv(
         assert captured["args"][0] == "/tmp/hermes-python"
         assert "get_fallback_chain = lambda _cfg: []" in captured["args"][2]
         assert "__vidmyo_no_tools__" in captured["args"][2]
+    if provider_id in {"codex", "claude_code", "gemini"}:
+        if model_id == "configured-default":
+            assert "--model" not in captured["args"]
+        else:
+            assert captured["args"][captured["args"].index("--model") + 1] == model_id
+    if provider_id == "hermes":
+        expected = None if model_id == "configured-default" else model_id
+        assert captured["kwargs"]["env"].get("HERMES_INFERENCE_MODEL") == expected
     assert "UNRELATED_SECRET" not in captured["kwargs"]["env"]
+    assert "OPENAI_API_KEY" not in captured["kwargs"]["env"]
+    assert "ANTHROPIC_API_KEY" not in captured["kwargs"]["env"]
+    assert "GEMINI_API_KEY" not in captured["kwargs"]["env"]
+    assert "GOOGLE_API_KEY" not in captured["kwargs"]["env"]
+
+
+def test_claude_ignores_user_api_routing_settings(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    config_dir = home / ".claude"
+    config_dir.mkdir(parents=True)
+    (config_dir / "settings.json").write_text(json.dumps({
+        "env": {
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+            "UNRELATED_API_KEY": "must-not-reach-agent",
+        },
+        "hooks": {"PreToolUse": [{"command": "must-not-run"}]},
+        "enabledPlugins": {"must-not-load": True},
+    }), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    cli = tmp_path / "claude"
+    cli.write_text("#!/bin/sh\n", encoding="utf-8")
+    captured = {}
+
+    class Process:
+        pid = 1
+        returncode = 0
+
+        def communicate(self, input=None, timeout=None):
+            return json.dumps({"structured_output": {"ok": True}}), ""
+
+    def popen(args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs["env"]
+        return Process()
+
+    provider = LocalAgentCandidateProvider(
+        "claude_code", "configured-default", cli_path=str(cli), popen=popen,
+    )
+
+    assert provider.structured(structured_request()) == {"ok": True}
+    assert "--settings" not in captured["args"]
+    assert captured["args"][captured["args"].index("--setting-sources") + 1] == ""
+    assert "ANTHROPIC_BASE_URL" not in captured["env"]
+    assert "UNRELATED_API_KEY" not in captured["env"]
+
+
+def test_codex_uses_cli_default_instead_of_desktop_configured_model(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    config_dir = home / ".codex"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        'model = "gpt-5.6-sol"\n[mcp_servers.must_not_load]\nurl = "https://example.invalid"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    cli = tmp_path / "codex"
+    cli.write_text("#!/bin/sh\n", encoding="utf-8")
+    captured = {}
+
+    class Process:
+        pid = 1
+        returncode = 0
+
+        def communicate(self, input=None, timeout=None):
+            output = captured["args"][captured["args"].index("--output-last-message") + 1]
+            __import__("pathlib").Path(output).write_text(json.dumps({"ok": True}))
+            return "", ""
+
+    def popen(args, **kwargs):
+        captured["args"] = args
+        return Process()
+
+    provider = LocalAgentCandidateProvider(
+        "codex", "configured-default", cli_path=str(cli), popen=popen,
+    )
+
+    assert provider.structured(structured_request()) == {"ok": True}
+    assert "--model" not in captured["args"]
+    assert "--ignore-user-config" in captured["args"]
+    assert "gpt-5.6-sol" not in captured["args"]
+    assert "example.invalid" not in " ".join(captured["args"])
+
+
+def test_codex_omits_unsupported_unique_items_but_keeps_local_schema(tmp_path):
+    cli = tmp_path / "codex"
+    cli.write_text("#!/bin/sh\n", encoding="utf-8")
+    request = structured_request()
+    request["schema"]["properties"]["ids"] = {
+        "type": "array",
+        "uniqueItems": True,
+        "items": {"type": "string"},
+    }
+    original_schema = json.loads(json.dumps(request["schema"]))
+    captured = {}
+
+    class Process:
+        pid = 1
+        returncode = 0
+
+        def communicate(self, input=None, timeout=None):
+            output = captured["args"][captured["args"].index("--output-last-message") + 1]
+            __import__("pathlib").Path(output).write_text(json.dumps({"ok": True}))
+            return "", ""
+
+    def popen(args, **kwargs):
+        captured["args"] = args
+        schema_path = args[args.index("--output-schema") + 1]
+        captured["provider_schema"] = json.loads(__import__("pathlib").Path(schema_path).read_text())
+        return Process()
+
+    provider = LocalAgentCandidateProvider(
+        "codex", "configured-default", cli_path=str(cli), popen=popen,
+    )
+
+    assert provider.structured(request) == {"ok": True}
+    assert "uniqueItems" not in captured["provider_schema"]["properties"]["ids"]
+    assert request["schema"] == original_schema
 
 
 def test_local_agent_requires_an_absolute_detected_cli():
     with pytest.raises(ProviderError) as captured:
         LocalAgentCandidateProvider("codex", "configured-default", cli_path="codex")
     assert captured.value.code == "provider_not_installed"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "code", "message"),
+    [
+        (
+            "Your credit balance is too low to access the Anthropic API.",
+            "provider_insufficient_credit",
+            "claude_code reports insufficient credit or quota.",
+        ),
+        (
+            "RESOURCE_EXHAUSTED: free tier quota",
+            "provider_insufficient_credit",
+            "claude_code reports insufficient credit or quota.",
+        ),
+        ("You've hit your usage limit", "provider_rate_limited", "claude_code subscription usage limit reached."),
+        ("Model gpt-test is not supported", "provider_model_unsupported", "claude_code could not use that model. Choose Automatic or another model in VFX."),
+        ("Please login to continue", "provider_authentication_failed", "claude_code needs authentication. Sign in from the Agents page."),
+        (
+            "OpenAI Codex\nsandbox: read-only\nERROR request failed: 401 Unauthorized",
+            "provider_authentication_failed",
+            "claude_code needs authentication. Sign in from the Agents page.",
+        ),
+        (
+            "sandbox-exec failed to start",
+            "provider_isolation_unavailable",
+            "claude_code could not start its restricted planning environment. Update the CLI and try again.",
+        ),
+        (
+            "unknown option --old-flag",
+            "provider_cli_incompatible",
+            "claude_code rejected Vidmyo's CLI options. Update Vidmyo or the CLI and try again.",
+        ),
+        (
+            "fetch failed: ECONNRESET",
+            "provider_network_failed",
+            "claude_code could not reach its service. Check the connection and try again.",
+        ),
+        (
+            "unexpected local failure",
+            "provider_request_failed",
+            "claude_code exited before returning a beat plan (exit 1). Sign in from the Agents page, then try again.",
+        ),
+    ],
+)
+def test_local_agent_classifies_bounded_nonzero_exit(stderr, code, message, tmp_path):
+    cli = tmp_path / "claude"
+    cli.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    class Process:
+        pid = 1
+        returncode = 1
+
+        def communicate(self, input=None, timeout=None):
+            return "", stderr
+
+    provider = LocalAgentCandidateProvider(
+        "claude_code", "configured-default", cli_path=str(cli),
+        popen=lambda *_args, **_kwargs: Process(),
+    )
+    with pytest.raises(ProviderError) as captured:
+        provider.structured(structured_request())
+    assert captured.value.code == code
+    assert str(captured.value) == message
+
+
+def test_local_agent_classifies_account_failure_from_stdout(tmp_path):
+    cli = tmp_path / "claude"
+    cli.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    class Process:
+        pid = 1
+        returncode = 1
+
+        def communicate(self, input=None, timeout=None):
+            return '{"is_error":true,"result":"You have no active subscription"}', ""
+
+    provider = LocalAgentCandidateProvider(
+        "claude_code", "configured-default", cli_path=str(cli),
+        popen=lambda *_args, **_kwargs: Process(),
+    )
+    with pytest.raises(ProviderError) as captured:
+        provider.structured(structured_request())
+    assert captured.value.code == "provider_subscription_required"
+    assert str(captured.value) == "claude_code has no active subscription."
+
+
+def test_gemini_exit_41_is_always_authentication_failure(tmp_path):
+    cli = tmp_path / "gemini"
+    cli.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    class Process:
+        pid = 1
+        returncode = 41
+
+        def communicate(self, input=None, timeout=None):
+            return '{"error":{"code":41,"message":"No auth method configured"}}', ""
+
+    provider = LocalAgentCandidateProvider(
+        "gemini", "configured-default", cli_path=str(cli),
+        popen=lambda *_args, **_kwargs: Process(),
+    )
+    with pytest.raises(ProviderError) as captured:
+        provider.structured(structured_request())
+    assert captured.value.code == "provider_authentication_failed"
+    assert str(captured.value) == (
+        "Gemini CLI is not signed in. Open the Agents page, sign in to Gemini, then try again."
+    )
 
 
 def test_local_agent_cancellation_terminates_its_isolated_process(tmp_path, monkeypatch):

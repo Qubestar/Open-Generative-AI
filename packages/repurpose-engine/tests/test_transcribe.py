@@ -187,6 +187,24 @@ def test_transcription_normalizes_multilingual_words_metadata_and_progress(
     assert validate_document("transcript_artifact", artifact) is artifact
 
 
+def test_transcription_expands_segment_to_contain_backend_word_overhang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model = FakeModel(segments=[SimpleNamespace(
+        start=0.2, end=2.0, text="Boundary word", avg_logprob=-0.1,
+        words=[
+            SimpleNamespace(start=0.2, end=1.8, word=" Boundary", probability=0.95),
+            SimpleNamespace(start=1.8, end=2.14, word=" word", probability=0.9),
+        ],
+    )])
+
+    *_, result = run_success(tmp_path, monkeypatch, model=model)
+
+    assert result.artifact["segments"][0]["end_seconds"] == 2.14
+    assert result.artifact["words"][1]["end_seconds"] == 2.14
+    assert validate_document("transcript_artifact", result.artifact) is result.artifact
+
+
 @pytest.mark.parametrize(
     "mutation,field",
     [
@@ -217,6 +235,43 @@ def test_doctor_is_read_only_and_provides_exact_setup_guidance(tmp_path: Path):
     assert result["model_cache"] == str(cache)
     assert result["setup_command"] in result["message"]
     assert set(tmp_path.iterdir()) == before
+
+
+def test_doctor_accepts_a_direct_existing_model_directory_without_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_dir = tmp_path / "models--Systran--faster-whisper-small.en" / "snapshots" / "revision"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.bin").write_bytes(b"existing-model")
+    monkeypatch.setattr(transcription, "faster_whisper_version", lambda: "1.2.1")
+    monkeypatch.setattr(transcription.importlib.util, "find_spec", lambda _name: object())
+
+    result = inspect_model("small.en", model_dir)
+
+    assert result["model_ready"] is True
+    assert result["model_path"] == str(model_dir)
+    assert result["model_source"] == "direct"
+    assert result["setup_command"] is None
+    assert not (model_dir / MODEL_READY_MARKER).exists()
+
+
+def test_doctor_rejects_a_direct_folder_for_a_different_selected_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_dir = tmp_path / "models--Systran--faster-whisper-small.en" / "snapshots" / "revision"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.bin").write_bytes(b"existing-model")
+    monkeypatch.setattr(transcription, "faster_whisper_version", lambda: "1.2.1")
+    monkeypatch.setattr(transcription.importlib.util, "find_spec", lambda _name: object())
+
+    result = inspect_model("base", model_dir)
+
+    assert result["model_ready"] is False
+    assert result["model_source"] == "direct"
+    assert result["model_identity_matches"] is False
+    assert result["setup_command"] is None
 
 
 def test_setup_is_the_explicit_download_boundary_and_verifies_before_ready(
@@ -279,6 +334,32 @@ def test_missing_model_fails_before_factory_with_setup_guidance(
     assert captured.value.code == "transcription_model_not_ready"
     assert "setup-model" in captured.value.next_action
     assert called is False
+
+
+def test_transcribe_loads_a_selected_direct_model_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    model_dir = tmp_path / "models--Systran--faster-whisper-small.en" / "snapshots" / "revision"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.bin").write_bytes(b"existing-model")
+    request, _ = make_project(tmp_path, options={
+        "model": "small.en", "model_cache": str(model_dir), "language": "en",
+    })
+    monkeypatch.setattr(transcription, "faster_whisper_version", lambda: "1.2.1")
+    monkeypatch.setattr(transcription.importlib.util, "find_spec", lambda _name: object())
+    loaded = []
+
+    result = transcribe_project(
+        request,
+        model_factory=lambda model_path, settings: (
+            loaded.append((model_path, settings.model)) or FakeModel()
+        ),
+        library_version=lambda: "1.2.1",
+    )
+
+    assert result.artifact["transcription"]["model"] == "small.en"
+    assert loaded == [(model_dir, "small.en")]
 
 
 def test_matching_cache_skips_model_and_does_not_rewrite(

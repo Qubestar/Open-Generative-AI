@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "meta": { "project": "studio-preview", "segmentType": "intro", "run": "preview" },
+  "source": { "file": "", "durationSec": 5, "width": 1920, "height": 1080, "fps": 30 },
+  "brand": { "theme": "synthwave", "kitSource": "theme-defaults" },
+  "events": []
+}

@@ -1,0 +1,73 @@
+/* Approved concepts: application chrome only, never color-filter user media. */
+:root, [data-appearance="dark"] {
+  color-scheme: dark;
+  --vm-bg: #0d0f11;
+  --vm-panel: #141719;
+  --vm-raised: #202427;
+  --vm-input: #101315;
+  --vm-line: #2e3337;
+  --vm-text: #f2f3f4;
+  --vm-muted: #a4aaaf;
+  --vm-accent: #ff956c;
+  --vm-primary: #ff794b;
+  --vm-on-primary: #211008;
+  --vm-selected: #35241e;
+  --vm-good: #89d59b;
+  --vm-on-good: #102419;
+  --vm-on-danger: #301116;
+  --vm-danger: #ffaaa6;
+  --vm-cut: #332932;
+  --vm-cut-text: #d6b6bc;
+  --vm-warning: #efcd89;
+  --vm-warning-bg: #302e2a;
+  --vm-player: #080a0b;
+}
+[data-appearance="light"] {
+  color-scheme: light;
+  --vm-bg: #f5f8fa;
+  --vm-panel: #ffffff;
+  --vm-raised: #edf4f5;
+  --vm-input: #f8fafd;
+  --vm-line: #dce5eb;
+  --vm-text: #222a41;
+  --vm-muted: #58647a;
+  --vm-accent: #007a80;
+  --vm-primary: #007f85;
+  --vm-on-primary: #ffffff;
+  --vm-selected: #e3f3f3;
+  --vm-good: #287944;
+  --vm-on-good: #ffffff;
+  --vm-on-danger: #ffffff;
+  --vm-danger: #b63843;
+  --vm-cut: #fff2f3;
+  --vm-cut-text: #855963;
+  --vm-warning: #795216;
+  --vm-warning-bg: #fff4df;
+  --vm-player: #090e15;
+}
+[data-appearance="aurora"] {
+  color-scheme: dark;
+  --vm-bg: #141416;
+  --vm-panel: #1c1c20;
+  --vm-raised: #26262c;
+  --vm-input: #18181c;
+  --vm-line: #35353d;
+  --vm-text: #f0edf8;
+  --vm-muted: #aaa6b5;
+  --vm-accent: #c4a4ff;
+  --vm-primary: #8850d7;
+  --vm-on-primary: #ffffff;
+  --vm-selected: #322742;
+  --vm-good: #74dfbc;
+  --vm-on-good: #10241c;
+  --vm-on-danger: #301116;
+  --vm-danger: #ffa5af;
+  --vm-cut: #33242e;
+  --vm-cut-text: #d1a8b9;
+  --vm-warning: #ebcc92;
+  --vm-warning-bg: #342d23;
+  --vm-player: #08080a;
+}
+[data-appearance] { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+[data-appearance] :focus-visible { outline: 2px solid var(--vm-accent); outline-offset: 3px; }
+[data-appearance] h2 { font-family:'Vidmyo Montserrat',system-ui,sans-serif; letter-spacing:-.5px; }

@@ -1,0 +1,11 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import {createVfxMcpService} from '../lib/vfxService.js';
+import {registerVfxTools} from '../lib/tools.js';
+function project(){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'vfx-mcp-'));fs.mkdirSync(path.join(dir,'artifacts'));fs.writeFileSync(path.join(dir,'vfx.json'),JSON.stringify({kind:'vfx',version:1,brand:{theme:'simple-claude'},name:'Test',source:{uri:'/tmp/source.mp4'},analysis:{provider:'codex'},output:'old.mp4',state:'complete'}));fs.writeFileSync(path.join(dir,'artifacts/vfx-intake.json'),JSON.stringify({reviewed:true,shots:[]}));fs.writeFileSync(path.join(dir,'artifacts/transcript-artifact.v1.json'),JSON.stringify({segments:[],words:[]}));return dir;}
+test('VFX tools expose inspection and plan submission without render/approval',()=>{const names=[];registerVfxTools({registerTool:(name)=>names.push(name)},{});assert.deepEqual(names,['vfx_open','vfx_submit_plan']);});
+test('Direct agent submission calls validation, invalidates old output and makes no nested provider call',async()=>{const dir=project();let args;try{const service=createVfxMcpService({execute:(python,argv,options,cb)=>{args=argv;fs.writeFileSync(path.join(dir,'artifacts/vfx-spec.json'),JSON.stringify({events:[],source:{durationSec:4,width:640,height:360,fps:30,frameCount:120}}));setImmediate(()=>cb(null,'{}',''));}});const result=await service.submitPlan(dir,{events:[]});assert(result.ok);assert(args.includes('validate'));assert(!args.includes('plan'));const m=JSON.parse(fs.readFileSync(path.join(dir,'vfx.json')));assert.equal(m.output,null);assert.equal(m.state,'plan');}finally{fs.rmSync(dir,{recursive:true,force:true});}});
+test('Unreviewed shots block direct plan submission before subprocess',async()=>{const dir=project();try{fs.writeFileSync(path.join(dir,'artifacts/vfx-intake.json'),JSON.stringify({reviewed:false}));const service=createVfxMcpService({execute:()=>{throw new Error('should not execute');}});await assert.rejects(()=>service.submitPlan(dir,{events:[]}),/Confirm shots/);}finally{fs.rmSync(dir,{recursive:true,force:true});}});

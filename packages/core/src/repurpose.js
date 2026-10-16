@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { repurposeToEdg } from './edg.js';
 
 export const REPURPOSE_MANIFEST_NAME = 'repurpose.json';
 export const REPURPOSE_MANIFEST_VERSION = 1;
@@ -397,6 +398,10 @@ export class RepurposeProject {
     return this;
   }
 
+  toEdg(candidateId = null, options = {}) {
+    return repurposeToEdg(this.manifest, { candidateId, ...options });
+  }
+
   startStage(stage) {
     validateStageName(stage);
     const index = REPURPOSE_STAGES.indexOf(stage);
@@ -473,7 +478,10 @@ export class RepurposeProject {
     return { sourceChanged, manifest: this.manifest };
   }
 
-  applyCandidateArtifact(artifact, { artifactPath = 'artifacts/candidate-artifact.v1.json' } = {}) {
+  applyCandidateArtifact(artifact, {
+    artifactPath = 'artifacts/candidate-artifact.v1.json',
+    preserveDecisions = true,
+  } = {}) {
     if (this.manifest.stages.generate_candidates.state !== 'running') {
       throw new Error('Candidate artifact requires a running generate_candidates stage');
     }
@@ -489,7 +497,7 @@ export class RepurposeProject {
       }
       if (ids.has(candidate.id)) throw new Error(`candidate_artifact.candidates.${index}.id: must be unique`);
       ids.add(candidate.id);
-      const prior = previous.get(candidate.id);
+      const prior = preserveDecisions ? previous.get(candidate.id) : null;
       return {
         id: candidate.id,
         decision: prior?.decision || 'pending',

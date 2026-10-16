@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,7 +30,7 @@ from .contracts import (
 
 ENGINE_VERSION = "0.1.0"
 CANDIDATE_SCHEMA_VERSION = "candidate-artifact.v1"
-PROMPT_VERSION = "candidate-prompt.v1"
+PROMPT_VERSION = "candidate-prompt.v2"
 CLASSIFICATION_VERSION = "content-classification.v1"
 WINDOWING_VERSION = "transcript-windowing.v1"
 CACHE_VERSION = 1
@@ -444,6 +445,9 @@ def _window_request(
         "criteria": CONTENT_CRITERIA[content_type],
         "common_requirements": (
             "Every suggestion must have standalone meaning, a comprehensible opening, and a payoff. "
+            "Start on the strongest self-contained sentence, never on a transition such as And, But, "
+            "So, Because, Then, Also, or a reference to an unexplained earlier process, step, thing, or point. "
+            "End after the payoff is complete and before the speaker begins a different topic. "
             "Propose an inclusive exact-word span lasting 20 to 120 seconds. Return fewer or zero "
             "suggestions when no worthwhile moment exists. Do not score, rank, deduplicate, repair, or select."
         ),
@@ -510,6 +514,21 @@ def _text(words: list[dict[str, Any]]) -> str:
     return " ".join(word["text"] for word in words).strip()
 
 
+def _opening_context_error(text: str) -> str | None:
+    opening = re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)[0]
+    tokens = re.findall(r"[A-Za-z']+", opening.lower())
+    if not tokens:
+        return "opening must contain spoken words"
+    if tokens[0] in {"and", "but", "so", "because", "then", "also"}:
+        return f"opening begins with the context-dependent transition {tokens[0]!r}"
+    if re.search(
+        r"\b(?:this|that|these|those)\s+(?:process|step|thing|idea|point|example|way|part|topic|question|problem)\b|\bnext step\b",
+        opening.lower(),
+    ):
+        return "opening refers to unexplained earlier context"
+    return None
+
+
 def _normalized_span(
     span: Mapping[str, Any],
     *,
@@ -568,6 +587,9 @@ def validate_window_response(
         proposed = _normalized_span(
             suggestion["proposed_span"], positions=positions, words=words,
         )
+        opening_error = _opening_context_error(proposed["text"])
+        if opening_error:
+            raise ValueError(f"proposed_span: {opening_error}")
         first_index = positions[proposed["first_word_id"]]
         last_index = positions[proposed["last_word_id"]]
         duration = proposed["end_seconds"] - proposed["start_seconds"]

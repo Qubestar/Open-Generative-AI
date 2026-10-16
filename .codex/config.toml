@@ -1,0 +1,3 @@
+[mcp_servers.vidmyo]
+command = "node"
+args = ["/Volumes/My Lexar/AI Projects/Vidmyo/mcp/server.js"]

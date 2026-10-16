@@ -1,0 +1,6 @@
+.vidmyo-settings [class*="text-white"] { color: var(--vm-text); }
+.vidmyo-settings [class*="text-white/"] { color: var(--vm-muted); }
+.vidmyo-settings [class*="border-white"] { border-color: var(--vm-line); }
+.vidmyo-settings [class*="bg-white/"] { background: var(--vm-raised); }
+.vidmyo-settings input, .vidmyo-settings select { background: var(--vm-input); color: var(--vm-text); }
+.vidmyo-settings button:focus-visible, .vidmyo-settings select:focus-visible, .vidmyo-settings input:focus-visible, .vidmyo-settings a:focus-visible { outline: 2px solid var(--vm-accent); outline-offset: 3px; }

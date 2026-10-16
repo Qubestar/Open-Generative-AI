@@ -18,6 +18,17 @@ import {
 const tempDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const sha = character => `sha256:${character.repeat(64)}`;
 
+test('render forwards local upscale and caption studio options and rejects unknown modes', () => {
+  const project = projectAt('render');
+  try {
+    const options = { upscale_mode: 'lanczos_4k_sharp', caption_style: 'studio_karaoke_middle_clear' };
+    assert.deepEqual(buildRepurposeSteps(project, 'render', 'job_upscale', options)[0].request.options, options);
+    assert.throws(() => buildRepurposeSteps(project, 'render', 'job_invalid', { upscale_mode: 'cloud_ai' }), /Upscale mode/);
+  } finally {
+    fs.rmSync(project.dir, { recursive: true, force: true });
+  }
+});
+
 function projectAt(stage, { state = 'pending' } = {}) {
   const dir = tempDir('vidmyo-repurpose-runner-');
   const source = path.join(dir, 'source.mp4');
@@ -92,6 +103,218 @@ function writeArtifact(projectDir, relativePath, artifact) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(artifact));
 }
+
+function projectWithPreviews() {
+  const project = projectAt('render', { state: 'completed' });
+  for (let index = 0; index < 3; index++) project.addCandidate({ proposedStartSec: index * 30, proposedEndSec: index * 30 + 25 });
+  project.manifest.candidates[0].metadata.ranking = { recommended: true };
+  project.setCandidateDecision('clip_001', 'approved');
+  project.selectCandidate('clip_001', true);
+  writeArtifact(project.dir, 'artifacts/boundary-artifact.v1.json', {
+    source: { fingerprint: sha('a') }, requested_candidate_ids: ['clip_001', 'clip_002'],
+  });
+  return project;
+}
+
+test('both reframe workers receive the explicit full-frame mode', () => {
+  const project = projectAt('reframe');
+  const options = { framing_mode: 'fit_full' };
+  const steps = buildRepurposeSteps(project, 'reframe', 'job_full_frame', options);
+  assert.equal(steps.length, 2);
+  for (const step of steps) assert.deepEqual(step.request.options, options);
+  assert.throws(() => buildRepurposeSteps(project, 'reframe', 'job_invalid', { framing_mode: 'stretch' }), /Framing mode/);
+});
+
+test('side-stack framing and bounded caption branding are forwarded to local workers', () => {
+  const project = projectAt('reframe');
+  for (const step of buildRepurposeSteps(project, 'reframe', 'job_stack', { framing_mode: 'stack_sides' })) {
+    assert.equal(step.request.options.framing_mode, 'stack_sides');
+  }
+  const renderProject = projectAt('render');
+  const options = { candidate_ids: ['clip_001'], caption_color: '#7C5CFF', caption_font: 'montserrat' };
+  const [render] = buildRepurposeSteps(renderProject, 'render', 'job_brand', options);
+  assert.deepEqual(render.request.options, options);
+  assert.throws(() => buildRepurposeSteps(renderProject, 'render', 'job_bad_color', { caption_color: 'purple' }), /Caption color/);
+  assert.throws(() => buildRepurposeSteps(renderProject, 'render', 'job_bad_font', { caption_font: '/tmp/font.ttf' }), /Caption font/);
+});
+
+test('a completed Finish stage can be explicitly rerun with new local output settings', async () => {
+  const project = projectAt('render', { state: 'completed' });
+  project.manifest.outputs = ['artifacts/platform-exports/old.mp4'];
+  project.save();
+  const store = new JobStore(tempDir('vidmyo-rerender-jobs-'));
+  const job = createRepurposeJob(store, {
+    projectDir: project.dir,
+    stage: 'render',
+    options: { candidate_ids: ['clip_001'], caption_style: 'clean_middle', captions_enabled: true, platforms: ['youtube_shorts'] },
+  });
+  assert.equal(job.params.rerender, true);
+
+  const result = await runRepurposeJob(store, job.id, { spawnImpl: fakeSpawn(({ child, request }) => {
+    const during = RepurposeProject.load(project.dir).manifest;
+    assert.equal(during.stages.render.state, 'running');
+    assert.deepEqual(during.outputs, ['artifacts/platform-exports/old.mp4']);
+    const outputPath = 'artifacts/platform-exports/clip_001.clean_middle.youtube_shorts.mp4';
+    writeArtifact(project.dir, outputPath, 'rendered');
+    writeArtifact(project.dir, 'artifacts/render-artifact.v1.json', {
+      source: { fingerprint: sha('a') },
+      candidates: [{ candidate_id: 'clip_001', exports: [{ preset_id: 'youtube_shorts', output: { path: outputPath } }] }],
+    });
+    emitStream(child, [
+      event(request, 1, 'accepted'),
+      event(request, 2, 'artifact', { kind: 'render_artifact', version: 1, path: 'artifacts/render-artifact.v1.json' }),
+      event(request, 3, 'completed'),
+    ]);
+  }) });
+
+  assert.equal(result.state, 'done');
+  const after = RepurposeProject.load(project.dir).manifest;
+  assert.equal(after.stages.render.state, 'completed');
+  assert.deepEqual(after.outputs, ['artifacts/platform-exports/clip_001.clean_middle.youtube_shorts.mp4']);
+});
+
+test('rerunning Find moments replaces approvals and invalidates only dependent stages', async () => {
+  const project = projectAt('render', { state: 'completed' });
+  project.manifest.candidates = [{
+    id: 'clip_001', decision: 'approved', selected: true,
+    proposed_start_sec: 1, proposed_end_sec: 20, metadata: { title: 'Old moment' },
+  }];
+  project.manifest.outputs = ['artifacts/platform-exports/old.mp4'];
+  project.save();
+  const store = new JobStore(tempDir('vidmyo-regenerate-candidates-'));
+  const job = createRepurposeJob(store, {
+    projectDir: project.dir,
+    stage: 'generate_candidates',
+    options: { provider: 'codex', model: 'configured-default:test' },
+  });
+  assert.equal(job.params.rerunStage, true);
+
+  const result = await runRepurposeJob(store, job.id, { spawnImpl: fakeSpawn(({ child, request }) => {
+    const during = RepurposeProject.load(project.dir).manifest;
+    assert.equal(during.stages.transcribe.state, 'completed');
+    assert.equal(during.stages.generate_candidates.state, 'running');
+    for (const stage of ['rank', 'repair_boundaries', 'reframe', 'render']) {
+      assert.equal(during.stages[stage].state, 'pending');
+      assert.equal(during.stages[stage].artifact, null);
+    }
+    assert.equal(during.candidates[0].decision, 'approved');
+    assert.deepEqual(during.outputs, ['artifacts/platform-exports/old.mp4']);
+    writeArtifact(project.dir, 'artifacts/candidate-artifact.v1.json', {
+      source: { fingerprint: sha('a') },
+      candidates: [{
+        id: 'clip_001', provider_suggestion_id: 'suggestion-new', window_id: 'window_000001',
+        title: 'New moment', hook: 'New hook', summary: 'New summary', selection_reason: 'New reason',
+        signal_types: ['tip'], proposed_span: { start_seconds: 40, end_seconds: 65 }, evidence_spans: [],
+      }],
+    });
+    emitStream(child, [
+      event(request, 1, 'accepted'),
+      event(request, 2, 'artifact', { kind: 'candidate_artifact', version: 1, path: 'artifacts/candidate-artifact.v1.json' }),
+      event(request, 3, 'completed'),
+    ]);
+  }) });
+
+  assert.equal(result.state, 'done');
+  const after = RepurposeProject.load(project.dir).manifest;
+  assert.equal(after.stages.generate_candidates.state, 'completed');
+  assert.equal(after.stages.rank.state, 'pending');
+  assert.equal(after.candidates[0].metadata.title, 'New moment');
+  assert.equal(after.candidates[0].decision, 'pending');
+  assert.equal(after.candidates[0].selected, false);
+  assert.deepEqual(after.outputs, ['artifacts/platform-exports/old.mp4']);
+});
+
+test('on-demand preview retains recommendations, earlier extras, and decisions; invalidates only downstream status', async () => {
+  const project = projectWithPreviews();
+  const store = new JobStore(tempDir('vidmyo-extra-preview-jobs-'));
+  const before = structuredClone(project.manifest);
+  const job = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options: { additional_candidate_ids: ['clip_003'] } });
+  assert.deepEqual(job.params.options, { candidate_ids: ['clip_001', 'clip_002', 'clip_003'] });
+  assert.equal(RepurposeProject.load(project.dir).manifest.stages.render.state, 'completed');
+  const result = await runRepurposeJob(store, job.id, { spawnImpl: fakeSpawn(({ child, request }) => {
+    const during = RepurposeProject.load(project.dir).manifest;
+    assert.equal(during.stages.repair_boundaries.state, 'running');
+    assert.equal(during.stages.reframe.state, 'pending');
+    assert.equal(during.stages.render.state, 'pending');
+    assert.deepEqual(during.candidates, before.candidates);
+    writeArtifact(project.dir, 'artifacts/boundary-artifact.v1.json', {
+      source: { fingerprint: sha('a') }, requested_candidate_ids: request.options.candidate_ids,
+    });
+    emitStream(child, [event(request, 1, 'accepted'), event(request, 2, 'artifact', {
+      kind: 'boundary_artifact', version: 1, path: 'artifacts/boundary-artifact.v1.json',
+    }), event(request, 3, 'completed')]);
+  }) });
+  assert.equal(result.state, 'done');
+  const after = RepurposeProject.load(project.dir).manifest;
+  assert.equal(after.stages.rank.state, 'completed');
+  assert.equal(after.stages.repair_boundaries.state, 'completed');
+  assert.equal(after.stages.reframe.state, 'pending');
+  assert.deepEqual(after.candidates, before.candidates);
+  const framing = buildRepurposeSteps(RepurposeProject.load(project.dir), 'reframe', 'job_frame');
+  assert.equal(framing.length, 2);
+});
+
+test('preview extension rejects invalid input, stale cache, and concurrent jobs without mutation', () => {
+  const project = projectWithPreviews();
+  const store = new JobStore(tempDir('vidmyo-extra-preview-validation-'));
+  const before = fs.readFileSync(path.join(project.dir, 'repurpose.json'), 'utf8');
+  for (const options of [{ additional_candidate_ids: [] }, { additional_candidate_ids: ['clip_999'] }, { additional_candidate_ids: ['clip_003'], candidate_ids: ['clip_003'] }]) {
+    assert.throws(() => createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options }));
+  }
+  assert.equal(fs.readFileSync(path.join(project.dir, 'repurpose.json'), 'utf8'), before);
+  assert.equal(store.list().length, 0);
+  writeArtifact(project.dir, 'artifacts/boundary-artifact.v1.json', { source: { fingerprint: sha('b') }, requested_candidate_ids: ['clip_001'] });
+  assert.throws(() => createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options: { additional_candidate_ids: ['clip_003'] } }), /stale/);
+  store.create({ type: 'repurpose', params: { projectDir: project.dir, stage: 'render' } });
+  assert.throws(() => createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options: { additional_candidate_ids: ['clip_003'] } }), /current project job/);
+  assert.equal(fs.readFileSync(path.join(project.dir, 'repurpose.json'), 'utf8'), before);
+});
+
+test('adding a preview preserves existing manual word-boundary edits', () => {
+  const project = projectWithPreviews();
+  const store = new JobStore(tempDir('vidmyo-extra-preview-boundaries-'));
+  const override = { first_word_id: 'word_000001', last_word_id: 'word_000030' };
+  writeArtifact(project.dir, 'artifacts/boundary-artifact.v1.json', {
+    source: { fingerprint: sha('a') }, requested_candidate_ids: ['clip_001'],
+    candidates: [{ candidate_id: 'clip_001', repair: { override_applied: true }, repaired_span: override }],
+  });
+  const job = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options: { additional_candidate_ids: ['clip_003'] } });
+  assert.deepEqual(job.params.options.boundary_overrides, { clip_001: override });
+});
+
+test('preview extension retries retain the full normalized request set', async () => {
+  const project = projectWithPreviews();
+  const store = new JobStore(tempDir('vidmyo-extra-preview-retry-'));
+  const job = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options: { additional_candidate_ids: ['clip_003'] } });
+  const failed = await runRepurposeJob(store, job.id, { spawnImpl: fakeSpawn(({ child, request }) => emitStream(child, [
+    event(request, 1, 'accepted'), event(request, 2, 'error', { message: 'local encoder failure' }),
+  ], { code: 1 })) });
+  assert.equal(failed.state, 'error');
+  const railRetry = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries' });
+  assert.deepEqual(railRetry.params.options.candidate_ids, ['clip_001', 'clip_002', 'clip_003']);
+  store.setState(railRetry.id, 'cancelled');
+  const retry = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options: { additional_candidate_ids: ['clip_003'] } });
+  assert.deepEqual(retry.params.options.candidate_ids, ['clip_001', 'clip_002', 'clip_003']);
+});
+
+test('normal Cut previews includes manual selections alongside recommendations', () => {
+  const project = projectAt('repair_boundaries');
+  for (let index = 0; index < 3; index++) project.addCandidate({ proposedStartSec: index * 30, proposedEndSec: index * 30 + 25 });
+  project.manifest.candidates[0].metadata.ranking = { recommended: true };
+  project.setCandidateDecision('clip_002', 'approved');
+  project.selectCandidate('clip_002', true);
+  const store = new JobStore(tempDir('vidmyo-selected-previews-'));
+  let job = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries' });
+  assert.deepEqual(job.params.options.candidate_ids, ['clip_001', 'clip_002']);
+  store.setState(job.id, 'cancelled');
+  project.manifest.candidates[0].metadata.ranking.recommended = false;
+  project.save();
+  job = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries' });
+  assert.deepEqual(job.params.options.candidate_ids, ['clip_002']);
+  store.setState(job.id, 'cancelled');
+  job = createRepurposeJob(store, { projectDir: project.dir, stage: 'repair_boundaries', options: { candidate_ids: ['clip_003'] } });
+  assert.deepEqual(job.params.options.candidate_ids, ['clip_003']);
+});
 
 test('request planner maps deterministic descriptors and both reframe substeps', () => {
   const project = projectAt('reframe');

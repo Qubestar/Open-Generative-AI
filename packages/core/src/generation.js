@@ -143,3 +143,17 @@ export function makeGenerationAdapter(sourceId, { key, model, kind, agnesPlan = 
   if (sourceId === 'fal') return falAdapter({ model, key });
   throw new Error(`makeGenerationAdapter: unknown source "${sourceId}"`);
 }
+
+export function generationResumeReadiness(job) {
+  if (!job || !['image', 'video'].includes(job.type)) return { safe: false, reason: 'Not a cloud generation job.' };
+  if (!job.checkpoints?.model) return { safe: false, reason: 'The saved job has no model information.' };
+  if (job.state === 'queued') return { safe: true, reason: 'This request was saved before submission.' };
+  if (job.state === 'running' && job.checkpoints?.handle) {
+    return { safe: true, reason: 'Resume polling the existing provider request.' };
+  }
+  if (job.state === 'error' && job.checkpoints?.handle) {
+    return { safe: true, reason: 'Retry polling the saved provider request without submitting it again.' };
+  }
+  if (job.state === 'running') return { safe: false, reason: 'Provider submission was interrupted before its handle was saved; resubmitting could create a duplicate charge.' };
+  return { safe: false, reason: `A ${job.state || 'missing'} job cannot be resumed safely.` };
+}

@@ -86,6 +86,117 @@ def _redact(value: str, secrets: tuple[str, ...]) -> str:
     return result[:_MAX_ERROR_DETAIL]
 
 
+def _local_exit_error(provider_id: str, detail: str, returncode: int) -> ProviderError:
+    """Turn bounded CLI diagnostics into stable, credential-free user guidance."""
+    lowered = detail.lower()
+    if provider_id == "gemini" and returncode == 41:
+        return ProviderError(
+            "provider_authentication_failed",
+            "Gemini CLI is not signed in. Open the Agents page, sign in to Gemini, then try again.",
+            False,
+        )
+    insufficient_credit = any(
+        term in lowered
+        for term in (
+            "credit balance", "insufficient credit", "billing", "quota exceeded",
+            "resource_exhausted", "resource exhausted",
+        )
+    )
+    usage_limited = any(
+        term in lowered
+        for term in ("usage limit", "rate limit", "too many requests", "rate_limit_exceeded")
+    )
+    unsupported_model = "model" in lowered and any(
+        term in lowered
+        for term in ("not supported", "unsupported", "not found", "unavailable")
+    )
+    needs_auth = any(
+        term in lowered
+        for term in (
+            "authentication", "authenticate", "login", "log in", "not signed in",
+            "unauthorized", "invalid_grant", "oauth token",
+        )
+    )
+    missing_subscription = any(
+        term in lowered
+        for term in ("no active subscription", "subscription required", "requires a subscription")
+    )
+    context_too_large = any(
+        term in lowered
+        for term in (
+            "context length", "context window", "prompt is too long", "request too large",
+            "input token", "maximum context",
+        )
+    )
+    network_failure = any(
+        term in lowered
+        for term in (
+            "network error", "fetch failed", "connection refused", "connection reset",
+            "could not resolve", "dns", "enotfound", "econnreset", "timed out connecting",
+        )
+    )
+    sandbox_failure = any(re.search(pattern, lowered) for pattern in (
+        r"failed to (?:start|initialize|create|enter) (?:the )?sandbox",
+        r"sandbox(?:-exec)?[^.\n]{0,80}(?:unavailable|permission denied|command not found)",
+        r"(?:seatbelt|sandbox-exec)[^.\n]{0,80}(?:failed|error|denied|missing)",
+    ))
+    integration_failure = any(
+        term in lowered
+        for term in (
+            "unknown option", "unrecognized option", "unexpected argument", "invalid option",
+            "unknown feature", "configuration error", "invalid configuration",
+        )
+    )
+    if insufficient_credit:
+        return ProviderError(
+            "provider_insufficient_credit", f"{provider_id} reports insufficient credit or quota.", False,
+        )
+    if usage_limited:
+        return ProviderError(
+            "provider_rate_limited", f"{provider_id} subscription usage limit reached.", False,
+        )
+    if unsupported_model:
+        return ProviderError(
+            "provider_model_unsupported",
+            f"{provider_id} could not use that model. Choose Automatic or another model in VFX.", False,
+        )
+    if missing_subscription:
+        return ProviderError(
+            "provider_subscription_required", f"{provider_id} has no active subscription.", False,
+        )
+    if needs_auth:
+        return ProviderError(
+            "provider_authentication_failed",
+            f"{provider_id} needs authentication. Sign in from the Agents page.", False,
+        )
+    if context_too_large:
+        return ProviderError(
+            "provider_context_too_large",
+            f"{provider_id} could not fit this section's transcript and shot map in its context window.", False,
+        )
+    if network_failure:
+        return ProviderError(
+            "provider_network_failed",
+            f"{provider_id} could not reach its service. Check the connection and try again.", True,
+        )
+    if sandbox_failure:
+        return ProviderError(
+            "provider_isolation_unavailable",
+            f"{provider_id} could not start its restricted planning environment. Update the CLI and try again.", False,
+        )
+    if integration_failure:
+        return ProviderError(
+            "provider_cli_incompatible",
+            f"{provider_id} rejected Vidmyo's CLI options. Update Vidmyo or the CLI and try again.", False,
+        )
+    return ProviderError(
+        "provider_request_failed",
+        f"{provider_id} exited before returning a beat plan (exit {returncode}). "
+        "Sign in from the Agents page, then try again.",
+        False,
+    )
+
+
 def _default_http(
     url: str,
     *,
@@ -278,6 +389,18 @@ def _extract_local_document(provider_id: str, stdout: str, output_file: Path) ->
     return _json_object(envelope)
 
 
+def _codex_output_schema(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _codex_output_schema(item)
+            for key, item in value.items()
+            if key != "uniqueItems"
+        }
+    if isinstance(value, list):
+        return [_codex_output_schema(item) for item in value]
+    return value
+
+
 _HERMES_SCRIPT = """import sys
 import hermes_cli.oneshot as oneshot
 original = oneshot._normalize_toolsets
@@ -344,7 +467,11 @@ class LocalAgentCandidateProvider:
         self._popen = popen
 
     def _command(self, schema_path: Path, output_path: Path) -> list[str]:
+        explicit_model = self.model_id != CONFIGURED_DEFAULT_MODEL
         if self.provider_id == "codex":
+            # Desktop and CLI model catalogs can differ. With user config
+            # intentionally isolated, let this CLI choose its supported
+            # subscription default instead of re-injecting the desktop model.
             disabled = [
                 "apps", "browser_use", "browser_use_external", "code_mode_host",
                 "computer_use", "hooks", "image_generation", "in_app_browser",
@@ -352,19 +479,25 @@ class LocalAgentCandidateProvider:
                 "skill_search", "tool_call_mcp_elicitation",
             ]
             flags = [flag for feature in disabled for flag in ("--disable", feature)]
+            model_flags = ["--model", self.model_id] if explicit_model else []
             return [self.cli_path, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-                    "--strict-config", *flags, "--sandbox", "read-only",
+                    "--strict-config", *model_flags, *flags, "--sandbox", "read-only",
                     "--skip-git-repo-check", "--output-schema", str(schema_path),
                     "--output-last-message", str(output_path), "-"]
         if self.provider_id == "claude_code":
             schema = schema_path.read_text(encoding="utf-8")
             mcp_config = schema_path.parent / "claude-mcp.json"
-            return [self.cli_path, "--print", "--output-format", "json", "--json-schema", schema,
+            model_flags = ["--model", self.model_id] if explicit_model else []
+            return [self.cli_path, "--print", *model_flags, "--output-format", "json", "--json-schema", schema,
                     "--safe-mode", "--no-session-persistence", "--tools", "", "--permission-mode", "dontAsk",
                     "--disable-slash-commands", "--mcp-config", str(mcp_config),
                     "--strict-mcp-config", "--setting-sources", ""]
         if self.provider_id == "gemini":
-            return [self.cli_path, "--output-format", "json", "--sandbox", "--approval-mode", "default", "-p", ""]
+            # The system settings below already remove every tool and integration.
+            # Avoid Gemini's second sandbox relaunch: it copies piped input into a
+            # deprecated argv prompt and can fail before the model request starts.
+            model_flags = ["--model", self.model_id] if explicit_model else []
+            return [self.cli_path, *model_flags, "--output-format", "json", "--approval-mode", "default"]
         return [_hermes_python(self.cli_path), "-c", _HERMES_SCRIPT]
 
     def structured(self, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -378,7 +511,8 @@ class LocalAgentCandidateProvider:
             prompt_path = root / "prompt.txt"
             stdout_path = root / "stdout.txt"
             stderr_path = root / "stderr.txt"
-            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            provider_schema = _codex_output_schema(schema) if self.provider_id == "codex" else schema
+            schema_path.write_text(json.dumps(provider_schema), encoding="utf-8")
             schema_path.chmod(0o600)
             claude_mcp_path = root / "claude-mcp.json"
             claude_mcp_path.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
@@ -392,17 +526,16 @@ class LocalAgentCandidateProvider:
                 "NODE_EXTRA_CA_CERTS",
             }
             provider_auth = {
-                "codex": {"CODEX_HOME", "OPENAI_API_KEY"},
-                "claude_code": {"CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
-                "gemini": {
-                    "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
-                    "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
-                },
+                "codex": {"CODEX_HOME"},
+                "claude_code": {"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"},
+                "gemini": set(),
                 "hermes": {"HERMES_HOME"},
             }[self.provider_id]
             allowed = common | provider_auth
             env = {key: value for key, value in os.environ.items() if key in allowed or key.startswith("LC_")}
             env.update({"HERMES_SAFE_MODE": "1", "HERMES_IGNORE_RULES": "1"})
+            if self.provider_id == "hermes" and self.model_id != CONFIGURED_DEFAULT_MODEL:
+                env["HERMES_INFERENCE_MODEL"] = self.model_id
             if self.provider_id == "gemini":
                 gemini_settings = root / "gemini-system-settings.json"
                 gemini_settings.write_text(json.dumps({
@@ -481,13 +614,15 @@ class LocalAgentCandidateProvider:
                                     message = "Local agent request was cancelled." if code == "provider_cancelled" else "Local agent timed out."
                                     raise ProviderError(code, message, False)
                 if process.returncode:
-                    detail = _bounded_text(stderr)
-                    needs_auth = "auth" in detail.lower() or "login" in detail.lower()
-                    raise ProviderError(
-                        "provider_authentication_failed" if needs_auth else "provider_request_failed",
-                        f"{self.provider_id} needs authentication." if needs_auth else f"{self.provider_id} could not complete the request.",
-                        False,
-                    )
+                    # Claude and some other CLIs serialize account failures to
+                    # stdout even when they exit nonzero. Inspect both bounded
+                    # streams so users see the actionable subscription error.
+                    # Classification scans the complete bounded streams. Codex
+                    # prints a normal `sandbox: read-only` banner before later
+                    # errors, so truncating/collapsing this text can turn an
+                    # unrelated provider failure into a false sandbox failure.
+                    detail = "\n".join(part for part in (stderr, stdout) if part)
+                    raise _local_exit_error(self.provider_id, detail, process.returncode)
                 if len(stdout.encode("utf-8")) > _MAX_RESPONSE_BYTES or len(stderr.encode("utf-8")) > _MAX_RESPONSE_BYTES:
                     raise ProviderError("provider_response_too_large", "Local agent response exceeded the safe limit.", False)
                 return _extract_local_document(self.provider_id, stdout, output_path)

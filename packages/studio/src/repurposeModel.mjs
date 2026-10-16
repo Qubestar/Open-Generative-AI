@@ -18,6 +18,14 @@ export const REPURPOSE_STAGE_LABELS = {
   render: 'Finish',
 };
 
+export const REPURPOSE_RERUNNABLE_STAGES = new Set([
+  'generate_candidates',
+  'rank',
+  'repair_boundaries',
+  'reframe',
+  'render',
+]);
+
 const terminalJobStates = new Set(['done', 'error', 'cancelled']);
 
 export function normalizeRepurposeError(error, fallback = 'The action could not be completed.') {
@@ -56,6 +64,7 @@ export function deriveRepurposeStages(manifest, jobs = []) {
       job,
       progress,
       runnable: precedingComplete && ['pending', 'failed'].includes(record.state) && !live,
+      rerunnable: precedingComplete && record.state === 'completed' && REPURPOSE_RERUNNABLE_STAGES.has(id) && !live,
       resumable: precedingComplete && record.state === 'running' && job?.state === 'running' && !job.active,
       cancellable: Boolean(live),
     };
@@ -78,6 +87,18 @@ export function mergeRepurposeProgress(current, event) {
 
 function byCandidate(items = []) {
   return new Map(items.map(item => [item.candidate_id, item]));
+}
+
+export function reviewCandidates(candidates, view = 'recommended') {
+  const ranked = candidates.some(candidate => candidate.metadata?.ranking);
+  return candidates.filter(candidate => view !== 'recommended' || !ranked || candidate.metadata?.ranking?.recommended)
+    .sort((left, right) => {
+      const a = left.metadata?.ranking;
+      const b = right.metadata?.ranking;
+      return Number(Boolean(b?.recommended)) - Number(Boolean(a?.recommended))
+        || (a?.overall_rank ?? Infinity) - (b?.overall_rank ?? Infinity)
+        || left.id.localeCompare(right.id);
+    });
 }
 
 export function joinRepurposeCandidates(manifest, artifacts = {}) {
@@ -110,7 +131,7 @@ export function joinRepurposeCandidates(manifest, artifacts = {}) {
   });
 }
 
-export function repurposeRenderEligibility(manifest) {
+export function repurposeRenderEligibility(manifest, preparedCandidates = null) {
   const candidates = manifest?.candidates || [];
   const selected = candidates.filter(candidate => candidate.selected);
   if (manifest?.stages?.reframe?.state !== 'completed') {
@@ -123,7 +144,47 @@ export function repurposeRenderEligibility(manifest) {
   if (invalid.length) {
     return { ok: false, reason: 'Every selected clip must be approved.', candidateIds: [] };
   }
+  const missing = preparedCandidates ? selected.filter(selectedCandidate => !preparedCandidates.some(candidate => candidate.id === selectedCandidate.id
+    && candidate.reframeV2?.output?.state === 'completed')) : [];
+  if (missing.length) {
+    return { ok: false, reason: `Generate previews and run Frame vertical for ${missing.map(candidate => candidate.id.replace('clip_', '#')).join(', ')} before Finish.`, candidateIds: [] };
+  }
   return { ok: true, reason: null, candidateIds: selected.map(candidate => candidate.id) };
+}
+
+export function repurposeCandidateSelectable(candidate, busy = false) {
+  return !busy && candidate?.decision === 'approved';
+}
+
+export function repurposeFramingChanged(manifest, artifact, mode) {
+  return manifest?.stages?.reframe?.state === 'completed'
+    && mode !== (artifact?.settings?.framing_mode || 'auto_crop');
+}
+
+export function repurposeRuntimeBlockReason(readiness) {
+  if (readiness?.ok === true) return null;
+  if (!readiness) return 'Local setup has not been checked yet. Click Recheck local setup.';
+  if (readiness.error) return `Local setup check failed: ${normalizeRepurposeError(readiness.error)}. Click Recheck local setup.`;
+  const missing = [['python', 'Python'], ['engine', 'Engine'], ['ffmpeg', 'FFmpeg'], ['ffprobe', 'FFprobe']]
+    .filter(([key]) => !readiness[key]?.ok).map(([, label]) => label);
+  return `Local setup check failed for ${missing.join(', ') || 'the runtime'}. Open Local setup for details, then click Recheck local setup.`;
+}
+
+export async function readRepurposeReadiness(bridge) {
+  try {
+    const result = await bridge.readiness();
+    if (!result?.ok || !result.readiness || typeof result.readiness.ok !== 'boolean') {
+      return { ok: false, error: result?.error || 'The app did not return a valid runtime check' };
+    }
+    return result.readiness;
+  } catch (error) {
+    return { ok: false, error: normalizeRepurposeError(error) };
+  }
+}
+
+export function repurposeReviewNextStep(manifest) {
+  return deriveRepurposeStages(manifest).find(stage => stage.runnable
+    && ['rank', 'repair_boundaries', 'reframe'].includes(stage.id)) || null;
 }
 
 export function bestRepurposeJob(jobs = []) {

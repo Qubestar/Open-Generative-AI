@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Perfect VFX Edit Decision Spec",
+  "description": "Single source of truth for one Perfect VFX run. The Director writes it, every render mode reads it. Nothing renders that is not in this file.",
+  "type": "object",
+  "required": ["version", "meta", "source", "brand", "events"],
+  "properties": {
+    "version": { "const": 1 },
+    "meta": {
+      "type": "object",
+      "required": ["project", "segmentType", "run"],
+      "properties": {
+        "project": { "type": "string", "description": "Project folder name, usually derived from the source clip's parent project folder" },
+        "segmentType": { "enum": ["intro", "chapter-card", "custom"] },
+        "customBrief": { "type": "string", "description": "For segmentType custom: the user's describe-what-you-want sentence. Sets emphasis only; all Director rules still apply." },
+        "run": { "type": "string", "description": "Run folder name, e.g. intro-01" },
+        "createdAt": { "type": "string", "description": "ISO date of the Director pass" },
+        "directorNotes": { "type": "string", "description": "One-paragraph summary of the treatment strategy for this section" }
+        ,"format": {
+          "type": "object",
+          "properties": {
+            "canvasClass": { "enum": ["portrait", "landscape", "square"] },
+            "platform": { "enum": ["youtube", "shorts", "tiktok", "reels", "generic"] },
+            "aspectRatio": { "type": "number" }
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["file", "durationSec", "width", "height", "fps"],
+      "properties": {
+        "file": { "type": "string", "description": "Absolute path to the pre-edited source section (not copied; referenced)" },
+        "durationSec": { "type": "number" },
+        "width": { "type": "integer" },
+        "height": { "type": "integer" },
+        "fps": { "type": "number" },
+        "transcriptSrt": { "type": "string", "description": "Path to the force-aligned SRT used by the Director" },
+        "audioMaxVolumeDb": { "type": "number", "description": "From the intake volumedetect check" }
+      }
+    },
+    "brand": {
+      "type": "object",
+      "description": "RESOLVED style snapshot: brand-kit values merged over theme defaults at spec time, so a render is reproducible even if the brand kit changes later.",
+      "required": ["theme"],
+      "properties": {
+        "theme": { "enum": ["simple-claude", "liquid-glass", "synthwave"] },
+        "kitSource": { "enum": ["brand-kit", "theme-defaults"], "description": "Where the values came from" },
+        "colors": { "type": "object", "additionalProperties": { "type": "string" } },
+        "fonts": { "type": "object" }
+      }
+    },
+    "events": {
+      "type": "array",
+      "description": "Graphic events only, sorted by startSec. TALKING_HEAD is the absence of an event and is never emitted.",
+      "items": {
+        "type": "object",
+        "required": ["id", "move", "tier", "startSec", "endSec", "anchor", "payload"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^evt-[0-9]{2,}$" },
+          "move": { "enum": ["CONCEPT_GRAPHIC", "SUBSCRIBE_CTA", "CTA_BANNER"] },
+          "tier": { "enum": ["conversion", "content"], "description": "conversion = SUBSCRIBE_CTA / CTA_BANNER. Conversion events win contested beats and may hold screen time past their anchor beat." },
+          "startSec": { "type": "number" },
+          "endSec": { "type": "number" },
+          "anchor": {
+            "type": "object",
+            "required": ["transcript"],
+            "properties": {
+              "cueIds": { "type": "array", "items": { "type": "integer" }, "description": "SRT cue numbers this event anchors to" },
+              "transcript": { "type": "string", "description": "The spoken words that earned this graphic. The script is the boss." },
+              "placement": { "enum": ["spoken", "fallback"], "description": "spoken = anchored to a line in the footage; fallback = default placement used because the footage never speaks a triggering line" },
+              "shot": { "enum": ["talking-head", "screen-share", "b-roll"], "description": "From the mandatory intake shot map. Gates layout variants: 75-split and split-screen require talking-head; screen-share/b-roll beats use overlay or full-screen." }
+            }
+          },
+          "position": {
+            "enum": ["bottom-center", "lower-third", "upper-left", "lower-left", "layout"],
+            "description": "Slot for the compact conversion pills (SUBSCRIBE_CTA bottom-center, CTA_BANNER lower-third, small, ~90 percent frame height). CONCEPT_GRAPHIC uses 'layout': its variant defines the whole frame arrangement."
+          },
+          "intent": { "enum": ["hook", "contrast", "process", "proof", "instruction", "transition", "conversion"], "description": "The rhetorical job of this visual beat." },
+          "visualThesis": { "type": "string", "description": "One sentence explaining what the viewer should notice and why this composition communicates it." },
+          "payload": { "type": "object", "description": "Move-specific content. See payload shapes below." },
+          "notes": { "type": "string", "description": "Why the Director chose this move for this beat" }
+        }
+      }
+    }
+  },
+  "payloadShapes": {
+    "CONCEPT_GRAPHIC": {
+      "variant": "split-screen | 75-split | full-screen | overlay (overlay = transparent-background statement over a directional scrim, screen content stays predominant; REQUIRED choice family for screen-share/b-roll shots)",
+      "zone": "overlay variant only: top | center | bottom (default bottom); picked by looking at the frame for the least-busy pocket",
+      "kind": "statement | icon-cards | chart | steps | table | comparison | list | list-strike (statement = one big spoken claim in display type; diagram kinds for lists; plain lists are the fallback)",
+      "text": "statement kind only: the claim, 2 to 7 words verbatim, may contain a {COUNT} token",
+      "emphasis": ["statement kind: words rendered in the pop color"],
+      "countTo": "statement kind: metric value for {COUNT}, eased 1s count-up", "countFrom": 0, "countPrefix": "$", "countSuffix": "K",
+      "eyebrow": "small letter-spaced label above the content, optional",
+      "title": "optional, used mainly by full-screen",
+      "items": [{ "text": "item", "negated": false, "revealSec": 0, "icon": "icon keyword (pencil, person, trash, gear, doc, chart, funnel, rocket, money, link, check, x); every item should carry one", "value": "number, chart kind only: bar height + synced counter", "prefix": "counter prefix, chart kind", "suffix": "counter suffix, chart kind" }],
+      "layoutNotes": "split-screen: footage right ~50 / panel left ~50. 75-split: footage in rounded portrait card right ~25 over themed textured field. full-screen: themed textured background comp, footage hidden, audio continues."
+    },
+    "SUBSCRIBE_CTA": { "label": "SUBSCRIBE", "bell": true, "clickSec": "word timestamp of the spoken ask verb; the cursor click lands here while the button enters at the build-up start", "styleNotes": "compact, bottom-center, YouTube red button (functional color, overrides theme accent), themed glass bell chip, cursor click + ripple + bell wiggle animation; enters at build-up start and holds 4s+ when material allows" },
+    "CTA_BANNER": { "text": "the offer, short", "icon": "link | download | comment | none" }
+  }
+}

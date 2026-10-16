@@ -105,6 +105,48 @@ test('resume skips submit when a handle is already checkpointed', async () => {
   assert.ok(!fetchImpl.calls.some(c => c.method === 'POST'), 'no re-submit on resume');
 });
 
+test('runJob queues a heavy job behind a held governor slot instead of failing immediately', async () => {
+  const store = new JobStore(tmp('vidmyo-run-heavy-'));
+  const holder = store.create({ type: 'render', params: {} });
+  const heldLease = store.admit(holder.id); // occupies the single heavy slot
+
+  const job = store.create({ type: 'render', params: {} });
+  const start = Date.now();
+  const runPromise = runJob(store, job.id, adapter(), {
+    outDir: tmp('vidmyo-out-'),
+    fetchImpl: fakeFalFetch({ polls: 0 }),
+    sleep: noSleep,
+    admitWaitMs: 2000,
+  });
+
+  await new Promise((r) => setTimeout(r, 200));
+  store.releaseLease(holder.id);
+  assert.ok(heldLease.token);
+
+  const res = await runPromise;
+  assert.equal(res.state, 'done', 'queued heavy job completes once the slot frees up');
+  assert.ok(Date.now() - start >= 150, 'must have actually waited in queue, not failed immediately');
+});
+
+test('runJob surfaces a clear admission error when the queue wait is exhausted', async () => {
+  const store = new JobStore(tmp('vidmyo-run-heavy-'));
+  const holder = store.create({ type: 'render', params: {} });
+  store.admit(holder.id); // occupies the single heavy slot for the whole test
+
+  const job = store.create({ type: 'render', params: {} });
+  await assert.rejects(
+    runJob(store, job.id, adapter(), {
+      outDir: tmp('vidmyo-out-'),
+      fetchImpl: fakeFalFetch({ polls: 0 }),
+      sleep: noSleep,
+      admitWaitMs: 150,
+    }),
+    /Resource limit reached/,
+  );
+  assert.equal(store.get(job.id).state, 'error');
+  assert.match(store.get(job.id).error, /Governor admission denied/);
+});
+
 test('timeout produces an error state, not a hang', async () => {
   const store = new JobStore(tmp('vidmyo-run-'));
   const job = store.create({ type: 'image', provider: 'fal', params: {} });

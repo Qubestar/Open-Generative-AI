@@ -37,7 +37,7 @@
       "required": ["schema", "prompt", "classification", "windowing"],
       "properties": {
         "schema": { "const": "candidate-artifact.v1" },
-        "prompt": { "const": "candidate-prompt.v1" },
+        "prompt": { "enum": ["candidate-prompt.v1", "candidate-prompt.v2"] },
         "classification": { "const": "content-classification.v1" },
         "windowing": { "const": "transcript-windowing.v1" }
       }

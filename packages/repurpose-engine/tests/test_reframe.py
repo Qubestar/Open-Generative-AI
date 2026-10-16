@@ -15,9 +15,34 @@ from vidmyo_repurpose.reframe import (
     REFRAME_ARTIFACT_RELATIVE_PATH,
     ReframeError,
     YuNetDetector,
+    _step_expression,
     plan_tracking,
     reframe_previews,
 )
+
+
+def test_long_tracking_expression_preserves_every_transition():
+    segments = [{"end_seconds": (index + 1) * 0.5, "x": (index * 7) % 30} for index in range(240)]
+    expression = _step_expression(segments, "x").replace("\\,", ",").replace("if(", "choose(")
+    # Evaluate only our generated numeric expression, never provider/user text.
+    for index in (0, 1, 119, 120, 238, 239):
+        for offset in (0, 0.001, 0.499):
+            assert eval(expression, {"__builtins__": {}}, {
+                "t": index * 0.5 + offset, "lt": lambda a, b: a < b,
+                "choose": lambda condition, a, b: a if condition else b,
+            }) == segments[index]["x"]
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg is not installed")
+def test_ffmpeg_accepts_maximum_length_tracking_expression():
+    segments = [{"end_seconds": (index + 1) * 0.5, "x": (index * 7) % 30} for index in range(240)]
+    expression = _step_expression(segments, "x")
+    result = subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+        "-i", "color=size=64x64:rate=2:duration=120", "-vf", f"crop=32:64:{expression}:0",
+        "-f", "null", "-",
+    ], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr[-1000:]
 
 
 class FakeDetector:
@@ -83,6 +108,94 @@ def prepared_reframe(tmp_path: Path, scores=(90, 20), candidate_ids=None):
 
 def face(x=700.0, confidence=0.95):
     return {"x": x, "y": 220.0, "width": 180.0, "height": 220.0, "confidence": confidence}
+
+
+def test_full_frame_skips_detection_and_is_distinct_from_crop_cache(tmp_path):
+    request = prepared_reframe(tmp_path)
+    media = ReframeMedia()
+    detector = FakeDetector()
+    cropped = reframe_previews(request, detector=detector, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    detector.calls = 0
+    request["options"] = {"framing_mode": "fit_full"}
+    fitted = reframe_previews(request, detector=detector, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert detector.calls == 0
+    assert not fitted.cache_hit
+    assert fitted.artifact["cache_key"] != cropped.artifact["cache_key"]
+    assert fitted.artifact["candidates"][0]["mode"] == "fit_full"
+    command = media.ffmpeg_calls[-1]
+    graph = command[command.index("-filter_complex") + 1]
+    assert "pad=1080:1920" in graph and "color=black" in graph
+    assert "crop=" not in graph and "boxblur" not in graph
+    assert reframe_previews(request, detector=detector, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe).cache_hit
+    request["options"] = {"framing_mode": "auto_crop"}
+    assert not reframe_previews(request, detector=detector, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe).cache_hit
+
+
+def test_explicit_side_stack_skips_detection_and_builds_two_panels(tmp_path):
+    request = prepared_reframe(tmp_path)
+    request["options"] = {"framing_mode": "stack_sides"}
+    media = ReframeMedia()
+    detector = FakeDetector()
+    result = reframe_previews(request, detector=detector, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe)
+    assert detector.calls == 0
+    assert result.artifact["candidates"][0]["mode"] == "stack_sides"
+    graph = media.ffmpeg_calls[-1][media.ffmpeg_calls[-1].index("-filter_complex") + 1]
+    assert "[0:v]split=2" in graph
+    assert "crop=trunc(iw/4)*2:ih:0:0" in graph
+    assert "crop=trunc(iw/4)*2:ih:iw-trunc(iw/4)*2:0" in graph
+    assert "vstack=inputs=2" in graph
+    assert reframe_previews(request, detector=detector, ffmpeg=media.ffmpeg, ffprobe=media.ffprobe).cache_hit
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg is not installed")
+def test_real_side_stack_places_left_half_above_right_half(tmp_path):
+    import cv2
+    from vidmyo_repurpose.reframe import _render
+    source = tmp_path / "side-by-side.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        "color=red:size=640x360:rate=5:duration=0.4,drawbox=x=320:y=0:w=320:h=360:color=blue:t=fill",
+        "-f", "lavfi", "-i", "sine=duration=0.4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest", str(source),
+    ], capture_output=True, check=True, timeout=20)
+    output = tmp_path / "stacked.vertical.mp4"
+    runner = lambda command: subprocess.run(command, capture_output=True, text=True, timeout=30)
+    record = _render(source, output, {"mode": "stack_sides"}, 0.4, 0.15, ffmpeg=runner, ffprobe=runner)
+    assert (record["width"], record["height"]) == (1080, 1920)
+    capture = cv2.VideoCapture(str(output))
+    try:
+        ok, frame = capture.read()
+        assert ok
+        upper, lower = frame[480, 540], frame[1440, 540]
+        assert upper[2] > 180 and upper[0] < 80
+        assert lower[0] > 180 and lower[2] < 80
+    finally:
+        capture.release()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg is not installed")
+def test_real_full_frame_has_black_bars_and_preserves_both_picture_edges(tmp_path):
+    import cv2
+    from vidmyo_repurpose.reframe import _render
+    source = tmp_path / "horizontal.mp4"
+    command = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+               "color=white:size=640x360:rate=5:duration=0.4,drawbox=x=0:y=0:w=80:h=360:color=red:t=fill,drawbox=x=560:y=0:w=80:h=360:color=blue:t=fill",
+               "-f", "lavfi", "-i", "sine=duration=0.4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(source)]
+    subprocess.run(command, capture_output=True, check=True, timeout=20)
+    output = tmp_path / "fit.vertical.mp4"
+    runner = lambda cmd: subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    record = _render(source, output, {"mode": "fit_full"}, 0.4, 0.15, ffmpeg=runner, ffprobe=runner)
+    assert (record["width"], record["height"]) == (1080, 1920)
+    capture = cv2.VideoCapture(str(output))
+    try:
+        ok, frame = capture.read()
+        assert ok
+        assert frame[100:500].max() < 5 and frame[1400:1800].max() < 5
+        assert frame[960, 30, 2] > 200  # Left red edge, not cropped.
+        assert frame[960, 1050, 0] > 200  # Right blue edge, not cropped.
+        assert frame[960, 540].min() > 220
+    finally:
+        capture.release()
 
 
 def test_single_face_plan_is_stable_bounded_and_safe():

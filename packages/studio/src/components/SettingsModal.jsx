@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { PROVIDERS, PROVIDER_CATEGORIES } from '../../../core/src/providers.js';
 import { IMAGE_SOURCES } from '../../../core/src/story.js';
+import { APPEARANCES } from '../appearance.mjs';
+import './SettingsModal.css';
 
 // Settings — provider API keys over the canonical @vidmyo/core catalog.
 // Desktop app: keys are encrypted into the macOS keychain via
@@ -106,7 +108,113 @@ function StoryImageSection({ savedKeys }) {
   );
 }
 
-export default function SettingsModal({ onClose, onCloudKeyChange }) {
+// Read-only "Engines & models" section (V2.6 Phase 5, Step 6). Surfaces what
+// the desktop actually has: the FFmpeg capability report, the pinned
+// HyperFrames engine, and managed model packages. Nothing here installs or
+// downloads — a `manifest-pending` package keeps its install button disabled
+// and states the reason.
+function EnginesModelsSection() {
+  const hasEngines = typeof window !== 'undefined' && !!window.engines?.isElectron && !!window.engines.modelPackagesStatus;
+  const hasPromo = typeof window !== 'undefined' && !!window.promo?.ffmpegCapabilities;
+  const [ffmpeg, setFfmpeg] = useState(null);
+  const [hf, setHf] = useState(null);
+  const [packages, setPackages] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        if (hasPromo) {
+          const r = await window.promo.ffmpegCapabilities();
+          if (mounted) setFfmpeg(r?.report || r || null);
+        }
+        if (hasEngines) {
+          const [hfRes, pkgRes] = await Promise.all([
+            window.engines.hyperframesStatus ? window.engines.hyperframesStatus() : Promise.resolve(null),
+            window.engines.modelPackagesStatus(),
+          ]);
+          if (!mounted) return;
+          if (hfRes) setHf(hfRes);
+          if (pkgRes?.ok) setPackages(pkgRes.packages || []);
+          else if (pkgRes?.error) setErr(pkgRes.error);
+        }
+      } catch (e) {
+        if (mounted) setErr(e.message);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [hasEngines, hasPromo]);
+
+  const ffmpegLine = ffmpeg
+    ? (ffmpeg.missing
+        ? 'FFmpeg niedostępny'
+        : `${ffmpeg.version || 'nieznana wersja'} · ${ffmpeg.licenseClass || '?'} · źródło: ${ffmpeg.source || '?'}`)
+    : (hasPromo ? 'Sprawdzanie…' : 'Dostępne w aplikacji desktopowej (Electron)');
+
+  return (
+    <section aria-label="Engines and models" data-testid="engines-models">
+      <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Engines &amp; models</div>
+      <div className="bg-white/[0.03] border border-white/[0.05] rounded-lg px-3.5 py-3 space-y-3">
+        <div>
+          <div className="text-[12px] font-semibold text-white">FFmpeg capabilities</div>
+          <div className="text-[11px] text-white/50 font-mono" data-testid="engines-ffmpeg">{ffmpegLine}</div>
+          {ffmpeg && !ffmpeg.missing && ffmpeg.filters && (
+            <div className="text-[10px] text-white/40 mt-1">
+              Napisy: drawtext:{ffmpeg.filters.drawtext ? ' tak' : ' nie'} · libass:{ffmpeg.libass ? ' tak' : ' nie'}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-white/[0.05] pt-3">
+          <div className="text-[12px] font-semibold text-white">HyperFrames engine</div>
+          <div className="text-[11px] text-white/50" data-testid="engines-hyperframes">
+            {hf
+              ? (hf.installed
+                  ? `Przypięty ${hf.pinned} (${hf.license}) — zainstalowany${hf.matchesPin ? '' : ' (niezgodna wersja)'}`
+                  : `Przypięty ${hf.pinned} —${' '}${hf.reason || 'nie zainstalowany'}`)
+              : 'Status dostępny w aplikacji desktopowej'}
+          </div>
+        </div>
+
+        <div className="border-t border-white/[0.05] pt-3">
+          <div className="text-[12px] font-semibold text-white">Model packages</div>
+          {packages && packages.length > 0 ? (
+            <div className="space-y-1.5 mt-1.5">
+              {packages.map((p) => (
+                <div key={p.name} className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-mono text-white/80 truncate">{p.name}</div>
+                    <div className="text-[10px] text-white/40">
+                      {p.status}{p.license ? ` · ${p.license}` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled
+                    title={p.installable ? 'Instalacja nie jest włączona w tym etapie' : 'manifest-pending: brak zweryfikowanego URL/SHA-256/licencji'}
+                    className="px-2.5 py-1 rounded-md bg-white/5 text-white/40 text-[10px] font-semibold border border-white/5 cursor-not-allowed"
+                  >
+                    Zainstaluj
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[11px] text-white/50 mt-1">Status dostępny w aplikacji desktopowej</div>
+          )}
+          {packages && packages.length === 0 && (
+            <div className="text-[10px] text-white/40 mt-1">Brak wpisów w katalogu paczek.</div>
+          )}
+        </div>
+
+        {err && <div className="text-[11px] text-amber-400/80 border-t border-white/[0.05] pt-2">Błąd: {err}</div>}
+      </div>
+    </section>
+  );
+}
+
+export default function SettingsModal({ onClose, onCloudKeyChange, appearance = 'dark', onAppearanceChange }) {
   const hasKeychain = typeof window !== 'undefined' && !!window.secureKeys?.isElectron;
   const [keys, setKeys] = useState({});        // providerId -> saved key (plaintext, in-memory only)
   const [drafts, setDrafts] = useState({});    // providerId -> input value
@@ -164,11 +272,11 @@ export default function SettingsModal({ onClose, onCloudKeyChange }) {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in-up"
          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="bg-[#0a0a0a] border border-white/10 rounded-xl w-full max-w-lg shadow-2xl flex flex-col max-h-[80vh]">
+      <div role="dialog" aria-modal="true" aria-label="Settings" style={{ background: 'var(--vm-panel)', color: 'var(--vm-text)', borderColor: 'var(--vm-line)' }} className="vidmyo-settings border rounded-xl w-full max-w-lg shadow-2xl flex flex-col max-h-[80vh]">
         <div className="p-6 pb-4 border-b border-white/5">
           <div className="flex items-start justify-between">
             <div>
-              <h2 className="text-white font-bold text-lg">Settings</h2>
+              <h2 style={{ color: 'var(--vm-text)' }} className="font-bold text-lg">Settings</h2>
               <p className="text-white/40 text-[12px] mt-1">
                 Bring-your-own-key providers.{' '}
                 {hasKeychain
@@ -185,8 +293,19 @@ export default function SettingsModal({ onClose, onCloudKeyChange }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-5">
+          {onAppearanceChange && (
+            <section aria-label="Appearance settings">
+              <label htmlFor="vidmyo-appearance" style={{ display: 'block', fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Appearance</label>
+              <select id="vidmyo-appearance" value={appearance} onChange={onAppearanceChange}
+                style={{ width: '100%', padding: 10, borderRadius: 8, background: 'var(--vm-input)', color: 'var(--vm-text)', border: '1px solid var(--vm-line)' }}>
+                {APPEARANCES.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+              <p style={{ color: 'var(--vm-muted)', fontSize: 12, marginTop: 8 }}>Changes apply immediately and are remembered on this device.</p>
+            </section>
+          )}
           <AgentLaunchSection />
           <StoryImageSection savedKeys={keys} />
+          <EnginesModelsSection />
           {grouped.map((cat) => (
             <div key={cat.id}>
               <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">{cat.label}</div>

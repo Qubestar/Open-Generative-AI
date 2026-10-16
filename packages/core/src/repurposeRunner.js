@@ -50,6 +50,14 @@ const STAGE_PLAN = {
   render: [{ id: 'render', command: 'render', inputs: ['transcript', 'boundary', 'reframeV1', 'reframeV2'], output: 'render' }],
 };
 
+const RERUNNABLE_STAGES = new Set([
+  'generate_candidates',
+  'rank',
+  'repair_boundaries',
+  'reframe',
+  'render',
+]);
+
 export function repurposeStageSubsteps(stage) {
   if (!STAGE_PLAN[stage]) throw new Error(`Unknown Repurpose stage: ${stage}`);
   return STAGE_PLAN[stage].map(step => step.id);
@@ -119,8 +127,8 @@ const STAGE_OPTIONS = {
   generate_candidates: ['provider', 'model'],
   rank: ['model'],
   repair_boundaries: ['candidate_ids', 'boundary_overrides'],
-  reframe: ['candidate_ids'],
-  render: ['candidate_ids', 'caption_style', 'captions_enabled', 'platforms'],
+  reframe: ['candidate_ids', 'framing_mode'],
+  render: ['candidate_ids', 'caption_style', 'caption_color', 'caption_font', 'captions_enabled', 'platforms', 'upscale_mode'],
 };
 
 function bounded(value) {
@@ -169,6 +177,18 @@ export function buildRepurposeSteps(project, stage, jobId, options = {}) {
   if (!encodedOptions || Buffer.byteLength(encodedOptions) > 64 * 1024) throw new Error('Repurpose stage options exceed 64 KiB');
   const unknownOptions = Object.keys(options).filter(key => !STAGE_OPTIONS[stage].includes(key));
   if (unknownOptions.length) throw new Error(`Unsupported ${stage} options: ${unknownOptions.join(', ')}`);
+  if (stage === 'reframe' && Object.hasOwn(options, 'framing_mode') && !['auto_crop', 'stack_sides', 'fit_full'].includes(options.framing_mode)) {
+    throw new Error('Framing mode must be auto_crop, stack_sides, or fit_full');
+  }
+  if (stage === 'render' && Object.hasOwn(options, 'caption_color') && options.caption_color !== 'preset' && !/^#[0-9a-f]{6}$/i.test(options.caption_color)) {
+    throw new Error('Caption color must be preset or a six-digit hex color');
+  }
+  if (stage === 'render' && Object.hasOwn(options, 'caption_font') && !['preset', 'montserrat', 'barlow_condensed', 'anton'].includes(options.caption_font)) {
+    throw new Error('Caption font must be preset, montserrat, barlow_condensed, or anton');
+  }
+  if (stage === 'render' && Object.hasOwn(options, 'upscale_mode') && !['off', 'lanczos_4k', 'lanczos_4k_sharp'].includes(options.upscale_mode)) {
+    throw new Error('Upscale mode must be off, lanczos_4k, or lanczos_4k_sharp');
+  }
   if (project.manifest.source.type !== 'local_file') throw new Error('Desktop Repurpose supports local_file sources only');
   const source = path.isAbsolute(project.manifest.source.uri)
     ? path.resolve(project.manifest.source.uri)
@@ -198,8 +218,75 @@ export function buildRepurposeSteps(project, stage, jobId, options = {}) {
 
 export function createRepurposeJob(store, { projectDir, stage, options = {} }) {
   const project = RepurposeProject.load(path.resolve(projectDir));
+  if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('Repurpose stage options must be an object');
+  const priorPreviewJob = stage === 'repair_boundaries' ? store.list({ type: REPURPOSE_JOB_TYPE })
+    .find(job => job.params?.stage === stage && path.resolve(job.params?.projectDir || '') === path.resolve(project.dir)) : null;
+  // The rail's Retry action carries no options. Preserve a failed explicit
+  // preview set rather than silently reverting to only the AI shortlist.
+  if (stage === 'repair_boundaries' && project.manifest.stages[stage].state === 'failed'
+    && options && Object.keys(options).length === 0 && priorPreviewJob?.params?.options?.candidate_ids) {
+    options = structuredClone(priorPreviewJob.params.options);
+  }
+  const extendPreviews = stage === 'repair_boundaries' && Object.hasOwn(options || {}, 'additional_candidate_ids');
+  if (extendPreviews) {
+    if (Object.keys(options).length !== 1 || !Array.isArray(options.additional_candidate_ids)
+      || !options.additional_candidate_ids.length || options.additional_candidate_ids.length > project.manifest.candidates.length) {
+      throw new Error('Generate preview requires only a non-empty additional_candidate_ids list');
+    }
+    const known = new Set(project.manifest.candidates.map(candidate => candidate.id));
+    if (options.additional_candidate_ids.some(id => !known.has(id))) throw new Error('Unknown preview candidate');
+    if (Object.values(project.manifest.stages).some(record => record.state === 'running')
+      || store.list({ type: REPURPOSE_JOB_TYPE }).some(job => ['queued', 'running'].includes(job.state)
+        && path.resolve(job.params?.projectDir || '') === path.resolve(project.dir))) {
+      throw new Error('Wait for the current project job to finish before generating another preview');
+    }
+    // Keep the shortlist and all previous explicit requests, even after a
+    // failed extraction cleared the manifest's artifact reference.
+    const retained = project.manifest.candidates.filter(candidate => candidate.metadata?.ranking?.recommended).map(candidate => candidate.id);
+    const overrides = {};
+    if (['error', 'cancelled'].includes(priorPreviewJob?.state)) {
+      retained.push(...(priorPreviewJob.params.options?.candidate_ids || []).filter(id => known.has(id)));
+    }
+    const boundaryPath = insideRepurposeProject(project.dir, ARTIFACTS.boundary[1]);
+    if (fs.existsSync(boundaryPath)) {
+      const boundary = JSON.parse(fs.readFileSync(boundaryPath, 'utf8'));
+      if (boundary.source?.fingerprint !== project.manifest.source.fingerprint
+        || !Array.isArray(boundary.requested_candidate_ids)
+        || boundary.requested_candidate_ids.some(id => !known.has(id))) {
+        throw new Error('Existing preview requests are stale; repair the project before adding a preview');
+      }
+      retained.push(...boundary.requested_candidate_ids);
+      for (const item of boundary.candidates || []) {
+        if (known.has(item.candidate_id) && item.repair?.override_applied) {
+          overrides[item.candidate_id] = {
+            first_word_id: item.repaired_span?.first_word_id,
+            last_word_id: item.repaired_span?.last_word_id,
+          };
+        }
+      }
+    }
+    if (['error', 'cancelled'].includes(priorPreviewJob?.state)) {
+      for (const [id, override] of Object.entries(priorPreviewJob.params.options?.boundary_overrides || {})) {
+        if (known.has(id)) overrides[id] = structuredClone(override);
+      }
+    }
+    options = { candidate_ids: [...new Set([...retained, ...options.additional_candidate_ids])],
+      ...(Object.keys(overrides).length ? { boundary_overrides: overrides } : {}) };
+  }
+  // Selection is an editorial choice, not a claim that media already exists.
+  // Include manual selections in the normal Cut previews run, even when the
+  // AI shortlist is empty. Explicit and retry requests keep their own scope.
+  if (stage === 'repair_boundaries' && !Object.hasOwn(options, 'candidate_ids')
+    && project.manifest.candidates.some(candidate => candidate.selected && candidate.decision === 'approved')) {
+    options = { ...options, candidate_ids: project.manifest.candidates
+      .filter(candidate => candidate.metadata?.ranking?.recommended
+        || (candidate.selected && candidate.decision === 'approved'))
+      .map(candidate => candidate.id) };
+  }
   const record = project.manifest.stages[stage];
-  if (!record || !['pending', 'failed'].includes(record.state)) {
+  const rerunStage = record?.state === 'completed' && !extendPreviews && RERUNNABLE_STAGES.has(stage);
+  const rerender = stage === 'render' && rerunStage;
+  if (!record || !['pending', 'failed', ...(extendPreviews || rerunStage ? ['completed'] : [])].includes(record.state)) {
     throw new Error(`Repurpose stage ${stage} is not retryable from ${record?.state || 'unknown'}`);
   }
   // Validate prerequisites and source before creating durable state. The real
@@ -209,7 +296,12 @@ export function createRepurposeJob(store, { projectDir, stage, options = {} }) {
     type: REPURPOSE_JOB_TYPE,
     provider: 'local-python',
     project: project.manifest.id,
-    params: { projectDir: path.resolve(project.dir), stage, options: structuredClone(options) },
+    params: {
+      projectDir: path.resolve(project.dir), stage, options: structuredClone(options),
+      ...(extendPreviews ? { extendPreviews: true } : {}),
+      ...(rerunStage ? { rerunStage: true } : {}),
+      ...(rerender ? { rerender: true } : {}),
+    },
   });
 }
 
@@ -394,13 +486,16 @@ function artifactForStage(stage) {
   }[stage];
 }
 
-function applyCompletedStage(project, stage) {
+function applyCompletedStage(project, stage, { freshCandidates = false } = {}) {
   const [_kind, relativePath] = artifactForStage(stage);
   const artifactPath = insideRepurposeProject(project.dir, relativePath);
   if (!fs.existsSync(artifactPath)) throw new Error(`Completed worker artifact is missing: ${relativePath}`);
   const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
   if (stage === 'ingest') return project.applyIngestArtifact(artifact, { artifactPath: relativePath });
-  if (stage === 'generate_candidates') return project.applyCandidateArtifact(artifact, { artifactPath: relativePath });
+  if (stage === 'generate_candidates') return project.applyCandidateArtifact(artifact, {
+    artifactPath: relativePath,
+    preserveDecisions: !freshCandidates,
+  });
   if (stage === 'rank') return project.applyRankingArtifact(artifact, { artifactPath: relativePath });
   if (stage === 'render') return project.applyRenderArtifact(artifact, { artifactPath: relativePath });
   project.completeStage(stage, { artifact: relativePath });
@@ -442,6 +537,7 @@ function execute(execFileImpl, command, args, options) {
 export async function inspectRepurposeReadiness({
   python = DEFAULT_REPURPOSE_PYTHON,
   engineDir = DEFAULT_REPURPOSE_ENGINE_DIR,
+  modelName = null,
   modelCache = null,
   execFileImpl = nodeExecFile,
   extraEnv = {},
@@ -461,6 +557,7 @@ export async function inspectRepurposeReadiness({
     execute(execFileImpl, 'ffprobe', ['-version'], options),
   ]);
   const doctorArgs = ['-m', 'vidmyo_repurpose.cli', 'doctor'];
+  if (modelName) doctorArgs.push('--model', modelName);
   if (modelCache) doctorArgs.push('--model-cache', modelCache);
   const doctor = await execute(execFileImpl, python, doctorArgs, options);
   let model = null;
@@ -496,6 +593,22 @@ export async function runRepurposeJob(store, jobId, {
       if (project.manifest.stages[stage].state === 'running') {
         store.log(jobId, 'recovering queued job after its manifest stage already entered running');
       } else {
+        if (job.params.extendPreviews && stage === 'repair_boundaries') {
+          // Invalidate status, not files or editorial decisions. Workers reuse
+          // validated previews; framing/exports must be rerun for the new set.
+          for (const downstream of REPURPOSE_STAGES.slice(REPURPOSE_STAGES.indexOf(stage))) {
+            project.manifest.stages[downstream] = { state: 'pending', artifact: null, error: null };
+          }
+          project.save();
+        }
+        if (job.params.rerunStage || (job.params.rerender && stage === 'render')) {
+          // Reopen this stage and every dependent stage, but preserve files and
+          // editorial state until replacement artifacts complete successfully.
+          for (const downstream of REPURPOSE_STAGES.slice(REPURPOSE_STAGES.indexOf(stage))) {
+            project.manifest.stages[downstream] = { state: 'pending', artifact: null, error: null };
+          }
+          project.save();
+        }
         project.startStage(stage);
       }
       store.setState(jobId, 'running');
@@ -524,7 +637,9 @@ export async function runRepurposeJob(store, jobId, {
       failRunningStage(projectDir, stage, 'cancelled; retry the stage to resume valid cached work');
       return store.get(jobId);
     }
-    const result = applyCompletedStage(RepurposeProject.load(projectDir), stage);
+    const result = applyCompletedStage(RepurposeProject.load(projectDir), stage, {
+      freshCandidates: Boolean(job.params.rerunStage && stage === 'generate_candidates'),
+    });
     store.checkpoint(jobId, 'manifestStage', {
       stage,
       state: result.manifest.stages[stage].state,

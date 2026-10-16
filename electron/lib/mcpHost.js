@@ -15,17 +15,20 @@
 //   - every request needs a bearer token, compared in constant time
 //   - the token is persisted 0600 so the agent's registration survives a restart
 //   - the token authorizes CALLING tools, not READING keys: no tool returns a
-//     provider key, so a leaked token can spend credits but can't exfiltrate them
+//     provider key. Paid fal/Agnes generation additionally requires a native
+//     per-request human confirmation; a bearer token is not spending approval.
 
 const http = require('node:http');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const fs = require('node:fs');
+const { execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { app } = require('electron');
+const { app, dialog } = require('electron');
 const { getSecret } = require('./secrets');
 const { validateMcpRequest } = require('./mcpSecurity');
 const { resolveRuntimePaths } = require('./runtimePaths');
+const { confirmProviderGeneration } = require('./providerConsent');
 
 // 7861 is Video Delta's engine — take the next one and keep it STABLE across
 // restarts, because agents register a fixed URL.
@@ -77,6 +80,8 @@ async function start() {
     const { createHttpMcp } = await import(pathToFileURL(entry).href);
     const serviceEntry = path.join(runtime.mcpDir, 'lib', 'repurposeService.js');
     const { createRepurposeMcpService } = await import(pathToFileURL(serviceEntry).href);
+    const cleanerServiceEntry = path.join(runtime.mcpDir, 'lib', 'cleanerService.js');
+    const { createCleanerMcpService } = await import(pathToFileURL(cleanerServiceEntry).href);
 
     const cfg = readHostConfig();
     const token = cfg.token || crypto.randomBytes(32).toString('hex');
@@ -85,6 +90,30 @@ async function start() {
       secrets: (providerId) => getSecret(providerId),
       engineDir: runtime.repurposeEngineDir,
     });
+    const {createVfxMcpService} = await import(pathToFileURL(path.join(runtime.mcpDir,'lib','vfxService.js')).href);
+    const vfxService = createVfxMcpService({repurposeEngineDir:runtime.repurposeEngineDir,vfxEngineDir:path.join(runtime.packaged?process.resourcesPath:runtime.repoRoot,'packages','vfx-engine')});
+    const cleanerService = createCleanerMcpService({ repurposeService, engineDir: runtime.repurposeEngineDir });
+    // Translate Video: the hosted server injects the canonical Voicebox narration
+    // implementation (electron/lib/voicebox.js) into the core engines so the
+    // desktop path has exactly one voicebox client. Both surfaces still run the
+    // same @vidmyo/core pipeline.
+    const translateServiceEntry = path.join(runtime.mcpDir, 'lib', 'translateService.js');
+    const { createTranslateMcpService } = await import(pathToFileURL(translateServiceEntry).href);
+    const coreEntry = path.join(runtime.coreDir, 'index.js');
+    const core = await import(pathToFileURL(coreEntry).href);
+    const voicebox = require('./voicebox');
+    const runConverter = (command, args) => new Promise((resolve, reject) => {
+      execFile(command, args, { maxBuffer: 8 * 1024 * 1024 }, error => (error ? reject(error) : resolve()));
+    });
+    const translateService = createTranslateMcpService({
+      engines: core.createTranslateEngines({
+        voiceboxNarrate: (request) => voicebox.createVoiceboxNarration({
+          ...request,
+          approved: true,
+          run: request.run || runConverter,
+        }),
+      }),
+    });
     const mcp = await createHttpMcp({
       // The whole point: keys come from the OS keychain, in-process.
       secrets: (providerId) => getSecret(providerId),
@@ -92,8 +121,12 @@ async function start() {
         const s = readStoryConfig();
         return { imageSource: s.imageSource, imageModel: s.imageModel };
       },
+      confirmGeneration: request => confirmProviderGeneration(dialog,request),
       keyHint: 'Vidmyo → Settings → Providers',
       repurposeService,
+      cleanerService,
+      translateService,
+      vfxService,
     });
 
     const httpServer = http.createServer((req, res) => {
@@ -128,7 +161,7 @@ async function start() {
 
     const url = `http://${HOST}:${port}/mcp`;
     writeHostConfig({ token, port });
-    state = { httpServer, mcp, port, token, url };
+    state = { httpServer, mcp, port, token, url, translateService };
     return { ok: true, url, token, port };
   } catch (err) {
     return { ok: false, error: String(err.message || err) };
@@ -137,8 +170,9 @@ async function start() {
 
 async function stop() {
   if (!state) return;
-  const { httpServer, mcp } = state;
+  const { httpServer, mcp, translateService } = state;
   state = null;
+  if (translateService?.close) await translateService.close().catch(() => {});
   await new Promise((resolve) => httpServer.close(resolve));
   await mcp.close().catch(() => {});
 }

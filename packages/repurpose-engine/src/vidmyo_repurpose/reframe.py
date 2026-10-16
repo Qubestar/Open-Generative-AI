@@ -322,10 +322,14 @@ def plan_tracking(detections: list[list[dict[str, float]]], times: list[float], 
 
 
 def _step_expression(segments: list[dict[str, Any]], field: str) -> str:
-    expression = str(segments[-1][field])
-    for segment in reversed(segments[:-1]):
-        expression = f"if(lt(t\\,{segment['end_seconds']:.6f})\\,{segment[field]}\\,{expression})"
-    return expression
+    # A linear chain exceeds FFmpeg's expression recursion limit on long clips.
+    # A balanced tree preserves every boundary with logarithmic nesting depth.
+    if len(segments) == 1:
+        return str(segments[0][field])
+    middle = len(segments) // 2
+    left = _step_expression(segments[:middle], field)
+    right = _step_expression(segments[middle:], field)
+    return f"if(lt(t\\,{segments[middle - 1]['end_seconds']:.6f})\\,{left}\\,{right})"
 
 
 def _render(input_path: Path, destination: Path, plan: dict[str, Any], duration: float, tolerance: float, *, ffmpeg: Callable[[list[str]], subprocess.CompletedProcess[str]], ffprobe: Callable[[list[str]], subprocess.CompletedProcess[str]]) -> dict[str, Any]:
@@ -336,6 +340,22 @@ def _render(input_path: Path, destination: Path, plan: dict[str, Any], duration:
         x_expr, y_expr = _step_expression(segments, "x"), _step_expression(segments, "y")
         crop = segments[0]
         filter_complex = f"[0:v]crop={crop['width']}:{crop['height']}:{x_expr}:{y_expr},scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:flags=lanczos,setsar=1[v]"
+    elif plan["mode"] == "fit_full":
+        filter_complex = (
+            f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            f"pad={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v]"
+        )
+    elif plan["mode"] == "stack_sides":
+        filter_complex = (
+            "[0:v]split=2[left_input][right_input];"
+            "[left_input]crop=trunc(iw/4)*2:ih:0:0,"
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT // 2}:force_original_aspect_ratio=increase:force_divisible_by=2,"
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT // 2},setsar=1[upper];"
+            "[right_input]crop=trunc(iw/4)*2:ih:iw-trunc(iw/4)*2:0,"
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT // 2}:force_original_aspect_ratio=increase:force_divisible_by=2,"
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT // 2},setsar=1[lower];"
+            "[upper][lower]vstack=inputs=2[v]"
+        )
     else:
         filter_complex = (
             f"[0:v]split=2[background][foreground];"
@@ -380,8 +400,11 @@ def reframe_previews(
     progress({"phase": "validating_inputs", "fraction": 0.02, "cache_hit": False, "message": "validating completed Issue 6 previews"})
     project, boundary, completed = _load(request, ffprobe)
     options = request["options"]
-    if not isinstance(options, dict) or set(options) - {"candidate_ids"}:
-        raise ContractValidationError("options: only candidate_ids is supported")
+    if not isinstance(options, dict) or set(options) - {"candidate_ids", "framing_mode"}:
+        raise ContractValidationError("options: only candidate_ids and framing_mode are supported")
+    framing_mode = options.get("framing_mode", "auto_crop")
+    if framing_mode not in {"auto_crop", "stack_sides", "fit_full"}:
+        raise ContractValidationError("options.framing_mode: must be auto_crop, stack_sides, or fit_full")
     completed_by_id = {item["candidate_id"]: item for item in completed}
     default_ids = [item for item in boundary["requested_candidate_ids"] if item in completed_by_id]
     requested = options.get("candidate_ids", default_ids)
@@ -389,6 +412,7 @@ def reframe_previews(
         raise ContractValidationError("options.candidate_ids: must be unique completed retained preview ids")
     tolerance = float(boundary["settings"]["duration_tolerance_seconds"])
     settings = {
+        "framing_mode": framing_mode,
         "output_width": OUTPUT_WIDTH, "output_height": OUTPUT_HEIGHT,
         "sample_interval_seconds": SAMPLE_INTERVAL, "confidence_threshold": CONFIDENCE_THRESHOLD,
         "coverage_threshold": COVERAGE_THRESHOLD, "safe_zone_margin": SAFE_ZONE_MARGIN,
@@ -415,11 +439,15 @@ def reframe_previews(
             "duration_seconds": round(source_item["duration"], 6),
             "width": source_item["width"], "height": source_item["height"],
         }
-        times = _sample_times(source_item["duration"])
-        if detector_instance is None:
-            detector_instance = YuNetDetector()
-        detections = detector_instance.detect(source_item["path"], times)
-        plan = plan_tracking(detections, times, source_item["width"], source_item["height"], source_item["duration"])
+        if framing_mode in {"fit_full", "stack_sides"}:
+            plan = {"mode": framing_mode, "fallback_reason": None, "coverage": 0.0,
+                    "mean_confidence": 0.0, "safe_zone_fraction": 1.0, "samples": [], "segments": []}
+        else:
+            times = _sample_times(source_item["duration"])
+            if detector_instance is None:
+                detector_instance = YuNetDetector()
+            detections = detector_instance.detect(source_item["path"], times)
+            plan = plan_tracking(detections, times, source_item["width"], source_item["height"], source_item["duration"])
         output_key = _hash({"input": input_record, "versions": VERSIONS, "settings": settings, "plan": plan})
         output = {"requested": is_requested, "state": "pending" if is_requested else "not_requested", "path": None, "fingerprint": None, "duration_seconds": None, "width": None, "height": None}
         destination = project / REFRAME_DIRECTORY / f"{candidate_id}.vertical.mp4"

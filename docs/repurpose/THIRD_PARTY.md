@@ -16,6 +16,15 @@ Vidmyo does not copy ClipsAI, OpenSource Clipping, PodCLI, or other clipping
 pipelines. They informed product research only. In particular, no AGPL code or
 token-gated diarization component is linked into this package.
 
+## Perfect Cuts waveform cleanup
+
+- Project: Perfect Cuts v2 by Systems by Vic
+- Upstream: https://systemsbyvic.com
+- License: MIT
+- Use: its published waveform speech-block method and reference start/end thresholds informed Cleaner’s local, conservative boundary pass
+- Modifications: integrated with Vidmyo’s faster-whisper transcript contracts, provider adapters, reversible review plan, FFmpeg renderer, and MCP surface; atypical audio fails over to transcript boundaries
+- Notice: the upstream MIT text ships as `models/PERFECT_CUTS_LICENSE`
+
 ## MCP exposure audit (SAI-20)
 
 The Repurpose MCP surface adds no copied third-party media or clipping code. It

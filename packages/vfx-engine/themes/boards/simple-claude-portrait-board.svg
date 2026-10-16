@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <rect width="1080" height="1920" fill="#FAF9F5"/><rect x="72" y="92" width="936" height="1736" rx="52" fill="#fff" stroke="#E8E6E1" stroke-width="4"/>
+  <text x="124" y="180" font-family="Arial" font-size="30" letter-spacing="9" fill="#D97757">PORTRAIT SYSTEM</text><text x="124" y="268" font-family="Arial" font-weight="700" font-size="72" fill="#1F1E1D">SIMPLE CLAUDE</text>
+  <rect x="305" y="345" width="470" height="690" rx="34" fill="#1F1E1D"/><circle cx="540" cy="610" r="128" fill="#E8E6E1"/><rect x="398" y="742" width="284" height="220" rx="108" fill="#E8E6E1"/>
+  <circle cx="136" cy="1116" r="9" fill="#D97757"/><text x="168" y="1128" font-family="Arial" font-size="28" letter-spacing="8" fill="#1F1E1D">THE PROMISE</text><text x="124" y="1235" font-family="Arial" font-weight="700" font-size="78" fill="#1F1E1D">ONE CLEAR</text><text x="124" y="1325" font-family="Arial" font-weight="700" font-size="78" fill="#D97757">FOCAL IDEA</text>
+  <rect x="124" y="1420" width="832" height="112" rx="24" fill="#FAF9F5" stroke="#E8E6E1"/><text x="178" y="1490" font-family="Arial" font-weight="700" font-size="36" fill="#1F1E1D">01  Creator above, message below</text>
+  <rect x="124" y="1560" width="832" height="112" rx="24" fill="#FAF9F5" stroke="#E8E6E1"/><text x="178" y="1630" font-family="Arial" font-weight="700" font-size="36" fill="#1F1E1D">02  Steps stack vertically</text>
+  <rect x="124" y="1700" width="832" height="66" rx="33" fill="#D97757"/><text x="540" y="1745" text-anchor="middle" font-family="Arial" font-weight="700" font-size="28" fill="#1F1E1D">KEY CONTENT STAYS IN THE SAFE ZONE</text>
+</svg>

@@ -13,9 +13,14 @@ dependencies = [
   "jsonschema>=4.23,<5",
   "numpy>=1.26,<3",
   "opencv-python-headless>=4.10,<5",
+  "Pillow>=11,<13",
 ]
 
 [project.optional-dependencies]
+alignment = [
+  "torch>=2.6,<3",
+  "transformers>=4.44,<6",
+]
 test = [
   "pytest>=8,<9",
 ]
@@ -28,6 +33,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+vidmyo_repurpose = ["fonts/*.ttf", "fonts/*-OFL.txt"]
 
 [tool.setuptools.data-files]
 "share/vidmyo-repurpose/schemas" = ["schemas/*.json"]

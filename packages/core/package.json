@@ -11,9 +11,10 @@
     "./jobs": "./src/jobs.js",
     "./project": "./src/project.js",
     "./repurpose": "./src/repurpose.js",
-    "./repurpose-runner": "./src/repurposeRunner.js"
+    "./repurpose-runner": "./src/repurposeRunner.js",
+    "./entitlement": "./src/entitlement.js"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node test/_setup/runIsolated.mjs"
   }
 }

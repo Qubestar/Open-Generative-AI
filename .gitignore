@@ -55,3 +55,11 @@ packages/repurpose-engine/build/
 # Local Vidmyo runtime and generated media (never commit)
 .vidmyo/
 videos/
+
+# Built by native/screen-capture/build.sh
+electron/bin/vidmyo-capture
+
+# Local test media, renders and tool output (large — never commit)
+My Stuff and Tests/
+output/
+.playwright-cli/

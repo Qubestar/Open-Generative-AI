@@ -12,7 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const { createRepurposeBridge } = require('../../../electron/lib/repurposeBridge.js');
 const tempDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
-function harness({ secret = '', detectedAgents = [] } = {}) {
+function harness({ secret = '', detectedAgents = [], execFileImpl = null } = {}) {
   const handlers = new Map();
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn) };
   const jobsDir = tempDir('vidmyo-bridge-jobs-');
@@ -43,10 +43,10 @@ function harness({ secret = '', detectedAgents = [] } = {}) {
       detectAll: async () => detectedAgents,
       preferredAgentId: async () => detectedAgents.find(agent => agent.installed)?.id || null,
     },
-    execFileImpl: (_command, args, _options, callback) => {
+    execFileImpl: execFileImpl || ((_command, args, _options, callback) => {
       if (args.includes('doctor')) callback(null, JSON.stringify({ ok: false, status: 'missing' }), '');
       else callback(null, 'ready', '');
-    },
+    }),
   });
   return { bridge, handlers, sent, jobsDir, userData, runOptions };
 }
@@ -60,7 +60,7 @@ test('bridge registers once and exposes only structured Repurpose handlers', () 
     'repurpose:get-job', 'repurpose:list-jobs', 'repurpose:pick-project-dir',
     'repurpose:pick-source', 'repurpose:read-artifact', 'repurpose:read-media', 'repurpose:readiness',
     'repurpose:resume-job', 'repurpose:reveal', 'repurpose:run-stage',
-    'repurpose:select-candidate', 'repurpose:set-candidate-decision', 'repurpose:set-config',
+    'repurpose:select-candidate', 'repurpose:set-candidate-decision', 'repurpose:set-config', 'repurpose:setup-model',
   ]);
 });
 
@@ -127,7 +127,7 @@ test('candidate jobs require and persist one detected analysis provider', async 
   assert.equal(started.ok, true);
   await new Promise(resolve => setImmediate(resolve));
   const stored = new actualCore.JobStore(jobsDir).get(started.job.id);
-  assert.match(stored.params.options.model, /^configured-default@1\.2\.3\.run-\d+$/);
+  assert.match(stored.params.options.model, /^configured-default:1\.2\.3:run-\d+$/);
   assert.equal(stored.params.options.provider, 'codex');
   assert.equal(runOptions[0].extraEnv.VIDMYO_AGENT_CLI, '/opt/codex');
   assert.equal(runOptions[0].extraEnv.VIDMYO_AGENT_VERSION, undefined);
@@ -216,12 +216,15 @@ test('readiness is read-only and config cannot become generic process execution'
   const { bridge, handlers, userData } = harness({ secret: 'stored-key', detectedAgents });
   bridge.register();
   const config = await handlers.get('repurpose:set-config')(null, {
-    modelCache: path.join(userData, 'models'), analysisProvider: 'codex', openRouterModel: 'openai/gpt-5',
+    modelCache: path.join(userData, 'models'), transcriptionModel: 'small.en',
+    analysisProvider: 'codex', openRouterModel: 'openai/gpt-5',
   });
   assert.equal(config.ok, true);
+  assert.equal(config.config.transcriptionModel, 'small.en');
   assert.equal(config.config.analysisProvider, 'codex');
   assert.equal(config.config.openRouterModel, 'openai/gpt-5');
   assert.equal((await handlers.get('repurpose:set-config')(null, { analysisProvider: 'opencode' })).ok, false);
+  assert.equal((await handlers.get('repurpose:set-config')(null, { transcriptionModel: '../small' })).ok, false);
   assert.equal((await handlers.get('repurpose:set-config')(null, { python: 'python3' })).ok, false);
   assert.equal((await handlers.get('repurpose:set-config')(null, { arbitrary: 'value' })).ok, false);
   const readiness = await handlers.get('repurpose:readiness')();
@@ -233,6 +236,57 @@ test('readiness is read-only and config cannot become generic process execution'
   assert.deepEqual(readiness.readiness.analysis.agents, detectedAgents);
 });
 
+test('model setup runs the bounded explicitly selected model command once for concurrent requests', async () => {
+  const calls = [];
+  let finishSetup;
+  const execFileImpl = (command, args, options, callback) => {
+    calls.push({ command, args, options });
+    if (args.includes('setup-model')) finishSetup = () => callback(null, '{"event":"completed"}', '');
+    else if (args.includes('doctor')) callback(null, JSON.stringify({ ok: false, status: 'missing' }), '');
+    else callback(null, 'ready', '');
+  };
+  const { bridge, handlers, userData } = harness({ execFileImpl });
+  bridge.register();
+  const modelCache = path.join(userData, 'models');
+  await handlers.get('repurpose:set-config')(null, { modelCache, transcriptionModel: 'small.en' });
+
+  const first = handlers.get('repurpose:setup-model')();
+  const second = handlers.get('repurpose:setup-model')();
+  await new Promise(resolve => setImmediate(resolve));
+  const setupCalls = calls.filter(call => call.args.includes('setup-model'));
+  assert.equal(setupCalls.length, 1);
+  assert.deepEqual(setupCalls[0].args, [
+    '-m', 'vidmyo_repurpose.cli', 'setup-model', '--model', 'small.en', '--model-cache', modelCache,
+  ]);
+  assert.equal(setupCalls[0].options.timeout, 30 * 60 * 1000);
+  finishSetup();
+  assert.deepEqual(await first, { ok: true });
+  assert.deepEqual(await second, { ok: true });
+});
+
+test('transcribe jobs persist the selected local model and direct model directory', async () => {
+  const { bridge, handlers, jobsDir } = harness();
+  bridge.register();
+  const dir = tempDir('vidmyo-bridge-transcribe-model-');
+  const source = path.join(dir, 'source.mp4');
+  fs.writeFileSync(source, 'media');
+  const project = actualCore.RepurposeProject.create(dir, { source: { type: 'local_file', uri: source } });
+  project.manifest.stages.ingest = { state: 'completed', artifact: 'artifacts/ingest.json', error: null };
+  project.save();
+  bridge.authorizeProject(dir);
+  const modelDir = path.join(dir, 'existing-small-en');
+  await handlers.get('repurpose:set-config')(null, {
+    modelCache: modelDir, transcriptionModel: 'small.en',
+  });
+
+  const started = await handlers.get('repurpose:run-stage')(null, dir, 'transcribe', {});
+
+  assert.equal(started.ok, true);
+  const stored = new actualCore.JobStore(jobsDir).get(started.job.id);
+  assert.equal(stored.params.options.model, 'small.en');
+  assert.equal(stored.params.options.model_cache, modelDir);
+});
+
 test('preload surface names every narrow channel and exposes no generic invoke helper', () => {
   const preload = fs.readFileSync(path.resolve(here, '../../../electron/preload.js'), 'utf8');
   assert.match(preload, /exposeInMainWorld\('repurpose'/);
@@ -240,6 +294,7 @@ test('preload surface names every narrow channel and exposes no generic invoke h
     'pick-source', 'pick-project-dir', 'create', 'get', 'run-stage', 'resume-job',
     'cancel-job', 'get-job', 'list-jobs', 'set-candidate-decision', 'select-candidate',
     'read-artifact', 'read-media', 'reveal', 'get-config', 'set-config', 'readiness',
+    'setup-model',
   ]) assert.match(preload, new RegExp(`repurpose:${channel}`));
   assert.doesNotMatch(preload, /repurpose[^\n]+invoke:\s*ipcRenderer\.invoke/);
 });

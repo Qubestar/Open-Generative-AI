@@ -1,0 +1,71 @@
+{
+  "name": "synthwave",
+  "label": "Synthwave",
+  "isDefault": false,
+  "boardRef": "boards/synthwave-board.png",
+  "portraitBoardRef": "boards/synthwave-portrait-board.svg",
+  "vibe": "CINEMATIC 80s retro futurism. Atmosphere and lighting do the work, never vector neon stickers. Smoked glass, volumetric haze, true black depth, film grain. Album-cover expensive, not party-flyer corny.",
+  "colors": {
+    "void": "#0B0714",
+    "violet": "#8B3DFF",
+    "magenta": "#E13FD4",
+    "cyan": "#4DE1FF",
+    "ember": "#FF9E4D",
+    "panel": "rgba(10,7,20,0.72)",
+    "panelText": "#FFFFFF",
+    "accent": "#E13FD4"
+  },
+  "fonts": {
+    "headline": { "family": "Oswald", "weight": 600, "source": "google", "fallback": "Impact", "treatment": "tall condensed caps with horizontal scanline fade from violet to pale white" },
+    "body": { "family": "Poppins", "weight": 300, "source": "google", "fallback": "Segoe UI", "treatment": "wide letter-spacing on sub-labels" }
+  },
+  "material": {
+    "panelRadiusPx": 14,
+    "panelOpacity": 0.9,
+    "backdropBlurPx": 10,
+    "panelBorder": "1px solid rgba(255,255,255,0.08)",
+    "edgeGlow": "soft magenta or cyan per component, restrained bloom, never a hard neon outline",
+    "panelShadow": "0 10px 36px rgba(0,0,0,0.6)",
+    "texture": "subtle film grain over everything"
+  },
+  "motion": {
+    "inMs": 420,
+    "outMs": 380,
+    "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+    "entrance": "glow-bloom-in (light arrives before the panel)",
+    "exit": "fade-with-bloom",
+    "rest": "subtle glow pulse + slow haze drift behind panels",
+    "wordStaggerMs": 45,
+    "springs": {
+      "enter": { "damping": 14, "stiffness": 170, "mass": 0.8 },
+      "exit": { "damping": 16, "stiffness": 200, "mass": 0.8 },
+      "press": { "damping": 10, "stiffness": 300, "mass": 0.7 }
+    },
+    "notes": "Light-driven motion: blooms, sweeps, haze. Punchy springs with slight overshoot; the glow bloom leads each panel by ~6 frames (light arrives first). Cinematic, not sign-flicker."
+  },
+  "layout": {
+    "safeMarginPct": 5,
+    "lowerThirdYPct": 78,
+    "keywordSlot": "center-lower",
+    "maxPanelWidthPct": 60
+  },
+  "atmosphere": {
+    "fogLayer": "volumetric haze lit violet, magenta, cyan with faint warm amber from one edge",
+    "floorReflection": "components cast faint reflections downward",
+    "gridFloor": "subtle receding grid, catches light, never a glowing horizon graphic",
+    "grain": true
+  },
+  "componentAccents": {
+    "textOnScreen": "compact slim smoked glass pill, small white caps, single line, bottom-center",
+    "ctaBanner": "slim smoked panel with soft magenta edge glow",
+    "subscribe": "YouTube red button (functional color, overrides accent) + smoked glass bell chip with soft glow, cursor click animation",
+    "conceptSplitPanel": "full-height smoked glass side panel with a soft glow edge, eyebrow dot label, smoked strike rows with cyan accents",
+    "concept75Field": "void black field with volumetric haze and a faint grid floor, footage in a rounded portrait card with a soft glow edge, wide smoked rows",
+    "conceptFullScreen": "smoked glass cards with restrained glow over the fullscreenBackground, scanline-fade title"
+  },
+  "fullscreenBackground": "void black with volumetric fog lit violet, magenta and cyan, faint warm amber from one edge, subtle reflective grid floor, film grain (match the approved cinematic board)",
+  "styleAnchors": {
+    "approvedBoard": "boards/synthwave-board.png",
+    "note": "v1 flat neon-outline direction was REJECTED as corny. Match the cinematic board: fog, reflections, restrained glow, scanline type. The original approved reference was an 80s arcade album cover with volumetric fog and true black depth."
+  }
+}

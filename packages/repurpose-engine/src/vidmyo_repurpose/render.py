@@ -6,12 +6,20 @@ import hashlib
 import json
 import os
 import subprocess
+import queue
+import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .candidates import _atomic_json
+from .caption_styles import (
+    STYLE_NAMES, animate_cues, build_studio_overlay,
+    normalize_caption_color, normalize_caption_font,
+)
 from .contracts import ContractValidationError, RENDER_ARTIFACT_VERSION, validate_document
 from .ingest import fingerprint_file
 from .reframe import OUTPUT_HEIGHT, OUTPUT_WIDTH, REFRAME_ARTIFACT_RELATIVE_PATH, ReframeError, _inside, _probe
@@ -29,9 +37,9 @@ MAX_CHARACTERS_PER_CUE = 34
 DURATION_TOLERANCE_SECONDS = 0.25
 VERSIONS = {
     "schema": "render-artifact.v1",
-    "captioner": "word-phrase-overlay.v1",
-    "backing": "opencv-phrase-box.v1",
-    "renderer": "ffmpeg-overlay-master-h264-aac.v1",
+    "captioner": "word-phrase-overlay.v2",
+    "backing": "local-caption-styles.v2",
+    "renderer": "ffmpeg-caption-stream-h264-aac.v2",
     "prober": "ffprobe-media-contract.v1",
 }
 CAPTION_STYLES = {
@@ -42,6 +50,30 @@ CAPTION_STYLES = {
     "bold": {
         "font_scale": 2.5, "thickness": 6, "text_bgra": (0, 255, 255, 255),
         "back_bgra": (0, 0, 0, 230), "padding_x": 44, "padding_y": 28, "baseline_y": 1600,
+    },
+    "clean_lower": {
+        "font_scale": 2.0, "thickness": 4, "text_bgra": (255, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 205), "padding_x": 34, "padding_y": 22, "baseline_y": 1580,
+    },
+    "clean_middle": {
+        "font_scale": 2.0, "thickness": 4, "text_bgra": (255, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 205), "padding_x": 34, "padding_y": 22, "baseline_y": 1380,
+    },
+    "clean_upper": {
+        "font_scale": 2.0, "thickness": 4, "text_bgra": (255, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 205), "padding_x": 34, "padding_y": 22, "baseline_y": 1160,
+    },
+    "bold_lower": {
+        "font_scale": 2.5, "thickness": 6, "text_bgra": (0, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 230), "padding_x": 44, "padding_y": 28, "baseline_y": 1540,
+    },
+    "bold_middle": {
+        "font_scale": 2.5, "thickness": 6, "text_bgra": (0, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 230), "padding_x": 44, "padding_y": 28, "baseline_y": 1340,
+    },
+    "bold_upper": {
+        "font_scale": 2.5, "thickness": 6, "text_bgra": (0, 255, 255, 255),
+        "back_bgra": (0, 0, 0, 230), "padding_x": 44, "padding_y": 28, "baseline_y": 1120,
     },
 }
 PLATFORM_PRESETS = {
@@ -139,8 +171,17 @@ def build_caption_cues(
     return cues
 
 
-def build_caption_overlay(text: str, style_name: str, destination: Path) -> dict[str, Any]:
+def build_caption_overlay(text: str, style_name: str, destination: Path, active_word_index: int | None = None,
+                          caption_color: str = "preset", caption_font: str = "preset") -> dict[str, Any]:
     """Render one transparent phrase image and return measured symmetric padding."""
+    if style_name in STYLE_NAMES:
+        try:
+            return build_studio_overlay(
+                text, style_name, destination, active_word_index,
+                caption_color=caption_color, caption_font=caption_font,
+            )
+        except (ImportError, OSError) as exc:
+            raise _error("caption_renderer_unavailable", f"The local caption renderer could not load its fonts or Pillow: {exc}.", "Install the updated Vidmyo Repurpose package and retry.") from exc
     try:
         style = CAPTION_STYLES[style_name]
     except KeyError as exc:
@@ -289,49 +330,152 @@ def _load_inputs(
     return project, manifest, transcript, boundary, reframe_v1, reframe_v2
 
 
+def _caption_stream(overlays: list[dict[str, Any]], directory: Path, duration: float) -> Path:
+    """One sparse PNG stream, not one looping HD decoder/filter per phrase.
+
+    Transparent frames explicitly clear gaps and the tail. The concat demuxer's
+    millisecond timebase keeps cue timing independent of the source frame rate.
+    """
+    import cv2
+    import numpy as np
+
+    blank = directory / "blank.png"
+    if not cv2.imwrite(str(blank), np.zeros((OUTPUT_HEIGHT, OUTPUT_WIDTH, 4), dtype=np.uint8)):
+        raise _error("render_failed", "Could not create the transparent caption frame.", "Check local disk space and retry.")
+    lines = ["ffconcat version 1.0"]
+
+    def frame(path: Path, seconds: float | None = None) -> None:
+        name = str(path.resolve())
+        if "\n" in name or "\r" in name:
+            raise _error("render_input_invalid", "Caption paths cannot contain newlines.", "Rename the project folder and retry.")
+        lines.append("file '" + name.replace("'", "'\\''") + "'")
+        lines.append("option framerate 1000")
+        if seconds is not None:
+            lines.append(f"duration {seconds:.6f}")
+
+    cursor = 0.0
+    for index, overlay in enumerate(overlays):
+        start = max(cursor, min(duration, float(overlay["start_seconds"])))
+        end = min(duration, float(overlay["end_seconds"]))
+        if index + 1 < len(overlays):
+            end = min(end, float(overlays[index + 1]["start_seconds"]))
+        if start > cursor:
+            frame(blank, start - cursor)
+            cursor = start
+        if end > start:
+            frame(Path(overlay["path"]), end - start)
+            cursor = end
+    if duration > cursor:
+        frame(blank, duration - cursor)
+    frame(blank)  # Clear the last phrase even if FFmpeg repeats the final frame.
+    timeline = directory / "captions.ffconcat"
+    timeline.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return timeline
+
+
+def _encode(command: list[str], duration: float, progress: Callable[[float], None],
+            cancelled: Callable[[], bool], stall_seconds: float = 180) -> subprocess.CompletedProcess[str]:
+    """Read real encoder progress, bound silence, and reap children on cancellation."""
+    command = [command[0], "-progress", "pipe:1", "-nostats", *command[1:]]
+    with tempfile.TemporaryFile(mode="w+b") as errors:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
+        updates: queue.Queue[bytes | None] = queue.Queue()
+        assert process.stdout is not None
+
+        def read_progress() -> None:
+            try:
+                for line in process.stdout:
+                    updates.put(line)
+            finally:
+                updates.put(None)
+
+        # Windows selectors cannot monitor anonymous pipes. Keep blocking reads
+        # off the cancellation/watchdog thread on every supported platform.
+        reader = threading.Thread(target=read_progress, daemon=True)
+        reader.start()
+        try:
+            last_advance = time.monotonic()
+            latest = -1.0
+            finished = False
+            while True:
+                if cancelled():
+                    raise cancellation_error()
+                if time.monotonic() - last_advance > stall_seconds:
+                    raise _error("render_stalled", "FFmpeg made no encoding progress for three minutes.", "Check local resources, then retry; completed outputs are retained.")
+                try:
+                    line = updates.get(timeout=0.25)
+                    if line is None:
+                        finished = True
+                    elif line.startswith(b"out_time_us="):
+                        try:
+                            seconds = int(line.split(b"=", 1)[1]) / 1_000_000
+                        except ValueError:
+                            continue
+                        if seconds > latest:
+                            latest = seconds
+                            last_advance = time.monotonic()
+                            progress(max(0.0, min(0.99, seconds / duration)))
+                except queue.Empty:
+                    pass
+                if finished and process.poll() is not None:
+                    break
+            errors.seek(0)
+            return subprocess.CompletedProcess(command, process.returncode, "", errors.read(4000).decode("utf-8", errors="replace"))
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            if process.stdout is not None:
+                reader.join(timeout=3)
+                process.stdout.close()
+
+
 def _run_output(
     source: Path, destination: Path, duration: float, tolerance: float, *,
-    ffmpeg: Callable[[list[str]], subprocess.CompletedProcess[str]],
+    ffmpeg: Callable[[list[str]], subprocess.CompletedProcess[str]] | None,
     ffprobe: Callable[[list[str]], subprocess.CompletedProcess[str]],
     video_args: list[str], overlays: list[dict[str, Any]] | None = None,
+    progress: Callable[[float], None] = lambda _fraction: None,
+    cancelled: Callable[[], bool] = lambda: False,
+    output_size: tuple[int, int] = (OUTPUT_WIDTH, OUTPUT_HEIGHT),
 ) -> dict[str, Any]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.parent / f".{destination.stem}.{os.getpid()}.tmp.mp4"
-    command = ["ffmpeg", "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(source)]
-    for overlay in overlays or []:
-        command.extend(["-loop", "1", "-i", str(overlay["path"])])
-    if overlays:
-        filters: list[str] = []
-        previous = "0:v"
-        for index, overlay in enumerate(overlays, 1):
-            output_label = f"captioned{index}"
-            filters.append(
-                f"[{previous}][{index}:v]overlay=0:0:enable='between(t,{overlay['start_seconds']:.6f},{overlay['end_seconds']:.6f})'[{output_label}]"
-            )
-            previous = output_label
-        command.extend(["-filter_complex", ";".join(filters), "-map", f"[{previous}]"])
-    else:
-        command.extend(["-map", "0:v:0"])
-    command.extend(["-map", "0:a:0", *video_args, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", f"{duration:.6f}", str(temporary)])
+    workspace = tempfile.TemporaryDirectory(prefix=".caption-stream-", dir=destination.parent)
     try:
+        command = ["ffmpeg", "-y", "-hide_banner", "-nostdin", "-loglevel", "error", "-threads", "2", "-i", str(source)]
+        if overlays:
+            timeline = _caption_stream(overlays, Path(workspace.name), duration)
+            command.extend(["-threads", "1", "-f", "concat", "-safe", "0", "-i", str(timeline),
+                            "-filter_complex_threads", "2", "-filter_complex",
+                            "[0:v][1:v]overlay=0:0:eof_action=repeat[v]", "-map", "[v]"])
+        else:
+            command.extend(["-map", "0:v:0"])
+        command.extend(["-map", "0:a:0", *video_args, "-threads", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", f"{duration:.6f}", str(temporary)])
+        progress(0.0)
         try:
-            result = ffmpeg(command)
+            result = ffmpeg(command) if ffmpeg is not None else _encode(command, duration, progress, cancelled)
         except (FileNotFoundError, OSError) as exc:
             raise _error("ffmpeg_not_available", f"FFmpeg could not start: {exc}.", "Install FFmpeg and retry.") from exc
         if result.returncode != 0 or not temporary.is_file():
-            detail = (result.stderr or "FFmpeg produced no complete output")[:500]
+            detail = (result.stderr or f"FFmpeg exited with code {result.returncode} without a complete output")[:500]
             raise _error("render_failed", f"FFmpeg failed to create a complete output: {detail}", "Check FFmpeg, codecs, and disk space, then retry.")
         try:
             probe = _probe(temporary, ffprobe)
         except ReframeError as exc:
             raise _error("render_output_invalid", f"The rendered output could not be probed: {exc}.", "Check FFmpeg/FFprobe and retry.") from exc
         if (
-            probe["width"] != OUTPUT_WIDTH or probe["height"] != OUTPUT_HEIGHT
+            probe["width"] != output_size[0] or probe["height"] != output_size[1]
             or probe["video_codec"] != "h264" or probe["audio_codec"] != "aac"
             or abs(probe["duration"] - duration) > tolerance
         ):
             raise _error("render_output_invalid", "A rendered output failed codec, dimension, audio, or duration validation.", "Retry with a working H.264/AAC FFmpeg build.")
         os.replace(temporary, destination)
+        progress(1.0)
         return {
             "state": "completed",
             "path": destination.as_posix(),
@@ -342,11 +486,13 @@ def _run_output(
         }
     finally:
         temporary.unlink(missing_ok=True)
+        workspace.cleanup()
 
 
 def _validate_cached_output(
     project: Path, record: dict[str, Any], expected: Path, duration: float,
     ffprobe: Callable[[list[str]], subprocess.CompletedProcess[str]],
+    output_size: tuple[int, int] = (OUTPUT_WIDTH, OUTPUT_HEIGHT),
 ) -> bool:
     try:
         if record["state"] != "completed" or record["path"] != expected.relative_to(project).as_posix():
@@ -355,7 +501,7 @@ def _validate_cached_output(
             return False
         probe = _probe(expected, ffprobe)
         return (
-            probe["width"] == OUTPUT_WIDTH and probe["height"] == OUTPUT_HEIGHT
+            probe["width"] == output_size[0] and probe["height"] == output_size[1]
             and probe["video_codec"] == "h264" and probe["audio_codec"] == "aac"
             and abs(probe["duration"] - duration) <= DURATION_TOLERANCE_SECONDS
         )
@@ -365,7 +511,7 @@ def _validate_cached_output(
 
 def render_platform_outputs(
     request: dict[str, Any], *,
-    ffmpeg: Callable[[list[str]], subprocess.CompletedProcess[str]] = lambda command: subprocess.run(command, capture_output=True, text=True),
+    ffmpeg: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
     ffprobe: Callable[[list[str]], subprocess.CompletedProcess[str]] = lambda command: subprocess.run(command, capture_output=True, text=True),
     progress: Callable[[dict[str, Any]], None] = lambda _event: None,
     cancelled: Callable[[], bool] = lambda: False,
@@ -374,11 +520,18 @@ def render_platform_outputs(
     progress({"phase": "validating_inputs", "fraction": 0.02, "cache_hit": False, "message": "validating current approvals and reframe provenance"})
     project, manifest, transcript, boundary, reframe_v1, reframe_v2 = _load_inputs(request, ffprobe)
     options = request["options"]
-    if not isinstance(options, dict) or set(options) - {"candidate_ids", "caption_style", "captions_enabled", "platforms"}:
-        raise ContractValidationError("options: only candidate_ids, caption_style, captions_enabled, and platforms are supported")
+    if not isinstance(options, dict) or set(options) - {"candidate_ids", "caption_style", "caption_color", "caption_font", "captions_enabled", "platforms", "upscale_mode"}:
+        raise ContractValidationError("options: only candidate_ids, caption_style, caption_color, caption_font, captions_enabled, platforms, and upscale_mode are supported")
     style = options.get("caption_style", manifest["render_defaults"]["captions"]["style"])
-    if style not in CAPTION_STYLES:
+    if style not in CAPTION_STYLES and style not in STYLE_NAMES:
         raise ContractValidationError(f"options.caption_style: unsupported style {style!r}")
+    caption_color = normalize_caption_color(options.get("caption_color", "preset"))
+    caption_font = normalize_caption_font(options.get("caption_font", "preset"))
+    upscale_mode = options.get("upscale_mode", "off")
+    if upscale_mode not in {"off", "lanczos_4k", "lanczos_4k_sharp"}:
+        raise ContractValidationError("options.upscale_mode: must be off, lanczos_4k, or lanczos_4k_sharp")
+    export_size = (2160, 3840) if upscale_mode != "off" else (OUTPUT_WIDTH, OUTPUT_HEIGHT)
+    export_suffix = f".{upscale_mode}" if upscale_mode != "off" else ""
     captions_enabled = options.get("captions_enabled", manifest["render_defaults"]["captions"]["enabled"])
     if not isinstance(captions_enabled, bool):
         raise ContractValidationError("options.captions_enabled: must be a boolean")
@@ -407,18 +560,23 @@ def render_platform_outputs(
     word_by_id = {word["id"]: word for word in transcript["words"]}
     ordered_word_ids = [word["id"] for word in transcript["words"]]
     settings = {
-        "caption_style": style, "captions_enabled": captions_enabled,
+        "caption_style": style, "caption_color": caption_color, "caption_font": caption_font,
+        "captions_enabled": captions_enabled,
         "max_words_per_cue": MAX_WORDS_PER_CUE, "max_characters_per_cue": MAX_CHARACTERS_PER_CUE,
         "output_width": OUTPUT_WIDTH, "output_height": OUTPUT_HEIGHT,
         "safe_margin_left_right": 90, "duration_tolerance_seconds": DURATION_TOLERANCE_SECONDS,
         "encoder": "libx264-yuv420p-aac-faststart.v1",
+        "upscale_mode": upscale_mode,
     }
+    brand_suffix = "" if caption_color == caption_font == "preset" else "." + hashlib.sha256(
+        f"{caption_color}:{caption_font}".encode()
+    ).hexdigest()[:8]
     presets = [
         {
             "id": preset_id, "label": PLATFORM_PRESETS[preset_id]["label"], "container": "mp4",
-            "video_codec": "h264", "audio_codec": "aac", "width": OUTPUT_WIDTH, "height": OUTPUT_HEIGHT,
+            "video_codec": "h264", "audio_codec": "aac", "width": export_size[0], "height": export_size[1],
             "frame_rate_policy": "preserve", "crf": PLATFORM_PRESETS[preset_id]["crf"],
-            "video_bitrate": PLATFORM_PRESETS[preset_id]["video_bitrate"],
+            "video_bitrate": "40M" if upscale_mode != "off" else PLATFORM_PRESETS[preset_id]["video_bitrate"],
             "audio_bitrate": PLATFORM_PRESETS[preset_id]["audio_bitrate"],
         }
         for preset_id in platforms
@@ -459,8 +617,10 @@ def render_platform_outputs(
         clip_duration = float(reframe_item["output"]["duration_seconds"])
         words = [word_by_id[word_id] for word_id in ordered_word_ids[first:last + 1]]
         cues = build_caption_cues(words, clip_start=float(span["start_seconds"]), clip_duration=clip_duration)
+        if style in STYLE_NAMES:
+            cues = animate_cues(cues, words, style, float(span["start_seconds"]))
         enabled = captions_enabled and bool(cues)
-        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}.json"
+        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}{brand_suffix}.json"
         caption = {
             "enabled": enabled, "style": style, "state": "pending" if enabled else "not_required",
             "path": None, "fingerprint": None, "overlays": [],
@@ -473,7 +633,11 @@ def render_platform_outputs(
             "boundary_first_word_id": span["first_word_id"], "boundary_last_word_id": span["last_word_id"],
             "boundary_start_seconds": span["start_seconds"], "boundary_end_seconds": span["end_seconds"],
         }
-        cue_key = _hash({"input": input_record, "words": words, "settings": settings})
+        # Upscaling reuses a validated captioned master instead of burning captions
+        # twice or re-encoding the source unnecessarily. Style/background changes
+        # still invalidate that master; resolution/preset changes do not.
+        caption_settings = {key: value for key, value in settings.items() if key != "upscale_mode"}
+        cue_key = _hash({"input": input_record, "words": words, "settings": caption_settings, "versions": VERSIONS})
         output_key = _hash({"input": input_record, "cue_key": cue_key, "versions": VERSIONS, "settings": settings, "presets": presets})
         entry = {
             "candidate_id": candidate_id, "state": "pending", "input": input_record,
@@ -481,9 +645,9 @@ def render_platform_outputs(
             "master": None, "exports": [],
         }
         old = previous_by_id.get(candidate_id)
-        master_path = project / MASTER_DIRECTORY / f"{candidate_id}.{style}.master.mp4"
-        export_paths = {preset_id: project / EXPORT_DIRECTORY / f"{candidate_id}.{style}.{preset_id}.mp4" for preset_id in platforms}
-        if old and old["output_key"] == output_key:
+        master_path = project / MASTER_DIRECTORY / f"{candidate_id}.{style}{brand_suffix}.master.mp4"
+        export_paths = {preset_id: project / EXPORT_DIRECTORY / f"{candidate_id}.{style}{brand_suffix}.{preset_id}{export_suffix}.mp4" for preset_id in platforms}
+        if old and old["cue_key"] == cue_key:
             old_exports = {item["preset_id"]: item["output"] for item in old["exports"]}
             caption_ok = True
             if enabled:
@@ -503,7 +667,7 @@ def render_platform_outputs(
             master_ok = old["master"] is not None and _validate_cached_output(project, old["master"], master_path, clip_duration, ffprobe)
             valid_export_ids: list[str] = []
             for preset_id in platforms:
-                if preset_id not in old_exports or not _validate_cached_output(project, old_exports[preset_id], export_paths[preset_id], clip_duration, ffprobe):
+                if old["output_key"] != output_key or preset_id not in old_exports or not _validate_cached_output(project, old_exports[preset_id], export_paths[preset_id], clip_duration, ffprobe, export_size):
                     break
                 valid_export_ids.append(preset_id)
             if caption_ok and master_ok:
@@ -537,15 +701,29 @@ def render_platform_outputs(
         if cancelled():
             raise cancellation_error()
         candidate_id = entry["candidate_id"]
+        def encoding_progress(part: int, message: str) -> Callable[[float], None]:
+            return lambda fraction: progress({
+                "phase": "encoding_output", "candidate_id": candidate_id, "cache_hit": False,
+                "fraction": 0.1 + 0.85 * (index + (part + fraction) / (1 + len(presets))) / max(1, len(entries)),
+                "message": f"{candidate_id}: {message} ({round(fraction * 100)}%)",
+            })
+
+        progress({"phase": "preparing_captions", "candidate_id": candidate_id, "cache_hit": False,
+                  "fraction": 0.1 + 0.85 * index / max(1, len(entries)), "message": f"preparing captions for {candidate_id}"})
         input_path = _inside(project, entry["input"]["path"])
         style = entry["caption"]["style"]
-        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}.json"
+        caption_path = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}{brand_suffix}.json"
         if entry["caption"]["enabled"] and entry["caption"]["state"] != "completed":
             overlays = []
-            overlay_directory = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}"
+            overlay_directory = project / CAPTION_DIRECTORY / f"{candidate_id}.{style}{brand_suffix}"
             for cue in entry["cues"]:
+                if cancelled():
+                    raise cancellation_error()
                 overlay_path = overlay_directory / f"{cue['id']}.png"
-                overlay = build_caption_overlay(cue["text"], style, overlay_path)
+                overlay = build_caption_overlay(
+                    cue["text"], style, overlay_path, cue.get("active_word_index"),
+                    caption_color=caption_color, caption_font=caption_font,
+                )
                 overlay.update({
                     "cue_id": cue["id"],
                     "path": overlay_path.relative_to(project).as_posix(),
@@ -554,7 +732,8 @@ def render_platform_outputs(
                 })
                 overlays.append(overlay)
             _atomic_json(caption_path, {
-                "version": 1, "style": style, "backing_model": VERSIONS["backing"],
+                "version": 1, "style": style, "caption_color": caption_color,
+                "caption_font": caption_font, "backing_model": VERSIONS["backing"],
                 "overlays": overlays,
             })
             entry["caption"].update({
@@ -565,11 +744,12 @@ def render_platform_outputs(
             {**overlay, "path": project / overlay["path"]}
             for overlay in entry["caption"]["overlays"]
         ] if entry["caption"]["enabled"] else None
-        master_path = project / MASTER_DIRECTORY / f"{candidate_id}.{style}.master.mp4"
+        master_path = project / MASTER_DIRECTORY / f"{candidate_id}.{style}{brand_suffix}.master.mp4"
         if entry["master"] is None:
             master = _run_output(
                 input_path, master_path, entry["input"]["duration_seconds"], DURATION_TOLERANCE_SECONDS,
                 ffmpeg=ffmpeg, ffprobe=ffprobe, overlays=overlays_for_ffmpeg,
+                progress=encoding_progress(0, "encoding captioned master"), cancelled=cancelled,
                 video_args=["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"],
             )
             master["path"] = master_path.relative_to(project).as_posix()
@@ -577,18 +757,26 @@ def render_platform_outputs(
             validate_document("render_artifact", document())
             _atomic_json(artifact_path, document())
         completed_exports = {item["preset_id"] for item in entry["exports"]}
-        for preset in presets:
+        for preset_index, preset in enumerate(presets, 1):
             if preset["id"] in completed_exports:
                 continue
             if cancelled():
                 validate_document("render_artifact", document())
                 _atomic_json(artifact_path, document())
                 raise cancellation_error()
-            export_path = project / EXPORT_DIRECTORY / f"{candidate_id}.{style}.{preset['id']}.mp4"
+            export_path = project / EXPORT_DIRECTORY / f"{candidate_id}.{style}{brand_suffix}.{preset['id']}{export_suffix}.mp4"
+            scale_args = []
+            if upscale_mode != "off":
+                scale_filter = "scale=2160:3840:flags=lanczos,setsar=1"
+                if upscale_mode == "lanczos_4k_sharp":
+                    scale_filter += ",unsharp=5:5:0.35:5:5:0"
+                scale_args = ["-vf", scale_filter, "-filter_threads", "2"]
             output = _run_output(
                 master_path, export_path, entry["input"]["duration_seconds"], DURATION_TOLERANCE_SECONDS,
                 ffmpeg=ffmpeg, ffprobe=ffprobe, overlays=None,
-                video_args=["-c:v", "libx264", "-preset", "medium", "-crf", str(preset["crf"]), "-maxrate", preset["video_bitrate"], "-bufsize", "20M", "-pix_fmt", "yuv420p"],
+                progress=encoding_progress(preset_index, f"encoding {preset['id']} export"), cancelled=cancelled,
+                output_size=export_size,
+                video_args=[*scale_args, "-c:v", "libx264", "-preset", "medium", "-crf", str(preset["crf"]), "-maxrate", preset["video_bitrate"], "-bufsize", "80M" if upscale_mode != "off" else "20M", "-pix_fmt", "yuv420p"],
             )
             output["path"] = export_path.relative_to(project).as_posix()
             entry["exports"].append({"preset_id": preset["id"], "output": output})

@@ -104,7 +104,7 @@ def candidate_artifact(items):
     artifact = {
         "artifact_version": 1, "engine_version": "0.1.0", "created_at": "2026-08-03T00:00:00Z",
         "versions": {
-            "schema": "candidate-artifact.v1", "prompt": "candidate-prompt.v1",
+            "schema": "candidate-artifact.v1", "prompt": "candidate-prompt.v2",
             "classification": "content-classification.v1", "windowing": "transcript-windowing.v1",
         },
         "source": {"fingerprint": SHA_A, "transcript_cache_key": SHA_B},

@@ -14,6 +14,7 @@ function resolveRuntimePaths({
       repoRoot: root,
       webDir: null,
       mcpDir: path.join(root, 'mcp'),
+      coreDir: path.join(root, 'packages', 'core'),
       repurposeEngineDir: path.join(root, 'packages', 'repurpose-engine'),
       publicDir: path.join(root, 'public'),
     };
@@ -27,6 +28,7 @@ function resolveRuntimePaths({
     repoRoot: root,
     webDir: path.join(resources, 'web'),
     mcpDir: path.join(resources, 'mcp'),
+    coreDir: path.join(resources, 'packages', 'core'),
     repurposeEngineDir: path.join(resources, 'packages', 'repurpose-engine'),
     publicDir: path.join(resources, 'web', 'public'),
   };

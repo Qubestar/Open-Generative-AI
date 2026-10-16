@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { storyToEdg } from './edg.js';
 
 export const MANIFEST_NAME = 'project.json';
 export const MANIFEST_VERSION = 1;
@@ -92,6 +93,10 @@ export class Project {
     this.manifest.updatedAt = new Date().toISOString();
     atomicWriteJson(path.join(this.dir, MANIFEST_NAME), this.manifest);
     return this;
+  }
+
+  toEdg(options = {}) {
+    return storyToEdg(this.manifest, { assetDir: this.dir, ...options });
   }
 
   addScene({ beat = '', prompt = '', negative = '', imageSource = null } = {}) {

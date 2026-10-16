@@ -12,14 +12,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint packages/studio/src",
     "build:studio": "npm run build -w studio",
     "build:packages": "npm run build:studio",
-    "package:dir": "npm run build && npm ci --prefix mcp && electron-builder --dir --mac --arm64",
+    "package:dir": "npm run build && npm run build:capture && npm ci --prefix mcp && electron-builder --dir --mac --arm64",
     "setup": "npm install && npm run build:packages",
     "setup:submodules": "git submodule update --init --recursive",
     "test": "npm --prefix packages/core test",
-    "electron": "electron ."
+    "build:capture": "sh native/screen-capture/build.sh",
+    "electron": "sh native/screen-capture/build.sh --if-stale && electron ."
   },
   "build": {
     "appId": "com.vidmyo.app",
@@ -29,6 +30,9 @@
       "output": "release"
     },
     "afterPack": "./afterPack.js",
+    "asarUnpack": [
+      "electron/bin/**"
+    ],
     "files": [
       "electron/**/*",
       "packages/core/index.js",
@@ -40,7 +44,11 @@
       {
         "from": ".next/standalone",
         "to": "web",
-        "filter": ["**/*", "!**/.env", "!**/.env.*"]
+        "filter": [
+          "**/*",
+          "!**/.env",
+          "!**/.env.*"
+        ]
       },
       {
         "from": ".next/static",
@@ -49,6 +57,13 @@
       {
         "from": "public",
         "to": "web/public"
+      },
+      {
+        "from": "assets/templates",
+        "to": "assets/templates",
+        "filter": [
+          "vidmyo-video-tracker-v1.csv"
+        ]
       },
       {
         "from": "mcp",
@@ -84,6 +99,23 @@
           "src/**/*",
           "schemas/**/*",
           "models/**/*"
+        ]
+      },
+      {
+        "from": "packages/vfx-engine",
+        "to": "packages/vfx-engine",
+        "filter": [
+          "**/*",
+          "!renderer/node_modules/**/*",
+          "!renderer/public/**/*"
+        ]
+      },
+      {
+        "from": "packages/animation-engine",
+        "to": "packages/animation-engine",
+        "filter": [
+          "**/*",
+          "!**/node_modules/**/*"
         ]
       }
     ],
@@ -146,7 +178,9 @@
   "dependencies": {
     "ai-agent": "file:./packages/Open-Poe-AI/packages/agents",
     "axios": "^1.7.0",
+    "hyperframes": "0.8.72",
     "next": "^16.3.2",
+    "npm": "10.9.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.4.1",

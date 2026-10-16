@@ -2,6 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { execFile: nodeExecFile } = require('child_process');
 const { pathToFileURL } = require('url');
 const { getSecret: defaultGetSecret } = require('./secrets');
 const { resolveRuntimePaths } = require('./runtimePaths');
@@ -12,11 +13,13 @@ const LOCAL_ANALYSIS_PROVIDERS = new Set(
 );
 const ANALYSIS_PROVIDERS = new Set(['openrouter', ...LOCAL_ANALYSIS_PROVIDERS]);
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const TRANSCRIPTION_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 
 let corePromise = null;
 function defaultCore() {
   if (!corePromise) {
-    const entry = path.join(__dirname, '..', '..', 'packages', 'core', 'index.js');
+    const runtime = resolveRuntimePaths({ isPackaged: require('electron').app?.isPackaged, resourcesPath: process.resourcesPath });
+    const entry = path.join(runtime.coreDir, 'index.js');
     corePromise = import(pathToFileURL(entry).href);
   }
   return corePromise;
@@ -82,6 +85,7 @@ function createRepurposeBridge({
   const trustedEngineDir = engineDir;
   const projectGrants = new Set();
   const sourceGrants = new Set();
+  let modelSetupPromise = null;
   let registered = false;
   const configFile = () => path.join(app.getPath('userData'), 'repurpose-config.json');
   const normalizeConfig = value => {
@@ -90,6 +94,10 @@ function createRepurposeBridge({
     if (value.modelCache) {
       if (!path.isAbsolute(value.modelCache)) throw new Error('modelCache must be an absolute path');
       normalized.modelCache = path.resolve(value.modelCache);
+    }
+    if (value.transcriptionModel) {
+      if (!TRANSCRIPTION_MODEL_ID.test(value.transcriptionModel)) throw new Error('transcriptionModel is invalid');
+      normalized.transcriptionModel = value.transcriptionModel;
     }
     if (value.analysisProvider) {
       if (!ANALYSIS_PROVIDERS.has(value.analysisProvider)) throw new Error('analysisProvider is not supported');
@@ -106,7 +114,7 @@ function createRepurposeBridge({
   };
   const writeConfig = update => {
     if (!update || typeof update !== 'object' || Array.isArray(update)) throw new Error('Repurpose config must be an object');
-    const allowed = ['modelCache', 'analysisProvider', 'openRouterModel'];
+    const allowed = ['modelCache', 'transcriptionModel', 'analysisProvider', 'openRouterModel'];
     for (const key of Object.keys(update)) if (!allowed.includes(key)) throw new Error(`Unknown Repurpose config field: ${key}`);
     const next = { ...readConfig() };
     for (const key of allowed) {
@@ -268,6 +276,7 @@ function createRepurposeBridge({
         const cfg = readConfig();
         const stageOptions = {
           ...options,
+          ...(stage === 'transcribe' && cfg.transcriptionModel && !options.model ? { model: cfg.transcriptionModel } : {}),
           ...(stage === 'transcribe' && cfg.modelCache && !options.model_cache ? { model_cache: cfg.modelCache } : {}),
           ...(stage === 'generate_candidates' && !options.provider && cfg.analysisProvider ? {
             provider: cfg.analysisProvider,
@@ -283,7 +292,7 @@ function createRepurposeBridge({
           if (!detected?.installed) throw new Error(`${detected?.repurposeName || stageOptions.provider} CLI is not installed`);
           if (!detected.authed) throw new Error(`${detected.repurposeName || detected.name} needs authentication`);
           const version = String(detected.version || 'unknown').replace(/[^A-Za-z0-9._/-]/g, '_').slice(0, 80);
-          stageOptions.model = `configured-default@${version}.run-${Date.now()}`;
+          stageOptions.model = `configured-default:${version}:run-${Date.now()}`;
         }
         const job = mod.createRepurposeJob(jobStore, { projectDir, stage, options: stageOptions });
         void launch(job.id).catch(() => {});
@@ -408,6 +417,7 @@ function createRepurposeBridge({
           mod.inspectRepurposeReadiness({
             python: mod.DEFAULT_REPURPOSE_PYTHON,
             engineDir: trustedEngineDir || mod.DEFAULT_REPURPOSE_ENGINE_DIR,
+            modelName: cfg.transcriptionModel || null,
             modelCache: cfg.modelCache || null,
             ...(execFileImpl ? { execFileImpl } : {}),
           }),
@@ -419,6 +429,31 @@ function createRepurposeBridge({
           preferredAgent: await agents.preferredAgentId(detectedAgents),
         };
         return { ok: true, readiness };
+      } catch (error) { return fail(error); }
+    });
+    ipcMain.handle('repurpose:setup-model', async () => {
+      try {
+        if (!modelSetupPromise) {
+          modelSetupPromise = (async () => {
+            const mod = await core();
+            const cfg = readConfig();
+            const engineRoot = trustedEngineDir || mod.DEFAULT_REPURPOSE_ENGINE_DIR;
+            const env = {
+              ...process.env,
+              PYTHONPATH: [path.join(engineRoot, 'src'), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+            };
+            const args = ['-m', 'vidmyo_repurpose.cli', 'setup-model', '--model', cfg.transcriptionModel || 'small'];
+            if (cfg.modelCache) args.push('--model-cache', cfg.modelCache);
+            const runFile = execFileImpl || nodeExecFile;
+            return new Promise((resolve, reject) => {
+              runFile(mod.DEFAULT_REPURPOSE_PYTHON, args, { env, timeout: 30 * 60 * 1000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout = '', stderr = '') => {
+                if (error) reject(new Error(String(stderr || stdout || error.message).trim().slice(0, 1000)));
+                else resolve({ ok: true });
+              });
+            });
+          })().finally(() => { modelSetupPromise = null; });
+        }
+        return await modelSetupPromise;
       } catch (error) { return fail(error); }
     });
     return true;

@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { uploadFile, generateMarketingStudioAd } from "../muapi.js";
+import PromoReviewStudio from "./PromoReviewStudio.jsx";
+import CartoonStudio from "./CartoonStudio.jsx";
 
 const SCROLLBAR_STYLE = `
   .custom-scrollbar-thin::-webkit-scrollbar {
@@ -252,6 +254,7 @@ export default function MarketingStudio({ apiKey, droppedFiles, onFilesHandled }
   const [dropdown, setDropdown] = useState(null); // 'format' | 'avatar' | 'ratio' | 'res' | 'duration'
   const [uploadProgress, setUploadProgress] = useState({ product: 0, avatar: 0, additional: 0 });
   const [fullscreenUrl, setFullscreenUrl] = useState(null);
+  const [marketingView, setMarketingView] = useState("v26_promo_review"); // 'v26_promo_review' | 'cloud_ad'
 
   const textareaRef = useRef(null);
 
@@ -368,8 +371,57 @@ export default function MarketingStudio({ apiKey, droppedFiles, onFilesHandled }
     <div className="w-full h-full flex flex-col items-center justify-center bg-app-bg relative p-4 md:p-6 overflow-hidden">
       <style>{SCROLLBAR_STYLE}</style>
       
-      {/* ── MAIN CONTENT AREA ── */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-6 pb-40">
+      {/* Top Mode Switcher: V2.6 Promo & UGC vs Legacy Cloud Ads */}
+      <div className="w-full max-w-5xl flex items-center justify-between py-2 px-4 mb-3 bg-white/5 border border-white/10 rounded-xl z-20 shrink-0">
+        <span className="text-white/60 font-bold text-xs uppercase tracking-wider">
+          Marketing & Promo Workspace
+        </span>
+        <div className="flex bg-black/40 p-1 rounded-lg border border-white/10 text-xs">
+          <button
+            onClick={() => setMarketingView("v26_promo_review")}
+            className={`px-3 py-1 rounded-md font-bold transition-all ${
+              marketingView === "v26_promo_review"
+                ? "bg-primary text-black shadow-md"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            V2.6 Promo & UGC Review Studio
+          </button>
+          <button
+            onClick={() => setMarketingView("v26_cartoon")}
+            className={`px-3 py-1 rounded-md font-bold transition-all ${
+              marketingView === "v26_cartoon"
+                ? "bg-primary text-black shadow-md"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            🎬 Cartoon Studio
+          </button>
+          <button
+            onClick={() => setMarketingView("cloud_ad")}
+            className={`px-3 py-1 rounded-md font-bold transition-all ${
+              marketingView === "cloud_ad"
+                ? "bg-primary text-black shadow-md"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            Cloud Video Ads (Muapi)
+          </button>
+        </div>
+      </div>
+
+      {marketingView === "v26_promo_review" ? (
+        <div className="w-full flex-1 overflow-y-auto custom-scrollbar p-2">
+          <PromoReviewStudio />
+        </div>
+      ) : marketingView === "v26_cartoon" ? (
+        <div className="w-full flex-1 overflow-y-auto custom-scrollbar p-2">
+          <CartoonStudio />
+        </div>
+      ) : (
+        <>
+          {/* ── MAIN CONTENT AREA ── */}
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-6 pb-40">
         {history.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in-up">
             {history.map(entry => (
@@ -588,6 +640,8 @@ export default function MarketingStudio({ apiKey, droppedFiles, onFilesHandled }
           </div>
         </div>
       </div>
+      </>
+      )}
 
       {/* Fullscreen Preview */}
       {fullscreenUrl && (

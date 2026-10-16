@@ -9,6 +9,17 @@ const { register: registerNetProxy } = require('./lib/netProxy');
 const { register: registerStory } = require('./lib/storyBridge');
 const { register: registerMedia } = require('./lib/mediaBridge');
 const { register: registerRepurpose, stop: stopRepurpose } = require('./lib/repurposeBridge');
+const { register: registerCleaner, stop: stopCleaner } = require('./lib/cleanerBridge');
+const { register: registerTranslate, stop: stopTranslate } = require('./lib/translateBridge');
+const { register: registerVfx, stop: stopVfx, prepare: prepareVfx } = require('./lib/vfxBridge');
+const { register: registerCreative, stop: stopCreative } = require('./lib/creativeBridge');
+const { register: registerChannels, stop: stopChannels } = require('./lib/channelsBridge');
+const { register: registerAutoEditor } = require('./lib/autoEditorBridge');
+const { register: registerPublisher } = require('./lib/publisherBridge');
+const { register: registerPromo } = require('./lib/promoBridge');
+const { register: registerScreenStudio, stop: stopScreenStudio } = require('./lib/screenStudioBridge');
+const { register: registerEngines } = require('./lib/enginesBridge');
+const { register: registerEntitlement, stop: stopEntitlement } = require('./lib/entitlementRuntime');
 const mcpHost = require('./lib/mcpHost');
 const { resolveRuntimePaths } = require('./lib/runtimePaths');
 const { createWebHost } = require('./lib/webHost');
@@ -92,10 +103,23 @@ app.whenReady().then(async () => {
     registerWan2gp();
     registerAgents();
     registerSecrets();
+    registerEntitlement();
     registerNetProxy();
     registerStory();
     registerMedia();
     registerRepurpose();
+    registerCleaner();
+    registerTranslate();
+    registerVfx();
+    registerCreative();
+    registerChannels();
+    registerAutoEditor();
+    registerPublisher();
+    registerPromo();
+    registerScreenStudio();
+    registerEngines();
+    // Prepare in the background on first launch; opening VFX shares/retries this work.
+    prepareVfx().catch(() => console.warn('[vfx] Preparation will retry when VFX is opened.'));
     // Loopback MCP so agents can use keychain keys (image generation) while
     // Vidmyo is open. Best-effort: a failure here must never block the app.
     mcpHost.start().then((r) => {
@@ -113,7 +137,7 @@ app.on('before-quit', (event) => {
     if (shutdownStarted) return;
     event.preventDefault();
     shutdownStarted = true;
-    Promise.allSettled([mcpHost.stop(), stopRepurpose(), webHost.stop()])
+    Promise.allSettled([mcpHost.stop(), stopRepurpose(), stopCleaner(), stopTranslate(), stopVfx(), stopCreative(), stopChannels(), stopEntitlement(), stopScreenStudio(), webHost.stop()])
         .finally(() => app.quit());
 });
 

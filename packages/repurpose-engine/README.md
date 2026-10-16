@@ -69,6 +69,14 @@ causes transcribe to return `transcription_model_not_ready`; it never silently
 downloads. `setup-model` downloads into staging, verifies the model can be
 opened locally, and only then marks the deterministic cache ready.
 
+An existing CTranslate2 faster-whisper model can also be reused without copying
+its weights. Pass the model directory itself (for example, a Hugging Face
+`models--Systran--faster-whisper-small.en/snapshots/<revision>` directory) as
+`--model-cache` and pass the matching model name with `--model small.en`. Direct
+model directories must contain `config.json` and `model.bin`, and their cache
+path must identify the selected model so Vidmyo cannot silently mislabel a
+transcript with a different model name.
+
 After a completed ingest, submit a version-1 request whose stage is
 `transcribe` and whose `input_artifacts` names that project's completed
 `ingest_artifact` version 1:
@@ -143,8 +151,11 @@ route; it never switches to another provider or paid model.
 
 The desktop app can instead set `provider` to `codex`, `claude_code`,
 `gemini`, or `hermes` with model identity `configured-default`. Repurpose uses
-the existing Vidmyo agent detector, the user's existing CLI authentication and
-configured model, and an isolated temporary working directory. Codex and
+the existing Vidmyo agent detector, the local CLI's signed-in account or
+subscription, its configured model, and an isolated temporary working directory.
+It does not forward provider API-key environment variables or custom API
+endpoints; use the separate `openrouter` provider when explicit API-key billing
+is intended. Codex and
 Claude use their structured-output modes; Gemini output is normalized and
 validated locally; Hermes runs through its installed Python runtime with an
 empty tool allowlist and fallback disabled. The source video never crosses
@@ -255,8 +266,8 @@ current ingest, transcript, and ranking artifacts:
 vidmyo-repurpose repair-boundaries --request /path/to/boundary-request.json
 ```
 
-By default, Vidmyo repairs and extracts only the advisory shortlist, in its
-existing order. Set `options.candidate_ids` to extract any explicit set of
+By default, Vidmyo records repaired boundaries for all retained candidates and
+extracts only the advisory shortlist, in its existing order. Set `options.candidate_ids` to extract any explicit set of
 retained candidates on demand. Optional `boundary_overrides` select exact
 first and last transcript word IDs; otherwise the engine preserves the
 candidate's word-safe span and snaps outward to nearby detected silence when
@@ -272,6 +283,16 @@ and preserves completed previews for retry.
 This stage is entirely local: it makes no provider or network call and never
 uploads or modifies the source. It does not approve candidates, change ranking,
 reframe, caption, translate, produce final delivery media, or publish anything.
+
+In the desktop review queue, **Recommended** opens first in rank order and
+**All candidates** keeps every alternative available. **Generate preview** on
+an alternative adds it to the existing preview set without changing rankings,
+approvals, selected exports, or manual word boundaries. The desktop runner
+normalizes `additional_candidate_ids` into the worker's explicit `candidate_ids`.
+It preserves existing media files and resets downstream framing/export status;
+run **Frame vertical** again before **Finish**. Failed retries retain the full
+requested set. **Approve** is an editorial decision; **Use in render** explicitly
+includes an approved, prepared clip in the exports.
 
 ## Single-speaker vertical reframing
 
@@ -304,6 +325,19 @@ not recognize identities, approve candidates, add captions, create final
 masters, or publish media.
 
 ## Stable two-speaker split layouts
+
+### User-selected framing
+
+The desktop **Vertical framing** selector offers `auto_crop` (existing tracking,
+two-speaker layout, and safe blurred fallback), `stack_sides` (split a source that
+already has important content on the left and right, then place left above right),
+or `fit_full` (the entire picture centered on a black 1080×1920 canvas). A horizontal
+source in full-frame mode leaves black space above and below for later notes; Vidmyo
+does not add those notes automatically. Pass `options.framing_mode` to both reframe
+workers. Full-frame and side-stack modes skip face detection and are reused unchanged
+by the two-speaker worker. Mode is part
+of the cache identity. Changing the selector requires rerunning Frame vertical
+before Finish; old artifacts without the setting are treated as auto crop.
 
 After single-speaker reframing, submit `reframe-two` with exactly the current
 completed `reframe_artifact` v1 and matching `boundary_artifact` v1:
@@ -350,17 +384,38 @@ The default target set is the intersection of the completed reframe-v2 request
 and candidates explicitly approved and selected in `repurpose.json`. An
 explicit `options.candidate_ids` list may render another completed retained
 candidate, but it must still be manually approved. Pending and rejected
-candidates never render. `options.caption_style` accepts `clean` or `bold`,
+candidates never render. `options.caption_style` accepts legacy `clean` / `bold`
+(including position suffixes), or `studio_<look>_<position>_<background>`:
+looks `clean`, `bold` (Impact), `outline`, `karaoke`, `pop`, `editorial`;
+positions `upper`, `middle`, `lower`; backgrounds `box`, `clear`.
 `options.captions_enabled` may disable captions, and `options.platforms`
-accepts `youtube_shorts`, `tiktok`, and `instagram_reels`.
+accepts `youtube_shorts`, `tiktok`, and `instagram_reels`. `options.upscale_mode`
+accepts `off` (default), `lanczos_4k`, or `lanczos_4k_sharp`. Upscaling uses local
+FFmpeg interpolation, with optional gentle sharpening—not AI restoration.
+`options.caption_color` accepts `preset` or `#RRGGBB`. `options.caption_font`
+accepts only `preset`, `montserrat`, `barlow_condensed`, or `anton`; all three fonts
+are bundled under their OFL notices, so rendering never follows an arbitrary font path.
 
 Caption cues are reconstructed from authoritative transcript word IDs within
 the repaired boundary. Words are grouped deterministically into short phrase
-cues. OpenCV renders each complete phrase to a project-owned transparent PNG
+cues. Studio styles use Pillow and bundled OFL fonts; legacy styles use OpenCV.
+Karaoke accents the current spoken word; Pop shows one word at a time, using
+authoritative word timestamps. Ambiguous simultaneous timings fall back to the
+complete phrase, never silently discarding words. The visual picker uses sample
+PNGs generated by this same renderer. Backgrounds can be disabled independently.
+Each complete phrase is rendered to a project-owned transparent PNG
 after measuring its visible pixels, then adds equal left/right backing padding.
-FFmpeg composites those local overlays at cue time without depending on the
+FFmpeg reads the PNGs as one sparse, timed caption stream with transparent gap
+and tail frames, avoiding one looping HD decoder/filter per phrase. Decoder and
+filter thread counts are bounded. It composites that stream without depending on the
 optional `ass`, `subtitles`, or `drawtext` filters. No usable cue produces a
 valid uncaptioned master with a recorded reason.
+
+Finish reports real encoder progress for each master and platform export,
+supports cancellation during encoding, and aborts if the encoder makes no
+progress for three minutes. Completed outputs remain resumable; a failed output
+never replaces a validated previous file. The renderer version is bumped so
+old cached masters are not mistaken for newly verified caption-stream output.
 
 Outputs are local and deterministic:
 
@@ -368,10 +423,15 @@ Outputs are local and deterministic:
 - `artifacts/captions/<candidate>.<style>/<cue>.png`
 - `artifacts/rendered-masters/<candidate>.<style>.master.mp4`
 - `artifacts/platform-exports/<candidate>.<style>.<platform>.mp4`
+- `artifacts/platform-exports/<candidate>.<style>.<platform>.<upscale_mode>.mp4` (4K)
+- branded variants add a stable eight-character color/font suffix after `<style>`
 - `artifacts/render-artifact.v1.json`
 
 Every master and export is atomically written and validated with FFprobe for
-H.264 video, AAC audio, 1080×1920 dimensions, duration, and fingerprint. Exact
+H.264 video, AAC audio, expected dimensions, duration, and fingerprint. Masters
+remain 1080×1920; exports are 1080×1920 or 2160×3840 according to upscale mode.
+4K uses a 40 Mb/s ceiling and a separate filename, preserving 1080p exports.
+Resolution changes reuse a matching validated captioned master. Exact
 retries do not rewrite files. Cancellation checkpoints the current master and
 completed preset prefix, then resumes at the first missing export. Changed
 approvals, transcript/boundary/reframe identity, caption style, cue contract,
@@ -407,3 +467,23 @@ and never enter project request or job records.
 Rendering is local and private. It does not translate, upload, publish,
 schedule, authenticate to social platforms, call a provider, download a model,
 or modify source and earlier pipeline media.
+## Cleaner acoustic alignment (English)
+
+Cleaner now separates text recognition from cut timing. A local wav2vec2 CTC
+pass aligns the complete recovered phrase, including repetitions, before the
+phrase is split into review sections. Shared word boundaries lie between the
+detected sounds. Weak character/word matches are flagged instead of silently
+accepted for automatic cutting. Other languages retain the prior timing path.
+
+Install the optional runtime with `pip install -e '.[alignment]'`. Provision the
+free `facebook/wav2vec2-base-960h` model at revision
+`22aad52d435eb6dbaf354bdad9b0da84ce7d6156` in the same Hugging Face hub cache as
+the Whisper model (or the default Hugging Face cache). Download `*.json` and
+`model.safetensors` using `huggingface_hub.snapshot_download`; do not download
+pickle weights or enable remote code. Analysis only opens cached files and
+never downloads a model or uploads audio. Missing alignment setup raises a
+clear error rather than pretending approximate timestamps were verified.
+
+The model is Apache-2.0 licensed: <https://huggingface.co/facebook/wav2vec2-base-960h>.
+The implementation uses standard CTC Viterbi alignment; no WhisperX code is
+vendored. Manual join adjustment remains an escape hatch, not the normal flow.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sysconfig
 from pathlib import Path
 from typing import Any, Iterable
@@ -29,6 +30,10 @@ STAGES = (
     "reframe",
     "render",
 )
+
+# Boundary timestamps are persisted at microsecond precision. Treat smaller
+# binary floating-point differences as equal when checking span containment.
+_TIMESTAMP_EPSILON_SECONDS = 1e-6
 
 _SCHEMA_FILES = {
     "request": "worker-request.v1.schema.json",
@@ -330,7 +335,10 @@ def _validate_boundary_semantics(artifact: dict[str, Any]) -> None:
         duration = repaired["end_seconds"] - repaired["start_seconds"]
         if duration < 20 or duration > 120:
             raise ContractValidationError(f"candidates.{index}.repaired_span: duration must be 20–120 seconds")
-        if repaired["start_seconds"] > proposed["start_seconds"] or repaired["end_seconds"] < proposed["end_seconds"]:
+        if (
+            repaired["start_seconds"] - proposed["start_seconds"] > _TIMESTAMP_EPSILON_SECONDS
+            or proposed["end_seconds"] - repaired["end_seconds"] > _TIMESTAMP_EPSILON_SECONDS
+        ):
             raise ContractValidationError(f"candidates.{index}.repaired_span: cannot lose proposed words")
         extraction = item["extraction"]
         requested_here = item["candidate_id"] in requested
@@ -361,6 +369,11 @@ def _validate_reframe_semantics(artifact: dict[str, Any]) -> None:
             raise ContractValidationError(f"{root}.fallback_reason: tracked output cannot have fallback")
         if item["mode"] == "fallback" and item["fallback_reason"] is None:
             raise ContractValidationError(f"{root}.fallback_reason: fallback output requires a reason")
+        full_frame = artifact["settings"].get("framing_mode", "auto_crop") == "fit_full"
+        if (item["mode"] == "fit_full") != full_frame:
+            raise ContractValidationError(f"{root}.mode: must match framing_mode")
+        if full_frame and (item["fallback_reason"] is not None or item["segments"] or item["samples"]):
+            raise ContractValidationError(f"{root}: full-frame fitting cannot have face tracking or a fallback")
         if item["safe_zone_fraction"] < 0 or item["safe_zone_fraction"] > 1:
             raise ContractValidationError(f"{root}.safe_zone_fraction: must be 0–1")
         if output["state"] == "completed":
@@ -411,6 +424,13 @@ def _validate_reframe_v2_semantics(artifact: dict[str, Any]) -> None:
                 raise ContractValidationError(f"{root}.fallback_reason: fallback reuse requires a reason")
             if item["mode"] == "fallback_reuse" and item["input"]["v1_mode"] != "fallback":
                 raise ContractValidationError(f"{root}: fallback reuse must preserve a fallback v1 output")
+            if item["mode"] == "fit_full_reuse" and (
+                item["input"]["v1_mode"] != "fit_full" or item["fallback_reason"] is not None
+                or item["segments"] or item["samples"]
+            ):
+                raise ContractValidationError(f"{root}: full-frame reuse must preserve the uncropped v1 output")
+        if (item["mode"] == "fit_full_reuse") != (artifact["settings"].get("framing_mode", "auto_crop") == "fit_full"):
+            raise ContractValidationError(f"{root}.mode: must match framing_mode")
         if output["origin"] == "v1_reuse" and output["state"] != ("completed" if requested_here else "not_requested"):
             raise ContractValidationError(f"{root}.output.state: v1 reuse must be immediately complete when requested")
         if not requested_here and output["state"] != "not_requested":
@@ -481,6 +501,16 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
     if len(preset_ids) != len(set(preset_ids)):
         raise ContractValidationError("presets.id: ids must be unique")
     style = artifact["settings"]["caption_style"]
+    caption_color = artifact["settings"].get("caption_color", "preset")
+    caption_font = artifact["settings"].get("caption_font", "preset")
+    brand_suffix = "" if caption_color == caption_font == "preset" else "." + hashlib.sha256(
+        f"{caption_color}:{caption_font}".encode()
+    ).hexdigest()[:8]
+    upscale_mode = artifact["settings"].get("upscale_mode", "off")
+    export_size = (1080, 1920) if upscale_mode == "off" else (2160, 3840)
+    export_suffix = "" if upscale_mode == "off" else f".{upscale_mode}"
+    if any((preset["width"], preset["height"]) != export_size for preset in artifact["presets"]):
+        raise ContractValidationError("presets: dimensions must match the upscale mode")
     for index, item in enumerate(candidates):
         root = f"candidates.{index}"
         duration = _finite_time(item["input"]["duration_seconds"], f"{root}.input.duration_seconds")
@@ -493,6 +523,8 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
         seen_words: set[str] = set()
         previous_end = 0.0
         for cue_index, cue in enumerate(item["cues"]):
+            if "active_word_index" in cue and (not style.startswith("studio_karaoke_") or cue["active_word_index"] >= len(cue["text"].split())):
+                raise ContractValidationError(f"{root}.cues.{cue_index}: highlight index must reference a visible karaoke word")
             start = _finite_time(cue["start_seconds"], f"{root}.cues.{cue_index}.start_seconds")
             end = _finite_time(cue["end_seconds"], f"{root}.cues.{cue_index}.end_seconds")
             if start < previous_end or end <= start or end > duration:
@@ -508,13 +540,13 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
             if item["state"] == "completed" and caption["state"] != "completed":
                 raise ContractValidationError(f"{root}.caption: completed render requires completed captions")
             if caption["state"] == "completed":
-                expected_caption = f"artifacts/captions/{item['candidate_id']}.{style}.json"
+                expected_caption = f"artifacts/captions/{item['candidate_id']}.{style}{brand_suffix}.json"
                 if caption["path"] != expected_caption or caption["fingerprint"] is None:
                     raise ContractValidationError(f"{root}.caption: completed captions must use the deterministic overlay-plan path")
                 if [overlay["cue_id"] for overlay in caption["overlays"]] != [cue["id"] for cue in item["cues"]]:
                     raise ContractValidationError(f"{root}.caption.overlays: must match every cue in order")
                 for overlay_index, overlay in enumerate(caption["overlays"]):
-                    expected_overlay = f"artifacts/captions/{item['candidate_id']}.{style}/{overlay['cue_id']}.png"
+                    expected_overlay = f"artifacts/captions/{item['candidate_id']}.{style}{brand_suffix}/{overlay['cue_id']}.png"
                     if overlay["path"] != expected_overlay:
                         raise ContractValidationError(f"{root}.caption.overlays.{overlay_index}.path: must use the deterministic project path")
                     if overlay["start_seconds"] != item["cues"][overlay_index]["start_seconds"] or overlay["end_seconds"] != item["cues"][overlay_index]["end_seconds"]:
@@ -533,7 +565,9 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
         if item["state"] == "completed" and item["master"] is None:
             raise ContractValidationError(f"{root}.master: completed render requires a master")
         if item["master"] is not None:
-            expected_master = f"artifacts/rendered-masters/{item['candidate_id']}.{style}.master.mp4"
+            if (item["master"]["width"], item["master"]["height"]) != (1080, 1920):
+                raise ContractValidationError(f"{root}.master: master must remain 1080x1920")
+            expected_master = f"artifacts/rendered-masters/{item['candidate_id']}.{style}{brand_suffix}.master.mp4"
             if item["master"]["path"] != expected_master:
                 raise ContractValidationError(f"{root}.master.path: must use the deterministic project path")
             if abs(item["master"]["duration_seconds"] - duration) > artifact["settings"]["duration_tolerance_seconds"]:
@@ -544,7 +578,9 @@ def _validate_render_semantics(artifact: dict[str, Any]) -> None:
         if item["state"] == "completed" and export_ids != preset_ids:
             raise ContractValidationError(f"{root}.exports: must contain every preset exactly once in preset order")
         for export_index, export in enumerate(item["exports"]):
-            expected_export = f"artifacts/platform-exports/{item['candidate_id']}.{style}.{export['preset_id']}.mp4"
+            expected_export = f"artifacts/platform-exports/{item['candidate_id']}.{style}{brand_suffix}.{export['preset_id']}{export_suffix}.mp4"
+            if (export["output"]["width"], export["output"]["height"]) != export_size:
+                raise ContractValidationError(f"{root}.exports.{export_index}: dimensions must match the upscale mode")
             if export["output"]["path"] != expected_export:
                 raise ContractValidationError(f"{root}.exports.{export_index}.output.path: must use the deterministic preset path")
             if abs(export["output"]["duration_seconds"] - duration) > artifact["settings"]["duration_tolerance_seconds"]:

@@ -32,3 +32,5 @@ offline and free after setup. ffmpeg/ffprobe required on PATH.
 
 Keep upstream fixes in sync: if the skill's scripts improve, re-vendor deliberately
 (diff first), and vice versa.
+
+The setup script quotes the local virtual-environment path when invoking `uv`, so installation also works when the checkout path contains spaces (for example, `/Volumes/My Lexar/...`).

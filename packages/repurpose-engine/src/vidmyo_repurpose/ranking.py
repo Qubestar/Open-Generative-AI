@@ -27,7 +27,7 @@ from .contracts import ContractValidationError, RANKING_ARTIFACT_VERSION, valida
 
 ENGINE_VERSION = "0.1.0"
 RANKING_SCHEMA_VERSION = "ranking-artifact.v1"
-PROMPT_VERSION = "ranking-prompt.v1"
+PROMPT_VERSION = "ranking-prompt.v2"
 SCORING_VERSION = "transcript-scoring.v1"
 DEDUPE_VERSION = "candidate-dedupe.v1"
 CACHE_VERSION = 1
@@ -49,7 +49,7 @@ WEIGHTS = {
     "duration_fitness": 0.10,
     "evidence_quality": 0.05,
 }
-HARD_GATE_THRESHOLD = 40.0
+HARD_GATE_THRESHOLD = 70.0
 TEMPORAL_IOU_THRESHOLD = 0.70
 TEMPORAL_CONTAINMENT_THRESHOLD = 0.85
 SEMANTIC_SIMILARITY_THRESHOLD = 0.80
@@ -313,6 +313,8 @@ def _window_request(
         "instructions": (
             "Score only the five named semantic components from the supplied transcript. "
             "For every component cite exact supporting word IDs inside that candidate. "
+            "Treat an opening that depends on a previous topic, or an ending that starts a new topic "
+            "or stops before the thought resolves, as a serious standalone-coherence and context-independence defect. "
             "Return a concise normalized topic label and a factual semantic claim. "
             "Do not predict virality, approve, reject, rank, deduplicate, repair, or select candidates."
         ),
@@ -505,9 +507,9 @@ def _score_candidate(
     total = round(sum(components[name]["score"] * WEIGHTS[name] for name in WEIGHTS), 1)
     exclusions = []
     if components["standalone_coherence"]["score"] < HARD_GATE_THRESHOLD:
-        exclusions.append("Standalone coherence is below the 40-point shortlist gate.")
+        exclusions.append(f"Standalone coherence is below the {HARD_GATE_THRESHOLD:g}-point shortlist gate.")
     if components["context_independence"]["score"] < HARD_GATE_THRESHOLD:
-        exclusions.append("Context independence is below the 40-point shortlist gate.")
+        exclusions.append(f"Context independence is below the {HARD_GATE_THRESHOLD:g}-point shortlist gate.")
     return {
         "candidate": dict(candidate),
         "topic_label": judgment["topic_label"],

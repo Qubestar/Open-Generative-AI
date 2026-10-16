@@ -17,7 +17,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { pathToFileURL } = require('url');
-const { getAgentPipeline, pipelineInstructions } = require('./agentPipelines');
+const { sessionBrief, kickoff } = require('./agentHandoff');
 const mcpHost = require('./mcpHost');
 const { resolveRuntimePaths } = require('./runtimePaths');
 
@@ -85,66 +85,17 @@ async function resolveImageSource() {
   }
 }
 
-function writeSessionBrief(dir, manifest, agentId, imageSource = null) {
+function writeSessionBrief(dir, manifest, _agentId, imageSource = null) {
   const briefDir = path.join(dir, '.vidmyo');
   fs.mkdirSync(briefDir, { recursive: true });
-  const m = manifest;
-  const approved = m ? m.scenes.filter((s) => s.image.approved).length : 0;
-  const pipeline = agentId ? getAgentPipeline(agentId, readAgentsConfig()) : null;
-  const lines = [
-    `# Vidmyo — ${m?.brief?.topic || path.basename(dir)}`,
-    '',
-    `Project dir: ${dir}`,
-    m?.brief?.hook ? `Hook: ${m.brief.hook}` : null,
-    m?.brief?.angle ? `Angle: ${m.brief.angle}` : null,
-    m?.brief?.sheetRow ? `Tracker row: ${m.brief.sheetRow} (video #${m.brief.videoNum})` : null,
-    '',
-    '## State',
-    m ? `- script: ${m.script ? `${m.script.trim().split(/\s+/).length} words` : 'MISSING — write it first'}` : '- no project.json in this folder yet',
-    m ? `- voiceover: ${m.voiceover.artifact ? m.voiceover.source : 'not generated'}` : null,
-    m ? `- scenes: ${m.scenes.length} (${approved} approved)` : null,
-    m ? `- renders: ${m.renders.length}` : null,
-    '',
-    // Prefer the agent's OWN pipeline (correct venv + image-gen workflow).
-    pipeline ? pipelineInstructions(agentId, readAgentsConfig(), dir, imageSource) : null,
-    pipeline ? '' : null,
-    '## Vidmyo MCP (alternative)',
-    'The `vidmyo` MCP server also exposes: story_open → story_set_script → story_run_stage',
-    '{stage:"to-scenes"} → per-scene generate + story_accept_artifact (file on disk, sNNN only) →',
-    'story_approve_scene → story_run_stage assemble → finalize. Use these if you are not running',
-    'your own pipeline folder.',
-  ].filter((l) => l !== null);
+  const brief = sessionBrief({ dir, manifest, imageSource });
   const file = path.join(briefDir, 'session-brief.md');
-  fs.writeFileSync(file, lines.join('\n'));
-  return { file, topic: m?.brief?.topic || path.basename(dir) };
+  fs.writeFileSync(file, brief.text, { mode: 0o600 });
+  return { file, topic: brief.topic || path.basename(dir) };
 }
 
-function kickoffPrompt(dir, topic, briefFile, { autonomous = false, pipeline = null, imageSource = null } = {}) {
-  if (autonomous) {
-    const via = pipeline
-      ? `using YOUR OWN pipeline at ${pipeline.dir} (exact commands and your image-generation `
-        + `workflow are in the brief). `
-      : `using the vidmyo MCP tools. `;
-    // A cloud image source turns the images stage into a human gate: Vidmyo holds
-    // the key, so the agent writes the prompts and hands off rather than running
-    // its (Flow-only) image workflow.
-    const cloudImages = imageSource && !imageSource.manual;
-    const imagesStep = cloudImages
-      ? `per-scene image PROMPTS only — Vidmyo's image source is ${imageSource.name}, so STOP there and `
-        + `ask Luke to click "${imageSource.name} ⚡" on each scene in Vidmyo (do NOT use Google Flow) → `
-      : `per-scene doodle images via your image workflow (Google Flow · Nano Banana 2, match each prompt exactly) → `;
-    return `Vidmyo — ${topic}\n\n`
-      + `Create this ENTIRE faceless doodle video end to end, autonomously, ${via}`
-      + `Read ${briefFile} first for the project state, brief (hook/angle/tracker row), and your pipeline steps. `
-      + `Do not stop for approval unless something truly blocks you`
-      + (cloudImages ? ` — the images stage below is the one expected stop.\n` : `.\n`)
-      + `Flow: write the full script per your channel rules → voiceover → beats → ${imagesStep}assemble → `
-      + `finalize (4K + −14 LUFS). Resolve scenes by explicit sNNN id only, verify each image on disk, and `
-      + `report the final MP4 path when done.`;
-  }
-  return `Vidmyo — ${topic}\n\nYou are driving the Vidmyo Story pipeline for the project at ${dir}. `
-    + `Read ${briefFile} for the current state and your pipeline steps, then continue`
-    + (pipeline ? ` with your own pipeline at ${pipeline.dir}.` : ` using the vidmyo MCP tools.`);
+function kickoffPrompt(dir, topic, briefFile, { autonomous = false } = {}) {
+  return kickoff({ dir, topic, briefFile, autonomous });
 }
 
 // Shared launch used by the IPC handler and by the sheet-delegate flow.
@@ -156,8 +107,7 @@ async function launchAgent(agentId, cwd, { autonomous = false } = {}) {
   const manifest = readManifest(projectDir);
   const imageSource = await resolveImageSource();
   const { file: briefFile, topic } = writeSessionBrief(projectDir, manifest, agentId, imageSource);
-  const pipeline = getAgentPipeline(agentId, readAgentsConfig());
-  const prompt = kickoffPrompt(projectDir, topic, briefFile, { autonomous, pipeline, imageSource });
+  const prompt = kickoffPrompt(projectDir, topic, briefFile, { autonomous });
 
   const mode = readAgentsConfig().launchMode || 'desktop';
   if (mode === 'desktop') {
@@ -278,7 +228,9 @@ const KNOWN_AGENTS = [
     name: 'Gemini CLI',
     loginCmd: 'gemini',            // first run triggers Google OAuth
     installCmd: 'npm install -g @google/gemini-cli',
-    authPaths: ['.gemini/oauth_creds.json', '.gemini/installation_id'],
+    // installation_id identifies this CLI installation; it is not a login.
+    // Gemini 0.25+ requires an explicit selected auth type for noninteractive use.
+    authPaths: ['.gemini/oauth_creds.json'],
     repurposeName: 'Gemini / Antigravity',
   },
   {
@@ -344,6 +296,60 @@ function isAuthed(agent) {
   });
 }
 
+function parseClaudeAuthStatus(stdout) {
+  try {
+    const status = JSON.parse(String(stdout || ''));
+    if (typeof status.loggedIn !== 'boolean') return null;
+    const subscriptionType = typeof status.subscriptionType === 'string' && status.subscriptionType.trim()
+      ? status.subscriptionType.trim()
+      : null;
+    return {
+      authed: status.loggedIn,
+      subscriptionReady: status.loggedIn && Boolean(subscriptionType),
+      subscriptionType,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseGeminiAuthSettings(value) {
+  try {
+    const settings = typeof value === 'string' ? JSON.parse(value) : value;
+    const selectedType = settings?.security?.auth?.selectedType || settings?.selectedAuthType;
+    const supported = new Set([
+      'oauth-personal', 'gemini-api-key', 'vertex-ai',
+      'compute-default-credentials', 'cloud-shell',
+    ]);
+    return typeof selectedType === 'string' && supported.has(selectedType)
+      ? { authed: true, subscriptionReady: null, subscriptionType: null, authType: selectedType }
+      : { authed: false, subscriptionReady: null, subscriptionType: null, authType: null };
+  } catch {
+    return { authed: false, subscriptionReady: null, subscriptionType: null, authType: null };
+  }
+}
+
+function inspectGeminiAuth() {
+  try {
+    const file = path.join(HOME, '.gemini', 'settings.json');
+    if (fs.statSync(file).size > 1024 * 1024) return parseGeminiAuthSettings(null);
+    return parseGeminiAuthSettings(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return parseGeminiAuthSettings(null);
+  }
+}
+
+async function inspectAgentAuth(agent, cliPath) {
+  const fallback = { authed: isAuthed(agent), subscriptionReady: null, subscriptionType: null };
+  if (agent.id === 'gemini') return inspectGeminiAuth();
+  if (agent.id !== 'claude_code' || !cliPath) return fallback;
+  return new Promise((resolve) => {
+    execFile(cliPath, ['auth', 'status'], { timeout: 8000 }, (_error, stdout) => {
+      resolve(parseClaudeAuthStatus(stdout) || fallback);
+    });
+  });
+}
+
 // macOS/Linux: open a Terminal window running `cmd`. Returns true on success.
 function openInTerminal(cmd, cwd) {
   try {
@@ -383,6 +389,7 @@ async function detectAll() {
     const cliPath = await resolveCliPath(agent.cli);
     const installed = !!cliPath;
     const version = installed ? await readVersion(agent.cli) : '';
+    const auth = installed ? await inspectAgentAuth(agent, cliPath) : { authed: false, subscriptionReady: null, subscriptionType: null };
     out.push({
       id: agent.id,
       cli: agent.cli,
@@ -390,7 +397,9 @@ async function detectAll() {
       installed,
       path: cliPath,
       version,
-      authed: installed ? isAuthed(agent) : false,
+      authed: auth.authed,
+      subscriptionReady: auth.subscriptionReady,
+      subscriptionType: auth.subscriptionType,
       installCmd: agent.installCmd,
       loginCmd: agent.loginCmd,
       desktopApp: findDesktopApp(agent.id)?.name || null,
@@ -414,7 +423,8 @@ function register() {
     const agent = KNOWN_AGENTS.find((a) => a.id === agentId);
     if (!agent) return { ok: false, error: 'unknown agent' };
     const cliPath = await resolveCliPath(agent.cli);
-    return { ok: true, installed: !!cliPath, authed: !!cliPath && isAuthed(agent) };
+    const auth = cliPath ? await inspectAgentAuth(agent, cliPath) : { authed: false, subscriptionReady: null, subscriptionType: null };
+    return { ok: true, installed: !!cliPath, ...auth };
   });
 
   ipcMain.handle('agents:login', async (_evt, agentId) => {
@@ -550,4 +560,7 @@ function register() {
   });
 }
 
-module.exports = { register, KNOWN_AGENTS, detectAll, launchAgent, preferredAgentId };
+module.exports = {
+  register, KNOWN_AGENTS, detectAll, launchAgent, preferredAgentId,
+  parseClaudeAuthStatus, parseGeminiAuthSettings,
+};

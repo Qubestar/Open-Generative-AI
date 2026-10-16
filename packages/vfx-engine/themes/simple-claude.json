@@ -1,0 +1,58 @@
+{
+  "name": "simple-claude",
+  "label": "Simple Claude",
+  "isDefault": true,
+  "boardRef": "boards/simple-claude-board.png",
+  "portraitBoardRef": "boards/simple-claude-portrait-board.svg",
+  "vibe": "Calm editorial confidence. Flat cards, warm paper, one accent. The graphic never shouts; the words do the work.",
+  "colors": {
+    "background": "#FAF9F5",
+    "ink": "#1F1E1D",
+    "accent": "#D97757",
+    "muted": "#E8E6E1",
+    "panel": "#FFFFFF",
+    "panelText": "#1F1E1D"
+  },
+  "fonts": {
+    "headline": { "family": "Inter", "weight": 700, "source": "google", "fallback": "Arial" },
+    "body": { "family": "Inter", "weight": 400, "source": "google", "fallback": "Arial" }
+  },
+  "material": {
+    "panelRadiusPx": 20,
+    "panelOpacity": 1.0,
+    "backdropBlurPx": 0,
+    "panelBorder": "none",
+    "panelShadow": "0 6px 24px rgba(31,30,29,0.10)",
+    "texture": "none"
+  },
+  "motion": {
+    "inMs": 350,
+    "outMs": 300,
+    "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+    "entrance": "fade-rise-12px",
+    "exit": "fade",
+    "rest": "none",
+    "wordStaggerMs": 40,
+    "springs": {
+      "enter": { "damping": 200, "stiffness": 130, "mass": 1 },
+      "exit": { "damping": 200, "stiffness": 160, "mass": 1 },
+      "press": null
+    },
+    "notes": "Minimal. Fades and small rises only. No bounce, no glow, no overshoot. Stillness is the brand; rest motion is none."
+  },
+  "layout": {
+    "safeMarginPct": 5,
+    "lowerThirdYPct": 78,
+    "keywordSlot": "center-lower",
+    "maxPanelWidthPct": 62
+  },
+  "componentAccents": {
+    "textOnScreen": "compact slim white pill, small bold ink text, single line, bottom-center",
+    "ctaBanner": "white pill, ink text, small icon",
+    "subscribe": "YouTube red button (functional color, overrides accent) + flat bell chip, cursor click animation",
+    "conceptSplitPanel": "flat warm ivory full-height side panel with a hard vertical edge, eyebrow dot label, flat list rows with accent strike or check marks",
+    "concept75Field": "warm paper field with a soft accent wash, footage in a rounded card with subtle shadow, large flat rows",
+    "conceptFullScreen": "flat card row over the fullscreenBackground, accent line icons, editorial spacing"
+  },
+  "fullscreenBackground": "warm ivory paper texture, soft grain, gentle terracotta-tinted wash from one corner, calm and flat"
+}

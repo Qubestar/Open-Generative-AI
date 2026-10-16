@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Perfect VFX Brand Kit",
+  "description": "Per-creator persistent brand file. Lives at Documents/Perfect VFX/brand-kit.json. If present, Perfect VFX asks ZERO style questions. If missing, the skill runs the one-time onboarding interview, writes this file, and never asks again. Every field except theme is optional; anything absent falls back to the chosen theme's defaults.",
+  "type": "object",
+  "required": ["theme"],
+  "properties": {
+    "brand": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Creator or channel display name, available to graphics that mention the brand" }
+      }
+    },
+    "theme": {
+      "enum": ["simple-claude", "liquid-glass", "synthwave"],
+      "description": "The material + motion + layout system. Colors and fonts below only reskin it. simple-claude is the default when the user skips onboarding."
+    },
+    "colors": {
+      "type": "object",
+      "description": "Optional overrides of the theme's default palette.",
+      "properties": {
+        "accent": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "secondary": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+      }
+    },
+    "fonts": {
+      "type": "object",
+      "description": "Optional overrides of the theme's default type stack. Any Google Fonts family works by name (fetched automatically at render time, case insensitive). Non-Google fonts must be INSTALLED on the rendering machine and referenced by name (source local) with a Google fallback; a bare file path is not loaded by the renderer.",
+      "properties": {
+        "headline": {
+          "type": "object",
+          "properties": {
+            "family": { "type": "string" },
+            "source": { "enum": ["google", "file", "local"], "description": "google = fetched by family name (any Google Fonts family); local = installed on this machine (e.g. Adobe CC fonts), referenced by name with a fallback; file = DEPRECATED, treated as local (install the font file on the machine first)" },
+            "path": { "type": "string", "description": "Legacy field for source = file; the renderer does not load font files from paths, install the font instead" },
+            "weight": { "type": "integer" },
+            "fallback": { "type": "string", "description": "Google Fonts family used when a local font is unavailable" }
+          }
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "family": { "type": "string" },
+            "source": { "enum": ["google", "file", "local"] },
+            "path": { "type": "string" },
+            "weight": { "type": "integer" },
+            "fallback": { "type": "string" }
+          }
+        }
+      }
+    },
+    "vibeNotes": {
+      "type": "string",
+      "description": "Free-text vibe words from onboarding. Flavors CONCEPT_GRAPHIC art direction ONLY. Never changes layout, motion timing, or which moves fire; those are theme + Director territory."
+    }
+  }
+}

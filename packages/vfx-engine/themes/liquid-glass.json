@@ -1,0 +1,58 @@
+{
+  "name": "liquid-glass",
+  "label": "Liquid Glass",
+  "isDefault": false,
+  "boardRef": "boards/liquid-glass-board.png",
+  "portraitBoardRef": "boards/liquid-glass-portrait-board.svg",
+  "vibe": "Frosted premium airiness. Panels feel like physical glass floating over the footage. Slow, expensive motion.",
+  "colors": {
+    "panel": "rgba(255,255,255,0.14)",
+    "panelText": "#FFFFFF",
+    "accent": "#5AC8FA",
+    "charcoal": "#1C1F26",
+    "ink": "#FFFFFF"
+  },
+  "fonts": {
+    "headline": { "family": "Manrope", "weight": 600, "source": "google", "fallback": "Segoe UI" },
+    "body": { "family": "Manrope", "weight": 300, "source": "google", "fallback": "Segoe UI" }
+  },
+  "material": {
+    "panelRadiusPx": 24,
+    "panelOpacity": 0.85,
+    "backdropBlurPx": 24,
+    "panelBorder": "1px solid rgba(255,255,255,0.35)",
+    "edgeHighlight": "top-left specular stroke",
+    "panelShadow": "0 12px 40px rgba(0,0,0,0.35)",
+    "texture": "none"
+  },
+  "motion": {
+    "inMs": 700,
+    "outMs": 500,
+    "ease": "cubic-bezier(0.16, 1, 0.3, 1)",
+    "entrance": "scale-from-96pct-blur-in",
+    "exit": "fade-blur-out",
+    "rest": "parallax-drift-2px",
+    "wordStaggerMs": 60,
+    "springs": {
+      "enter": { "damping": 34, "stiffness": 40, "mass": 1.2 },
+      "exit": { "damping": 34, "stiffness": 52, "mass": 1.2 },
+      "press": { "damping": 18, "stiffness": 220, "mass": 1 }
+    },
+    "notes": "Slow luxury glide, zero overshoot. Panels drift gently while on screen (2px parallax, 8s loop). Nothing snaps."
+  },
+  "layout": {
+    "safeMarginPct": 6,
+    "lowerThirdYPct": 76,
+    "keywordSlot": "center-lower",
+    "maxPanelWidthPct": 58
+  },
+  "componentAccents": {
+    "textOnScreen": "compact slim frosted glass pill, small white text, single line, bottom-center",
+    "ctaBanner": "glass pill with ice blue glowing edge",
+    "subscribe": "YouTube red button (functional color, overrides accent) + frosted glass bell chip, cursor click animation",
+    "conceptSplitPanel": "full-height frosted glass side panel with a bright right edge, eyebrow dot label, stacked glass strike rows",
+    "concept75Field": "deep charcoal blue-black field with subtle grid and an ice blue aurora sweep, footage in a rounded portrait card with a thin bright edge, wide glass rows",
+    "conceptFullScreen": "frosted glass cards with glowing edges over the fullscreenBackground, ice gradient line icons"
+  },
+  "fullscreenBackground": "deep charcoal blue-black textured background, subtle grid, soft ice blue aurora glow sweeping from a top corner, gentle film grain"
+}

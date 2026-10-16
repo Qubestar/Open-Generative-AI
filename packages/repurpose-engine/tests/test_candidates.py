@@ -264,6 +264,35 @@ def test_generation_reconstructs_exact_evidence_and_has_no_forbidden_fields(tmp_
     assert [event["phase"] for event in progress][0] == "input_validation"
 
 
+@pytest.mark.parametrize(
+    ("opening", "message"),
+    [
+        ("So", "context-dependent transition"),
+        ("But", "context-dependent transition"),
+        ("What's", "unexplained earlier context"),
+    ],
+)
+def test_candidate_validation_rejects_context_dependent_openings(opening, message):
+    artifact = transcript()
+    artifact["words"][0]["text"] = opening
+    if opening == "What's":
+        artifact["words"][1]["text"] = "the"
+        artifact["words"][2]["text"] = "next"
+        artifact["words"][3]["text"] = "step"
+        artifact["words"][4]["text"] = "in"
+        artifact["words"][5]["text"] = "that"
+        artifact["words"][6]["text"] = "process?"
+    window = build_windows(artifact)[0]
+
+    with pytest.raises(ValueError, match=message):
+        validate_window_response(
+            {"suggestions": [suggestion()]},
+            window=window,
+            transcript=artifact,
+            max_suggestions=5,
+        )
+
+
 def test_per_window_suggestion_cap_uses_requested_count_and_window_count(tmp_path):
     artifact = transcript((100,) * 18)
     _, provider, _, result = run(
