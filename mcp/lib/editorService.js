@@ -125,6 +125,8 @@ export function createEditorMcpService({
   engines = null,
   projectsDir = null,
   templates = null,
+  // Injectable so tests (and any caller) can answer without spawning a CLI.
+  probeRunner = probeEditorAgents,
 } = {}) {
   const jobStore = store || new JobStore();
   const engineSet = engines || createEditorEngines();
@@ -148,6 +150,26 @@ export function createEditorMcpService({
     return entry.promise;
   }
 
+  // Probe state lives with the service: one real one-line turn per agent at a time,
+  // never awaited by a caller that paints UI. The tab renders the installed list
+  // instantly and fills the dots as the answers arrive.
+  const agentProbe = { inFlight: null, results: null, at: 0 };
+
+  function startAgentProbe({ force = false, onDone = null } = {}) {
+    if (force) clearEditorAgentProbeCache();
+    if (agentProbe.inFlight) return agentProbe.inFlight;
+    agentProbe.inFlight = probeRunner({ force: false })
+      .then(results => { agentProbe.results = results; agentProbe.at = Date.now(); return results; })
+      .catch(() => null)
+      .finally(() => {
+        agentProbe.inFlight = null;
+        if (typeof onDone === 'function' && agentProbe.results) {
+          try { onDone(agentProbe.results); } catch { /* observers must not break the probe */ }
+        }
+      });
+    return agentProbe.inFlight;
+  }
+
   return {
     service: editor,
     store: jobStore,
@@ -157,25 +179,40 @@ export function createEditorMcpService({
     capabilities: () => editor.capabilities(),
 
     /**
-     * Which local agents are actually connected right now. `probe` runs one real
-     * one-line turn per agent (cached for 10 minutes); without it only installation
-     * is reported, which is instant.
+     * Which local agents this machine has, and which of them answer. Never blocks:
+     * `probe: true` starts a background round and returns whatever is already known
+     * plus `pending`, so the UI paints immediately instead of spinning.
      */
-    async agents({ probe = false, force = false } = {}) {
+    agents({ probe = false, force = false } = {}) {
       const installed = detectEditorAgents();
-      if (!probe) return { contract_version: 1, probed: false, agents: installed };
-      if (force) clearEditorAgentProbeCache();
-      const results = await probeEditorAgents();
-      const byId = new Map(results.map(entry => [entry.id, entry]));
+      const withStatus = installed.map(entry => ({
+        ...entry,
+        ...editorAgentStatus(entry.id, { binary: entry.path }),
+      }));
+      if (probe) {
+        // Start a round only when nothing is known, the caller demands a refresh, or
+        // the previous round is older than the probe TTL. Otherwise every poll would
+        // spawn another CLI and the tab would look stuck on "checking".
+        const stale = !agentProbe.at || (Date.now() - agentProbe.at) > 10 * 60 * 1000;
+        if (force) agentProbe.results = null;
+        if (force || !agentProbe.results || stale) void startAgentProbe({ force });
+      }
+      const byId = new Map((agentProbe.results || []).map(entry => [entry.id, entry]));
+      const agents = withStatus.map(entry => ({
+        ...entry,
+        checked: byId.has(entry.id),
+        ...(byId.get(entry.id) || {}),
+      }));
+      const pending = probe && (
+        agentProbe.inFlight !== null
+        || !agentProbe.results
+        || withStatus.some(entry => !byId.has(entry.id))
+      );
       return {
         contract_version: 1,
-        probed: true,
-        // installed + the CLI's own sign-in state + the proven probe result
-        agents: installed.map(entry => ({
-          ...entry,
-          ...editorAgentStatus(entry.id, { binary: entry.path }),
-          ...(byId.get(entry.id) || {}),
-        })),
+        probed: Boolean(agentProbe.results),
+        pending: Boolean(pending),
+        agents,
       };
     },
 

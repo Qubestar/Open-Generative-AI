@@ -349,12 +349,13 @@ export default function EditorStudio() {
   const loadAgents = useCallback(async (force = false) => {
     const api = typeof window !== 'undefined' ? (window.editor || null) : null;
     if (!api?.agents) return;
-    setAgentProbe('loading');
     try {
+      // Returns immediately with the installed list; the probe runs in the background
+      // (one real turn per agent) and `pending` tells us to look again in a moment.
       const result = unwrap(await api.agents({ force }));
       const rows = editorAgentRows(result.agents || []);
       setAgentRows(rows);
-      setAgentProbe('ready');
+      setAgentProbe(result.pending ? 'loading' : 'ready');
       const preferred = defaultBrainAgent(rows);
       if (preferred) setForm(current => (current.brain_agent ? current : { ...current, brain_agent: preferred }));
     } catch (error) {
@@ -364,6 +365,13 @@ export default function EditorStudio() {
   }, []);
 
   useEffect(() => { void loadAgents(); }, [loadAgents]);
+
+  // Keep looking while the background probe finishes; stops as soon as it is done.
+  useEffect(() => {
+    if (agentProbe !== 'loading') return undefined;
+    const timer = setInterval(() => { void loadAgents(false); }, 2000);
+    return () => clearInterval(timer);
+  }, [agentProbe, loadAgents]);
 
   // One click on the agent's own login flow (the CLI opens its own browser/TUI).
   // Vidmyo never asks for credentials and never stores them.
@@ -523,7 +531,8 @@ export default function EditorStudio() {
                 )}
                 <div role="radiogroup" aria-label="Agent" style={{ display: 'grid', gap: 8 }}>
                   {agentRows.map(row => {
-                    const dot = row.status === 'ready' ? C.good : (row.status === 'signed_in' ? C.warning : C.dim);
+                    const checking = !row.checked && agentProbe === 'loading';
+                    const dot = row.ready ? C.good : (row.status === 'offline' ? C.dim : (checking ? C.accent : C.dim));
                     const selected = form.brain_agent === row.id;
                     const canSignIn = row.status === 'offline' && typeof window !== 'undefined'
                       && typeof window.agents?.login === 'function';
@@ -547,12 +556,13 @@ export default function EditorStudio() {
                           textTransform: 'uppercase', color: row.ready ? C.good : C.dim,
                         }}>
                           {row.ready ? 'connected'
-                            : row.status === 'error' ? 'cannot run'
-                              : row.status === 'offline' ? 'not signed in'
-                                : 'not installed'}
+                            : checking ? 'checking'
+                              : row.status === 'error' ? 'cannot run'
+                                : row.status === 'offline' ? 'not signed in'
+                                  : 'not installed'}
                         </span>
                         <span style={{ color: C.dim, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
-                          {row.ready ? (row.model && row.model !== 'default' ? `model ${row.model}` : '') : (row.reason || '')}
+                          {row.ready || checking ? (row.ready && row.model && row.model !== 'default' ? `model ${row.model}` : '') : (row.reason || '')}
                         </span>
                         {row.status === 'offline' && !canSignIn && (
                           <span style={{ fontSize: 11, color: C.warning, flex: '0 0 auto' }}>sign in once in {row.label}</span>

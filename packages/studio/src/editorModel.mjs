@@ -188,6 +188,7 @@ export function editorAgentRows(agents = []) {
         label: String(agent.label || agent.id),
         status,
         ready,
+        checked: agent.checked === true,
         selectable: ready,
         model: agent.model || null,
         reason: ready ? null : String(agent.human_reason || agent.reason || '').trim() || null,

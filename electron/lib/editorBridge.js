@@ -152,7 +152,13 @@ function createEditorBridge({
       try {
         const svc = await service();
         const result = await svc.agents({ probe: true, force: Boolean(options?.force) });
-        return { ok: true, agents: result.agents || [], probed: result.probed, default_brain: 'none' };
+        return {
+          ok: true,
+          agents: result.agents || [],
+          probed: result.probed,
+          pending: result.pending,
+          default_brain: 'none',
+        };
       } catch (error) { return fail(error); }
     });
 

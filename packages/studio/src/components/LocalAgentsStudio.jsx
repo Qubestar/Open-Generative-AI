@@ -27,8 +27,32 @@ export default function LocalAgentsStudio() {
   const [results, setResults] = useState({});   // agentId -> {ok, output/error/command/hint}
   const [detectError, setDetectError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  // "Connected" is proven by the Editor's probe (one real one-line turn per agent),
+  // not assumed from a credentials file. It fills in while the page is open.
+  const [probes, setProbes] = useState({});
+  const [probePending, setProbePending] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const probeAgents = useCallback(async (force = false) => {
+    const api = typeof window !== 'undefined' ? window.editor : null;
+    if (!api?.agents) return;
+    try {
+      const res = await api.agents({ force });
+      if (res?.ok === false) return;
+      const map = {};
+      for (const agent of res.agents || []) map[agent.id] = agent;
+      setProbes(map);
+      setProbePending(Boolean(res.pending));
+    } catch { /* the page still works without the probe */ }
+  }, []);
+
+  useEffect(() => { probeAgents(); }, [probeAgents]);
+  useEffect(() => {
+    if (!probePending) return undefined;
+    const timer = setInterval(() => probeAgents(false), 2500);
+    return () => clearInterval(timer);
+  }, [probePending, probeAgents]);
+
+  const refresh = useCallback(async (forceProbe = false) => {
     if (!hasBridge) return;
     setRefreshing(true);
     setDetectError('');
@@ -36,10 +60,13 @@ export default function LocalAgentsStudio() {
       const res = await window.agents.detect();
       if (!res?.ok) throw new Error(res?.error || 'Could not detect installed agents.');
       setAgents(res.agents || []);
+      void probeAgents(forceProbe);
     } catch (error) { setDetectError(error.message); setAgents(prev => prev || []); }
     finally { setRefreshing(false); }
-  }, [hasBridge]);
-  useEffect(() => { refresh(); }, [refresh]);
+  }, [hasBridge, probeAgents]);
+  // First paint uses whatever the Editor already proved (cached); the button forces a
+  // fresh round of real turns.
+  useEffect(() => { refresh(false); }, [refresh]);
 
   if (!hasBridge) {
     return (
@@ -72,7 +99,7 @@ export default function LocalAgentsStudio() {
             Connect an installed agent to Vidmyo’s local tools, then open it with your project context.
           </div>
           </div>
-          <button style={btn()} onClick={refresh} disabled={refreshing || !!busyId}>{refreshing ? 'Checking…' : 'Refresh agents'}</button>
+          <button style={btn()} onClick={() => refresh(true)} disabled={refreshing || !!busyId}>{refreshing ? 'Checking…' : 'Refresh agents'}</button>
         </div>
 
         <div style={card}>
@@ -99,9 +126,28 @@ export default function LocalAgentsStudio() {
               <div className="agent-card-header">
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ color: C.text, fontSize: 14, fontWeight: 800 }}>{a.name}</span>
+                  {probes[a.id]?.ready === true ? (
+                    <span style={{
+                      marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 900,
+                      letterSpacing: 1, textTransform: 'uppercase', color: C.good,
+                      border: `1px solid ${C.good}`, background: 'transparent',
+                    }}>connected</span>
+                  ) : null}
                   <span style={{ color: C.dim, fontSize: 11, marginLeft: 8 }}>
-                    {a.installed ? `installed${a.version ? ` · v${a.version}` : ''}${a.authed ? ' · signed in' : ' · not signed in'}` : 'not installed'}
+                    {a.installed
+                      ? `installed${a.version ? ` · v${a.version}` : ''}${probes[a.id]?.ready === true || probes[a.id]?.checked === true
+                        ? ''
+                        : (a.authed ? ' · signed in' : ' · not signed in')}`
+                      : 'not installed'}
                   </span>
+                  {probes[a.id]?.ready !== true && probes[a.id]?.human_reason && (
+                    <div style={{ color: C.dim, fontSize: 11, marginTop: 4, lineHeight: 1.5 }}>
+                      {probes[a.id].human_reason}
+                    </div>
+                  )}
+                  {probes[a.id]?.ready !== true && probePending && (
+                    <div style={{ color: C.dim, fontSize: 11, marginTop: 4 }}>Checking whether it answers…</div>
+                  )}
                 </div>
                 {!a.installed && (
                   <button style={btn()} onClick={() => window.agents.openExternal(a.id === 'claude_code'

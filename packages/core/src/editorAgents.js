@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 // ── Adapters ────────────────────────────────────────────────────────────────
 // Each entry is one CLI in its one-shot (non-interactive) form. `args(prompt)` must
@@ -334,6 +334,42 @@ export function humanizeAgentReason(id, reason) {
 
 // ── The call ────────────────────────────────────────────────────────────────
 
+
+/**
+ * Run a CLI without ever blocking the main process. `spawnSync` here froze the whole
+ * Electron UI for the length of the agent's answer — the beachball Luke saw.
+ */
+function runProcess(binary, args, { cwd = null, env = {}, timeoutMs = DEFAULT_TIMEOUT_MS, signal = null, label = 'agent' } = {}) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(binary, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) { reject(error); return; }
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const cap = 32 * 1024 * 1024;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener?.('abort', onAbort);
+      fn(value);
+    };
+    const kill = () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
+    const timer = setTimeout(() => { kill(); finish(reject, new Error(`${label} did not answer within ${Math.round(timeoutMs / 1000)}s.`)); }, timeoutMs);
+    const onAbort = () => { kill(); finish(reject, new Error(`${label} was cancelled.`)); };
+    if (signal) {
+      if (signal.aborted) { kill(); finish(reject, new Error(`${label} was cancelled.`)); return; }
+      signal.addEventListener?.('abort', onAbort, { once: true });
+    }
+    child.stdout?.on('data', chunk => { stdout = (stdout + chunk).slice(-cap); });
+    child.stderr?.on('data', chunk => { stderr = (stderr + chunk).slice(-cap); });
+    child.on('error', error => { finish(reject, error); });
+    child.on('close', code => { finish(resolve, { code, stdout, stderr }); });
+  });
+}
+
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 
 export function cleanAgentOutput(text) {
@@ -366,25 +402,14 @@ export async function askEditorAgent({
 
   const args = adapter.args(prompt, { model });
   const env = { ...process.env, ...adapter.env, NO_COLOR: '1', TERM: 'dumb' };
-  const text = await new Promise((resolve, reject) => {
-    const child = spawnSync(binary, args, {
-      cwd: dir, env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024,
-    });
-    if (child.error) {
-      if (child.error.code === 'ETIMEDOUT') { reject(new Error(`${adapter.label} did not answer within ${Math.round(timeoutMs / 1000)}s.`)); return; }
-      reject(child.error);
-      return;
-    }
-    const output = `${child.stdout || ''}${child.stderr ? `\n${child.stderr}` : ''}`;
-    if (child.status !== 0 && !extractJsonBlock(output)) {
-      // Keep the head of the message: CLIs put the reason (e.g. IneligibleTierError)
-      // before the stack trace, and the humaniser needs to see it.
-      reject(new Error(`${adapter.label} exited with ${child.status}: ${cleanAgentOutput(output).trim().slice(0, 600)}`));
-      return;
-    }
-    resolve(output);
-  });
-  return { text: cleanAgentOutput(text), adapter, workDir: dir };
+  const child = await runProcess(binary, args, { cwd: dir, env, timeoutMs, signal, label: adapter.label });
+  const output = `${child.stdout || ''}${child.stderr ? `\n${child.stderr}` : ''}`;
+  if (child.code !== 0 && !extractJsonBlock(output)) {
+    // Keep the head of the message: CLIs put the reason (e.g. IneligibleTierError)
+    // before the stack trace, and the humaniser needs to see it.
+    throw new Error(`${adapter.label} exited with ${child.code}: ${cleanAgentOutput(output).trim().slice(0, 600)}`);
+  }
+  return { text: cleanAgentOutput(output), adapter, workDir: dir };
 }
 
 /** One call that goes from "the plan exists" to "the plan reflects the agent's choices". */
@@ -416,6 +441,7 @@ export async function runBrainPass({ agentId, plan, assets, options = {}, style 
 const PROBE_TTL_MS = 10 * 60 * 1000;
 const STATUS_TIMEOUT_MS = 20 * 1000;
 const PING_TIMEOUT_MS = 120 * 1000;
+const PROBE_TIMEOUT_MS = 30 * 1000;
 const probeCache = new Map();
 
 // The expected value must NOT appear in the prompt: some CLIs echo the prompt, and a
@@ -466,7 +492,7 @@ export function editorAgentStatus(id, { binary = null, exec = statusOutput } = {
  * declares candidate models (Codex), each is tried until one answers, because a stale
  * model in the user's config.toml must not look like "not connected".
  */
-export async function probeEditorAgent(id, { run = null, timeoutMs = PING_TIMEOUT_MS, force = false } = {}) {
+export async function probeEditorAgent(id, { run = null, timeoutMs = PROBE_TIMEOUT_MS, force = false } = {}) {
   const cached = probeCache.get(id);
   if (!force && cached && Date.now() - cached.at < PROBE_TTL_MS) return cached.value;
 
@@ -512,10 +538,18 @@ export async function probeEditorAgent(id, { run = null, timeoutMs = PING_TIMEOU
 }
 
 /** Probe several agents with a small concurrency cap (each one spawns a CLI). */
-export async function probeEditorAgents({ ids = null, concurrency = 1, run = null, force = false } = {}) {
+export async function probeEditorAgents({ ids = null, concurrency = 2, run = null, force = false } = {}) {
   const wanted = ids || EDITOR_AGENT_ADAPTERS.map(adapter => adapter.id);
-  const queue = [...wanted];
   const results = [];
+  const queue = [];
+  // An agent whose own CLI says "not signed in" cannot answer: say so without
+  // spawning it (one less process competing with the user's apps).
+  for (const id of wanted) {
+    const status = editorAgentStatus(id);
+    if (!status.installed) { results.push({ id, installed: false, ready: false, reason: 'not installed on this machine', human_reason: 'Not installed on this machine.' }); continue; }
+    if (status.signed_in === false) { results.push({ id, installed: true, ready: false, reason: 'not signed in on this machine', human_reason: humanizeAgentReason(id, 'not logged in') }); continue; }
+    queue.push(id);
+  }
   const workers = Array.from({ length: Math.max(1, Math.min(concurrency, queue.length)) }, async () => {
     while (queue.length) {
       const id = queue.shift();
