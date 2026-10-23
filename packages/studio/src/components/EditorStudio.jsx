@@ -50,7 +50,16 @@ function unwrap(result) {
   return rest;
 }
 
-const message = error => (error && error.message ? error.message : String(error || 'Something went wrong.'));
+const message = error => {
+  const text = error && error.message ? error.message : String(error || 'Something went wrong.');
+  // The renderer picks up a new preload on reload, but the main process keeps the
+  // handlers it registered at launch. Without this the user sees Electron's raw
+  // "No handler registered" string and has no idea that a restart is the fix.
+  if (/No handler registered for 'editor:/i.test(text)) {
+    return 'Vidmyo needs a restart: the Editor engine was installed after this window started, so the app is still running without its handlers. Quit Vidmyo completely and reopen it, then try again.';
+  }
+  return text;
+};
 
 function Label({ children, hint }) {
   return (
@@ -390,7 +399,7 @@ export default function EditorStudio() {
     || `out/${EDITOR_FINAL_FILENAME}`;
 
   return (
-    <div style={{ maxWidth: 980, margin: '0 auto', padding: '22px 18px 60px', color: C.text }}>
+    <div style={{ maxWidth: 980, margin: '0 auto', padding: '22px 18px 60px', height: '100%', overflowY: 'auto', boxSizing: 'border-box', color: C.text }}>
       <header style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline', justifyContent: 'space-between' }}>
         <h2 style={{ fontSize: 20, fontWeight: 900, margin: 0, letterSpacing: 0.4 }}>Editor</h2>
         <span style={{ fontSize: 11, color: C.dim }}>Turn a folder of footage into an edit. V1 is the documentary engine.</span>

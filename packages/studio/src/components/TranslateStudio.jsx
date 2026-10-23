@@ -270,7 +270,7 @@ export default function TranslateStudio() {
   const profiles = voiceProfiles?.voices || [];
 
   return (
-    <div style={{ maxWidth: 980, margin: '0 auto', padding: '22px 18px 60px', color: C.text }}>
+    <div style={{ maxWidth: 980, margin: '0 auto', padding: '22px 18px 60px', height: '100%', overflowY: 'auto', boxSizing: 'border-box', color: C.text }}>
       <header style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline', justifyContent: 'space-between' }}>
         <h2 style={{ fontSize: 20, fontWeight: 900, margin: 0, letterSpacing: 0.4 }}>Translate Video</h2>
         <span style={{ fontSize: 11, color: C.dim }}>
