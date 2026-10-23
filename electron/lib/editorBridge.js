@@ -146,6 +146,16 @@ function createEditorBridge({
       } catch (error) { return fail(error); }
     });
 
+    // Which local agent CLIs this machine can actually run as the Editor's brain.
+    // Detection only — nothing is launched and no credentials are read here.
+    ipcMain.handle('editor:agents', async () => {
+      try {
+        const svc = await service();
+        const capabilities = await svc.capabilities();
+        return { ok: true, agents: capabilities.agents || [], default_brain: capabilities.brain_default || 'none' };
+      } catch (error) { return fail(error); }
+    });
+
     ipcMain.handle('editor:pick-folder', async (_event, kind = 'input') => {
       const titles = {
         input: 'Choose the folder with your footage',

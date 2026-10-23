@@ -171,6 +171,31 @@ transcript-derived words-per-minute. Writes `style-profile.json` + `contact-shee
 "Save as template" and every later run can pass `template_id`. Templates are user data, never inside
 the repo: `~/.vidmyo/editor/templates/`.
 
+
+### 6b. Brain — the optional semantic layer
+
+V1 renders with **no AI at all**: probe → prepare → local Whisper → assets → deterministic planner →
+HyperFrames → mix → finish. What the deterministic planner cannot do is know that "the harbour"
+should show the harbour; it only rotates the material it finds. That single decision is what the
+brain adds.
+
+- `options.brain = { mode: 'none' | 'local', agent_id, timeout_s }`; default `none`.
+- `local` runs one **headless turn of an agent CLI the user already has installed and logged in**
+  (`packages/core/src/editorAgents.js`: opencode, hermes, codex, gemini, claude_code). The prompt is
+  closed-world: the beats of the already-timed edit plus the footage inventory; the answer may only
+  choose among those files and words that were actually said.
+- The answer is validated (`parseBrainPicks`) before it touches the plan: unknown file, out-of-range
+  beat, a keyword that was not spoken, two face beats in a row → dropped with a reason. The plan
+  timing never comes from the agent.
+- Any failure (agent missing, non-JSON answer, timeout) degrades to the deterministic plan with a
+  warning; the edit still renders.
+- Result is recorded in `artifacts/brain.json` (agent, applied counts, rejected entries, raw preview)
+  and in the plan stage metrics (`brain_agent`, `brain_pictures`).
+- **The Editor never uses the Direct API keys** configured for image/video generation, and has no
+  API-key mode on purpose: the agent runs as the user's own CLI with its own login.
+- MCP: `editor_start_edit { brain_agent: "opencode" }`; `editor_capabilities` lists the agents
+  detection found on the machine.
+
 ## 7. MCP tools (names are part of the contract)
 
 | tool | purpose |

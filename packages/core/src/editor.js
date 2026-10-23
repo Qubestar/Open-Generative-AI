@@ -25,6 +25,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+import { detectEditorAgents, editorAgentAdapter } from './editorAgents.js';
+
 export const EDITOR_CONTRACT_VERSION = 1;
 export const EDITOR_PROJECT_KIND = 'vidmyo.editor';
 export const EDITOR_JOB_TYPE = 'editor';
@@ -122,6 +124,8 @@ export const DEFAULT_EDITOR_OPTIONS = Object.freeze({
   cut_out: false,
   max_minutes: 20,
   examples: [],
+  // The semantic layer is OFF by default: V1 renders with no agent at all.
+  brain: Object.freeze({ mode: 'none', agent_id: null, timeout_s: 180 }),
 });
 
 const BOOLEAN_OPTION_KEYS = ['cut_out'];
@@ -200,6 +204,26 @@ export function normalizeEditorOptions(raw = {}) {
     }
   } else if (raw.examples !== undefined && raw.examples !== null) {
     throw new Error('examples must be a list.');
+  }
+
+  // ── brain: who chooses the picture for each line ──────────────────────────
+  if (raw.brain !== undefined && raw.brain !== null) {
+    if (typeof raw.brain !== 'object' || Array.isArray(raw.brain)) throw new Error('brain must be an object.');
+    const mode = String(raw.brain.mode || 'none').trim().toLowerCase();
+    if (!['none', 'local'].includes(mode)) throw new Error('brain.mode must be "none" or "local".');
+    if (mode === 'local') {
+      if (!raw.brain.agent_id) throw new Error('Choose a local agent for the brain, or set brain.mode to "none".');
+      options.brain = {
+        mode,
+        agent_id: editorAgentAdapter(raw.brain.agent_id).id,
+        timeout_s: Math.max(20, Math.min(900, Number(raw.brain.timeout_s) || 180)),
+      };
+    } else {
+      options.brain = { mode: 'none', agent_id: null, timeout_s: 180 };
+    }
+  } else if (raw.brain_agent !== undefined && raw.brain_agent !== null && raw.brain_agent !== '') {
+    // Shorthand for MCP callers: naming an agent turns the brain on.
+    options.brain = { mode: 'local', agent_id: editorAgentAdapter(raw.brain_agent).id, timeout_s: 180 };
   }
 
   return Object.freeze(options);
@@ -582,6 +606,8 @@ export function editorCapabilities({ engines = null } = {}) {
     devices: discovered?.devices || null,
     tools: discovered?.tools || null,
     template_count: templates.length,
+    agents: detectEditorAgents(),
+    brain_default: 'none',
     skill_dir: editorSkillDir(),
     cut_out_available: Boolean(discovered?.cutOut),
   };

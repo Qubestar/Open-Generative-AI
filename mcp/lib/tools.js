@@ -442,6 +442,8 @@ export function registerEditorTools(server, service) {
       pacing: z.enum(['reference', 'long']).default('reference'),
       face_share: z.number().min(0).max(0.8).optional().describe('Share of runtime on the speaker, 0-0.8'),
       cut_out: z.boolean().default(false).describe('Optional cut-out device; needs the local matte model'),
+      brain_agent: z.string().min(1).max(40).optional()
+        .describe('Optional local agent that chooses which real file illustrates each line (e.g. "opencode", "hermes", "codex", "gemini"). Omit for the deterministic planner. The agent CLI must already be installed and logged in; the Editor never uses configured API keys.'),
     }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, call(args => service.start({
@@ -457,6 +459,7 @@ export function registerEditorTools(server, service) {
       pacing: args.pacing,
       ...(args.face_share === undefined ? {} : { face_share: args.face_share }),
       cut_out: args.cut_out,
+      ...(args.brain_agent ? { brain_agent: args.brain_agent } : {}),
     },
   })));
 

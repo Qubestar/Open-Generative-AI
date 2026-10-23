@@ -191,3 +191,29 @@ test('editor_read_artifact rejects a non-JSON artifact', async () => {
   assert.ok(result.isError);
   await client.close();
 });
+
+test('editor_start_edit can point the brain at a local agent', async () => {
+  const { client, calls } = await harness();
+  await client.callTool({
+    name: 'editor_start_edit',
+    arguments: { input_dir: '/Users/luke/Footage/reel', brain_agent: 'opencode' },
+  });
+  const start = calls.find(entry => entry[0] === 'start')[1];
+  assert.equal(start.options.brain_agent, 'opencode');
+  await client.close();
+});
+
+test('editor_capabilities lists the local agents detection found', async () => {
+  const { client } = await harness({
+    capabilities: async () => ({
+      contract_version: 1,
+      engines: [{ id: 'v1', name: 'V1', modes: ['original', 'custom'] }],
+      agents: [{ id: 'opencode', label: 'OpenCode', available: true }, { id: 'codex', label: 'Codex', available: false }],
+      brain_default: 'none',
+    }),
+  });
+  const body = payload(await client.callTool({ name: 'editor_capabilities', arguments: {} }));
+  assert.equal(body.brain_default, 'none');
+  assert.equal(body.agents.filter(agent => agent.available).length, 1);
+  await client.close();
+});

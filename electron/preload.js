@@ -211,6 +211,7 @@ contextBridge.exposeInMainWorld('translate', {
 contextBridge.exposeInMainWorld('editor', {
     isElectron: true,
     capabilities: () => ipcRenderer.invoke('editor:capabilities'),
+    agents: () => ipcRenderer.invoke('editor:agents'),
     pickFolder: (kind) => ipcRenderer.invoke('editor:pick-folder', kind),
     pickFile: (kind) => ipcRenderer.invoke('editor:pick-file', kind),
     start: (payload) => ipcRenderer.invoke('editor:start', payload),

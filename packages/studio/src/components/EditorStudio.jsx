@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DEFAULT_OUTPUT_HINT, EDITOR_FINAL_FILENAME, FACE_SHARE_SLIDER_MAX, LOCAL_ONLY_NOTICE,
   MAX_FACE_SHARE, NO_BRIDGE_NOTICE, PACING_CHOICES, QUALITY_CHOICES, defaultEditorForm,
-  describeAnalysisJob, describeEditorJob, editorEngineOptions, editorModeOptions,
+  describeAnalysisJob, describeEditorJob, editorAgentOptions, editorEngineOptions, editorModeOptions,
   editorPayloadFromForm, exampleList, exampleProfileSummary, formatDurationMs,
   normalizeExampleUrl, stageChecklist, templateRows, validateEditorForm,
 } from '../editorModel.mjs';
@@ -343,6 +343,7 @@ export default function EditorStudio() {
   const templateList = useMemo(() => templateRows(templates), [templates]);
   const engines = useMemo(() => editorEngineOptions(capabilities), [capabilities]);
   const modes = useMemo(() => editorModeOptions(capabilities, form.engine), [capabilities, form.engine]);
+  const agentOptions = useMemo(() => editorAgentOptions(capabilities), [capabilities]);
 
   const start = useCallback(async () => {
     if (!bridge) return;
@@ -454,6 +455,58 @@ export default function EditorStudio() {
             <p style={{ margin: '10px 0 0', fontSize: 11, color: C.dim, lineHeight: 1.5 }}>
               {engines.find(engine => engine.value === form.engine)?.description || ''}
             </p>
+          </Section>
+
+          <Section
+            title="Brain"
+            note="V1 cuts, renders and mixes on its own. An agent only chooses which real file illustrates each line — it never renders anything."
+          >
+            <div role="group" aria-label="Brain" style={{ display: 'inline-flex', padding: 3, borderRadius: 9, border: `1px solid ${C.line}`, background: C.input }}>
+              {[{ value: 'none', label: 'On its own' }, { value: 'local', label: 'Local agent' }].map(option => (
+                <button key={option.value} type="button" disabled={disabled} aria-pressed={form.brain_mode === option.value}
+                  onClick={() => update({
+                    brain_mode: option.value,
+                    // Default to the first agent this machine can actually run, so the
+                    // switch to "Local agent" is one click and not a hunt.
+                    ...(option.value === 'local' && !form.brain_agent && agentOptions[0]
+                      ? { brain_agent: agentOptions[0].value }
+                      : {}),
+                  })}
+                  style={{
+                    padding: '8px 16px', borderRadius: 7, border: 'none',
+                    background: form.brain_mode === option.value ? C.selected : 'transparent',
+                    color: form.brain_mode === option.value ? C.text : C.dim,
+                    fontWeight: 800, fontSize: 12.5, cursor: disabled ? 'not-allowed' : 'pointer',
+                  }}>
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            {form.brain_mode === 'local' && (
+              <div style={{ marginTop: 14 }}>
+                <Label hint="already installed and logged in on this machine">Agent</Label>
+                {agentOptions.length ? (
+                  <select value={form.brain_agent} disabled={disabled}
+                    onChange={event => update({ brain_agent: event.target.value })} style={selectStyle}>
+                    <option value="">Pick an agent…</option>
+                    {agentOptions.map(agent => <option key={agent.value} value={agent.value}>{agent.label}</option>)}
+                  </select>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 12, color: C.danger }}>
+                    No agent CLI was found on this machine. Install one (OpenCode, Hermes, Codex, Gemini or Claude Code)
+                    and reopen Vidmyo, or leave the Editor on its own.
+                  </p>
+                )}
+                {validation.errors.brain_agent && <span style={errorText}>{validation.errors.brain_agent}</span>}
+                {(() => {
+                  const chosen = agentOptions.find(agent => agent.value === form.brain_agent);
+                  return chosen?.note ? <p style={{ margin: '8px 0 0', fontSize: 11, color: C.dim, lineHeight: 1.5 }}>{chosen.note}</p> : null;
+                })()}
+                <p style={{ margin: '8px 0 0', fontSize: 11, color: C.dim, lineHeight: 1.5 }}>
+                  The agent runs as your own CLI with its own login. Your Direct API keys are never used here, and nothing is uploaded from Vidmyo.
+                </p>
+              </div>
+            )}
           </Section>
 
           <Section title="Footage">

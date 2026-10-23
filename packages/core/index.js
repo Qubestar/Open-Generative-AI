@@ -56,6 +56,7 @@ export * from './src/translateEngines.js';
 export * from './src/translateRunner.js';
 export * from './src/editor.js';
 export * from './src/editorEngines.js';
+export * from './src/editorAgents.js';
 export * from './src/editorRunner.js';
 export * from './src/renderers/hyperframesAdapter.js';
 export * from './src/renderers/edgToHyperframes.js';

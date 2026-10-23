@@ -150,7 +150,18 @@ export function defaultEditorForm(capabilities) {
     example_urls: [],
     example_videos: [],
     template_name: '',
+    // The semantic layer is off unless the user picks an installed agent.
+    brain_mode: 'none',
+    brain_agent: '',
   };
+}
+
+/** Local agents this machine can run as the Editor's brain (from capabilities). */
+export function editorAgentOptions(capabilities) {
+  const agents = Array.isArray(capabilities?.agents) ? capabilities.agents : [];
+  return agents
+    .filter(agent => agent && agent.available)
+    .map(agent => ({ value: String(agent.id), label: String(agent.label || agent.id), note: agent.note || '' }));
 }
 
 /** Example URLs + example files, de-duplicated, in the order the user added them. */
@@ -209,6 +220,14 @@ export function validateEditorForm(form = {}) {
     }
   }
 
+  const brainMode = String(form?.brain_mode || 'none');
+  if (!['none', 'local'].includes(brainMode)) {
+    errors.brain_mode = 'Choose whether the Editor works on its own or with a local agent.';
+  }
+  if (brainMode === 'local' && !String(form?.brain_agent || '').trim()) {
+    errors.brain_agent = 'Pick one of the agents installed on this machine.';
+  }
+
   if (form?.engine && !editorEngineOptions(null).some(engine => engine.value === form.engine)) {
     errors.engine = 'That engine is not available in this build.';
   }
@@ -247,6 +266,9 @@ export function editorPayloadFromForm(form) {
     quality: String(form?.quality || 'standard'),
     pacing: String(form?.pacing || 'reference'),
     face_share: Number.isFinite(Number(form?.face_share)) ? Number(form.face_share) : 0.3,
+    ...(String(form?.brain_mode || 'none') === 'local'
+      ? { brain: { mode: 'local', agent_id: String(form?.brain_agent || '').trim() } }
+      : {}),
   };
 }
 

@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { runGovernedProcess } from './governedProcess.js';
 import { resolveFfmpegBinary, resolveFfprobeBinary } from './rendererAdapter.js';
 import { listFootage, editorSkillDir } from './editor.js';
+import { runBrainPass } from './editorAgents.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGES_ROOT = path.resolve(HERE, '..', '..');
@@ -1100,6 +1101,31 @@ export function createEditorEngines({
         options: ctx.options,
         style,
       });
+
+      // The optional brain: the agent chooses which real file illustrates each line.
+      // Timing, devices, rendering and sound stay deterministic; a failure here only
+      // costs the semantic layer, never the edit.
+      let brain = null;
+      if (ctx.options?.brain?.mode === 'local') {
+        const agentId = ctx.options.brain.agent_id;
+        try {
+          brain = await runBrainPass({
+            agentId,
+            plan,
+            assets,
+            options: ctx.options,
+            style,
+            workDir: ctx.project.artifactPath('work/brain'),
+            timeoutMs: Math.max(20, Number(ctx.options.brain.timeout_s) || 180) * 1000,
+            signal: ctx.signal,
+          });
+          ctx.project.writeJson('artifacts/brain.json', brain);
+          ctx.log(`brain ${brain.label}: ${brain.applied.assets} pictures, ${brain.applied.face} face beats, ${brain.applied.keywords} keywords (${brain.duration_ms} ms)`);
+        } catch (error) {
+          ctx.warn(`the ${agentId} brain could not answer (${error.message}); the deterministic planner kept the edit.`);
+        }
+      }
+
       const issues = validatePlanDocument(plan);
       if (issues.length) throw new Error(`The plan is not renderable: ${issues.slice(0, 4).join('; ')}`);
       ctx.project.writeJson('artifacts/plan.json', plan);
@@ -1112,6 +1138,8 @@ export function createEditorEngines({
           beats: plan.beats.length,
           face_share: plan.stats.face_share,
           images_per_minute: plan.stats.images_per_minute,
+          brain_agent: brain?.agent || null,
+          brain_pictures: brain?.applied?.assets ?? 0,
         },
       };
     },
