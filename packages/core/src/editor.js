@@ -61,7 +61,7 @@ export const EDITOR_STAGES = [
   'probe', 'prepare', 'transcribe', 'assets', 'plan', 'build', 'render', 'mix', 'finish', 'validate',
 ];
 
-export const STAGE_DEPENDENCIES = {
+export const EDITOR_STAGE_DEPENDENCIES = {
   probe: [],
   prepare: ['probe'],
   transcribe: ['prepare'],
@@ -206,7 +206,7 @@ export function normalizeEditorOptions(raw = {}) {
 }
 
 /** Which stages a project runs. Every stage is listed; the runner decides skips. */
-export function planStages(options = {}) {
+export function planEditorStages(options = {}) {
   const stages = [...EDITOR_STAGES];
   if (!options.music_path) {
     // No bed: mix still "runs" (it copies the render) so the artifact chain and
@@ -336,7 +336,7 @@ export class EditorProject {
       input,
       output: output ? path.resolve(output) : null,
       options,
-      stages: planStages(options).map(id => ({
+      stages: planEditorStages(options).map(id => ({
         id, status: 'pending', artifact: null, error: null, metrics: null,
       })),
       outputs: [],

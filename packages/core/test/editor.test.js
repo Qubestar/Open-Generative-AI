@@ -15,14 +15,14 @@ import {
   EDITOR_STAGES,
   EDITOR_STAGE_ARTIFACTS,
   EDITOR_QUALITIES,
-  STAGE_DEPENDENCIES,
+  EDITOR_STAGE_DEPENDENCIES,
   EDITOR_JOB_TYPE,
   EditorProject,
   EditorService,
   EditorTemplateStore,
   editorJobSummary,
   normalizeEditorOptions,
-  planStages,
+  planEditorStages,
 } from '../src/editor.js';
 import {
   EDITOR_DEVICES,
@@ -322,15 +322,15 @@ test('the pipeline is data: ten chained stages, one artifact each, all distinct'
   assert.deepEqual([...EDITOR_STAGES], [
     'probe', 'prepare', 'transcribe', 'assets', 'plan', 'build', 'render', 'mix', 'finish', 'validate',
   ]);
-  assert.deepEqual(planStages({}), [...EDITOR_STAGES]);
-  assert.deepEqual(planStages({ music_path: '/tmp/bed.mp3' }), [...EDITOR_STAGES]);
+  assert.deepEqual(planEditorStages({}), [...EDITOR_STAGES]);
+  assert.deepEqual(planEditorStages({ music_path: '/tmp/bed.mp3' }), [...EDITOR_STAGES]);
   const artifacts = new Set();
   for (const stage of EDITOR_STAGES) {
     const artifact = EDITOR_STAGE_ARTIFACTS[stage];
     assert.equal(typeof artifact, 'string', `${stage} must declare an artifact`);
     assert.equal(artifacts.has(artifact), false, `${artifact} is used twice`);
     artifacts.add(artifact);
-    for (const dependency of STAGE_DEPENDENCIES[stage]) {
+    for (const dependency of EDITOR_STAGE_DEPENDENCIES[stage]) {
       assert.ok(EDITOR_STAGES.includes(dependency), `${stage} depends on unknown ${dependency}`);
       assert.ok(
         EDITOR_STAGES.indexOf(dependency) < EDITOR_STAGES.indexOf(stage),
@@ -338,8 +338,8 @@ test('the pipeline is data: ten chained stages, one artifact each, all distinct'
       );
     }
   }
-  assert.deepEqual(STAGE_DEPENDENCIES.probe, []);
-  assert.deepEqual(STAGE_DEPENDENCIES.validate, ['finish']);
+  assert.deepEqual(EDITOR_STAGE_DEPENDENCIES.probe, []);
+  assert.deepEqual(EDITOR_STAGE_DEPENDENCIES.validate, ['finish']);
 });
 
 // ── 3. The planner (real engine, no subprocess) ─────────────────────────────

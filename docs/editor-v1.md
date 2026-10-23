@@ -72,11 +72,12 @@ export const EDITOR_ENGINES = [
 export const EDITOR_MODES = ['original', 'custom'];
 
 export const EDITOR_STAGES = ['probe','prepare','transcribe','assets','plan','build','render','mix','finish','validate'];
-export const STAGE_DEPENDENCIES = { probe: [], prepare: ['probe'], transcribe: ['prepare'],
+export const EDITOR_STAGE_DEPENDENCIES = { probe: [], prepare: ['probe'], transcribe: ['prepare'],
   assets: ['transcribe'], plan: ['assets'], build: ['plan'], render: ['build'],
   mix: ['render'], finish: ['mix'], validate: ['finish'] };
 export const EDITOR_PROGRESS_LABELS = { probe: 'Inspecting footage', … };
 
+export function planEditorStages(options)          // the project stage list
 export function normalizeEditorOptions(input) // throws on invalid, returns frozen plain object
 export function editorCapabilities()          // engines, modes, devices, ffmpeg/hyperframes/python availability
 
