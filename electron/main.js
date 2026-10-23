@@ -11,6 +11,7 @@ const { register: registerMedia } = require('./lib/mediaBridge');
 const { register: registerRepurpose, stop: stopRepurpose } = require('./lib/repurposeBridge');
 const { register: registerCleaner, stop: stopCleaner } = require('./lib/cleanerBridge');
 const { register: registerTranslate, stop: stopTranslate } = require('./lib/translateBridge');
+const { register: registerEditor, stop: stopEditor } = require('./lib/editorBridge');
 const { register: registerVfx, stop: stopVfx, prepare: prepareVfx } = require('./lib/vfxBridge');
 const { register: registerCreative, stop: stopCreative } = require('./lib/creativeBridge');
 const { register: registerChannels, stop: stopChannels } = require('./lib/channelsBridge');
@@ -110,6 +111,7 @@ app.whenReady().then(async () => {
     registerRepurpose();
     registerCleaner();
     registerTranslate();
+    registerEditor();
     registerVfx();
     registerCreative();
     registerChannels();
@@ -137,7 +139,7 @@ app.on('before-quit', (event) => {
     if (shutdownStarted) return;
     event.preventDefault();
     shutdownStarted = true;
-    Promise.allSettled([mcpHost.stop(), stopRepurpose(), stopCleaner(), stopTranslate(), stopVfx(), stopCreative(), stopChannels(), stopEntitlement(), stopScreenStudio(), webHost.stop()])
+    Promise.allSettled([mcpHost.stop(), stopRepurpose(), stopCleaner(), stopTranslate(), stopEditor(), stopVfx(), stopCreative(), stopChannels(), stopEntitlement(), stopScreenStudio(), webHost.stop()])
         .finally(() => app.quit());
 });
 

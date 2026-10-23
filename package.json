@@ -117,6 +117,17 @@
           "**/*",
           "!**/node_modules/**/*"
         ]
+      },
+      {
+        "from": "packages/editor-engine",
+        "to": "packages/editor-engine",
+        "filter": [
+          "README.md",
+          "LICENSE-NOTES.md",
+          "driver/**/*",
+          "skill/**/*",
+          "!**/*.DS_Store"
+        ]
       }
     ],
     "mac": {

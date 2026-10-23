@@ -2,11 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { VfxStudio, StoryStudio, AnimationsStudio, ChannelsStudio, RepurposeStudio, CleanerStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio, PromoReviewStudio, CartoonStudio, AutoEditorPanel, PublisherQueuePanel, ScreenStudio, TranslateStudio } from 'studio';
+import { VfxStudio, StoryStudio, AnimationsStudio, ChannelsStudio, RepurposeStudio, CleanerStudio, LipSyncStudio, CinemaStudio, MarketingStudio, WorkflowStudio, SettingsModal, CloudImageStudio, CloudVideoStudio, LocalAgentsStudio, PromoReviewStudio, CartoonStudio, AutoEditorPanel, PublisherQueuePanel, ScreenStudio, TranslateStudio, EditorStudio } from 'studio';
 import axios from 'axios';
 import styles from './StandaloneShell.module.css';
 import { readAppearance, saveAppearance } from '../packages/studio/src/appearance.mjs';
-import { BookOpen, FolderKanban, Scissors, Film, Image as ImageIcon, Video, Bot, Sparkles, MonitorPlay, Megaphone, CloudUpload, Languages } from 'lucide-react';
+import { BookOpen, FolderKanban, Scissors, Film, Image as ImageIcon, Video, Bot, Sparkles, MonitorPlay, Megaphone, CloudUpload, Languages, Clapperboard } from 'lucide-react';
 
 // Public navigation. Legacy studios retain their routes without occupying the workspace rail.
 const TABS = [
@@ -16,6 +16,7 @@ const TABS = [
   { id: 'cleaner', label: 'Cleaner' },
   { id: 'repurpose', label: 'Clipper' },
   { id: 'translate', label: 'Translate' },
+  { id: 'editor', label: 'Editor' },
   { id: 'image', label: 'Image' },
   { id: 'video', label: 'Video' },
   { id: 'vfx', label: 'VFX' },
@@ -51,7 +52,7 @@ function renderDevPanel(panel, dir) {
   if (panel === 'screenstudio') return <ScreenStudio />;
   return null;
 }
-const TAB_ICONS = { channels: FolderKanban, story: BookOpen, animations: Film, cleaner: Scissors, repurpose: Film, translate: Languages, image: ImageIcon, video: Video, vfx: Sparkles, marketing: Megaphone, 'screen-studio': MonitorPlay, publisher: CloudUpload, agents: Bot };
+const TAB_ICONS = { channels: FolderKanban, story: BookOpen, animations: Film, cleaner: Scissors, repurpose: Film, translate: Languages, editor: Clapperboard, image: ImageIcon, video: Video, vfx: Sparkles, marketing: Megaphone, 'screen-studio': MonitorPlay, publisher: CloudUpload, agents: Bot };
 
 export default function StandaloneShell() {
   const params = useParams();
@@ -254,7 +255,7 @@ export default function StandaloneShell() {
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (activeTab === 'repurpose' || activeTab === 'cleaner' || activeTab === 'vfx' || activeTab === 'translate') {
+    if (activeTab === 'repurpose' || activeTab === 'cleaner' || activeTab === 'vfx' || activeTab === 'translate' || activeTab === 'editor') {
       setIsDragging(false);
       return;
     }
@@ -275,7 +276,7 @@ export default function StandaloneShell() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-    if (activeTab === 'repurpose' || activeTab === 'cleaner' || activeTab === 'vfx' || activeTab === 'translate') return;
+    if (activeTab === 'repurpose' || activeTab === 'cleaner' || activeTab === 'vfx' || activeTab === 'translate' || activeTab === 'editor') return;
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
@@ -388,6 +389,7 @@ export default function StandaloneShell() {
           {activeTab === 'vfx' && <VfxStudio onOpenSettings={() => setShowSettings(true)} />}
           {activeTab === 'repurpose' && <RepurposeStudio />}
           {activeTab === 'translate' && <TranslateStudio />}
+          {activeTab === 'editor' && <EditorStudio />}
           {activeTab === 'lipsync' && <LipSyncStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}
           {activeTab === 'cinema'  && <CinemaStudio  apiKey={apiKey} />}
           {activeTab === 'marketing' && <MarketingStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} />}

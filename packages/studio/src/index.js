@@ -30,4 +30,5 @@ export { default as AutoEditorPanel } from './components/AutoEditorPanel';
 export { default as PublisherQueuePanel } from './components/PublisherQueuePanel';
 export { default as ScreenStudio } from './components/ScreenStudio';
 export { default as TranslateStudio } from './components/TranslateStudio';
+export { default as EditorStudio } from './components/EditorStudio.jsx';
 

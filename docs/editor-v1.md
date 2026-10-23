@@ -86,7 +86,6 @@ export class EditorService   // create({input, output, options}) -> {job, projec
 ```
 
 Stage artifacts (each stage writes exactly one of these; the runner skips stages whose artifact exists):
-
 | stage | artifact |
 |---|---|
 | probe | `artifacts/probe.json` (duration, fps, streams, resolution, audio) |
@@ -102,6 +101,41 @@ Stage artifacts (each stage writes exactly one of these; the runner skips stages
 
 Retry semantics: a retry is a NEW job over the SAME project directory (see
 `vitmyo-capability` skill: job states are terminal). Never revive a job.
+
+### 4b. `artifacts/plan.json` — the shared contract between the planner and the driver
+
+The Node planner writes it; `build_from_plan.py` reads it; the UI and MCP read it for review.
+Paths are relative to the project directory. Times are seconds on the 30 fps frame grid.
+
+```json
+{
+  "version": 1,
+  "engine": "v1",
+  "mode": "original",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "duration": 42.5,
+  "style": { "name": "V1 original", "cut_median_s": 0.79, "palette": ["#0f2a33"], "treatments": ["teal", "mono"] },
+  "face": { "source": "work/cam_raw.mp4", "share": 0.3 },
+  "beats": [
+    { "id": "b1", "t0": 0.0, "t1": 1.4, "device": "tile_reveal", "asset": "assets/media/still_001.png",
+      "treatment": "teal", "caption": [["This", 0.0], ["is", 0.3], ["real", 0.6]],
+      "keyword": { "text": "REAL", "kind": "shock", "at": 0.8 } },
+    { "id": "b2", "t0": 1.4, "t1": 2.6, "device": "broll", "asset": "assets/media/clip_002.mp4",
+      "media_start": 0.0, "rate": 0.06, "caption": [["footage", 0.1], ["from", 0.35]] },
+    { "id": "b3", "t0": 2.6, "t1": 4.0, "device": "face", "punch": [3.1, 1.08] }
+  ]
+}
+```
+
+Devices the driver must support (everything else falls back to `still`): `tile_reveal`, `still`,
+`broll`, `face`, `seq`, `strobe`, `wall3d`, `pop_collage`. `keyword.kind` ∈ `key|title|shock|mega`
+(`mega` is only meaningful on a `face` beat and needs the matte, so the driver must ignore `mega`
+when no matte exists and fall back to `shock`). `caption` is `[[word, onsetSeconds], …]` in
+absolute project time; `at` in `keyword` is absolute too. Asset paths that do not exist must make the
+driver exit non-zero with a clear message (never silently render a blank frame).
+
 
 ## 5. Engines (`packages/core/src/editorEngines.js`)
 

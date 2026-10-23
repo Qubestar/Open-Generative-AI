@@ -26,6 +26,7 @@ import {
 import { createRepurposeMcpService } from './repurposeService.js';
 import { createCleanerMcpService } from './cleanerService.js';
 import { createTranslateMcpService } from './translateService.js';
+import { createEditorMcpService } from './editorService.js';
 import { createGenerationConsent } from './generationConsent.js';
 
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
@@ -408,6 +409,159 @@ export function registerTranslateTools(server, service) {
   }, call(args => service.retry(args.job_id)));
 }
 
+export function registerEditorTools(server, service) {
+  const call = handler => async args => {
+    try { return mcpResult(await handler(args)); } catch (error) { return mcpFailure(error); }
+  };
+
+  const jobIdSchema = z.string().regex(/^job_[\w-]+$/).max(100);
+  const absolutePath = label => z.string().min(2).max(4096)
+    .refine(value => value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value), { message: 'must be an absolute local path' })
+    .describe(`${label} (absolute local path)`);
+
+  server.registerTool('editor_capabilities', {
+    title: 'Editor Capabilities',
+    description: 'Read the Vidmyo Editor engines (V1), its modes (original, custom), the device library, available local tools (ffmpeg, ffprobe, python, HyperFrames) and how many saved custom style templates exist. Call this before editing so you can explain what will run. Local only; no network.',
+    inputSchema: z.object({}).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(() => service.capabilities()));
+
+  server.registerTool('editor_start_edit', {
+    title: 'Edit Footage',
+    description: 'Turn a folder of footage into an edited video with the chosen engine. Returns a job_id immediately; a real edit takes minutes, so poll editor_get_job and do NOT submit the same folder twice. mode "original" uses the bundled V1 documentary style; mode "custom" uses either a saved template_id or the example videos/URLs you pass, whose style is measured before the edit. Heavy work runs one job at a time. Everything renders locally; nothing is uploaded or published.',
+    inputSchema: z.object({
+      input_dir: absolutePath('Folder of footage, or a single video file'),
+      output_dir: absolutePath('Parent folder for the rendered edit').optional(),
+      engine: z.string().min(1).max(40).default('v1').describe('Editor engine id; V1 is "v1"'),
+      mode: z.enum(['original', 'custom']).default('original'),
+      template_id: z.string().min(1).max(80).optional().describe('Saved custom template id; implies mode custom'),
+      examples: z.array(z.string().min(1).max(2048)).max(40).optional()
+        .describe('Style references for an ad-hoc custom run: http(s) URLs or absolute video paths'),
+      music_path: absolutePath('Music bed file the user has the rights to').optional(),
+      quality: z.enum(['draft', 'standard', 'high']).default('standard'),
+      pacing: z.enum(['reference', 'long']).default('reference'),
+      face_share: z.number().min(0).max(0.8).optional().describe('Share of runtime on the speaker, 0-0.8'),
+      cut_out: z.boolean().default(false).describe('Optional cut-out device; needs the local matte model'),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, call(args => service.start({
+    input_dir: args.input_dir,
+    output_dir: args.output_dir || null,
+    template_id: args.template_id || null,
+    options: {
+      engine: args.engine,
+      mode: args.mode,
+      examples: args.examples || [],
+      music_path: args.music_path || null,
+      quality: args.quality,
+      pacing: args.pacing,
+      ...(args.face_share === undefined ? {} : { face_share: args.face_share }),
+      cut_out: args.cut_out,
+    },
+  })));
+
+  server.registerTool('editor_get_job', {
+    title: 'Get Edit Job',
+    description: 'Poll one durable Editor job: state, current stage, per-stage checklist with artifacts, engine/mode, output folder, warnings, measured timings and failure reason. Distinct from the translate/repurpose/generation job tools; it rejects other job types.',
+    inputSchema: z.object({
+      job_id: jobIdSchema,
+      include_plan: z.boolean().default(false).describe('Also return the edit plan (bounded)'),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(async args => {
+    const job = await service.get(args.job_id);
+    if (!args.include_plan) return job;
+    try { return { ...job, plan: service.readArtifact(args.job_id, 'artifacts/plan.json').value }; } catch { return job; }
+  }));
+
+  server.registerTool('editor_list_jobs', {
+    title: 'List Edit Jobs',
+    description: 'Read recent Editor history (newest first) with engine, mode, state and progress, to decide what to poll or retry.',
+    inputSchema: z.object({
+      state: z.enum(['queued', 'running', 'done', 'error', 'cancelled']).optional(),
+      limit: z.number().int().min(1).max(50).default(20),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.list({ state: args.state || null, limit: args.limit })));
+
+  server.registerTool('editor_cancel_job', {
+    title: 'Cancel Edit Job',
+    description: 'Cancel a queued or running edit. Finished stages and their artifacts stay on disk, so a later retry resumes instead of starting over. Never deletes media.',
+    inputSchema: z.object({ job_id: jobIdSchema }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.cancel(args.job_id)));
+
+  server.registerTool('editor_retry_job', {
+    title: 'Retry Edit Job',
+    description: 'Retry a failed or cancelled edit. Returns a NEW job id over the same project: stages that already produced an artifact are not re-run (a failed render never repeats transcription). Poll editor_get_job with the returned id.',
+    inputSchema: z.object({ job_id: jobIdSchema }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.retry(args.job_id)));
+
+  server.registerTool('editor_analyze_examples', {
+    title: 'Analyze Style Examples',
+    description: 'Measure the style of example videos the user likes (YouTube/other http(s) URLs or absolute local video files): shot-cut detection frame by frame, shot length distribution, cuts per minute, burst ratio, palette and motion, written as a style profile. Returns a job_id; poll editor_get_analysis, then editor_save_template to keep it as a reusable local template. Downloads only the URLs you pass. Nothing is published.',
+    inputSchema: z.object({
+      urls: z.array(z.string().url().max(2048)).max(20).optional(),
+      videos: z.array(z.string().min(2).max(4096)).max(20).optional(),
+      name: z.string().min(1).max(80).default('Style'),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, call(args => service.analyzeExamples({ urls: args.urls || [], videos: args.videos || [], name: args.name })));
+
+  server.registerTool('editor_get_analysis', {
+    title: 'Get Style Analysis',
+    description: 'Poll a style-analysis job and read the measured profile (cut median, cuts per minute, burst ratio, palette, treatment mix) plus the contact sheet path.',
+    inputSchema: z.object({ job_id: jobIdSchema }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.getAnalysis(args.job_id)));
+
+  server.registerTool('editor_save_template', {
+    title: 'Save Style Template',
+    description: 'Keep a measured style as a reusable local template, so later edits can run with template_id instead of re-analysing the examples. Give analysis_job_id (preferred) or a profile you built yourself.',
+    inputSchema: z.object({
+      name: z.string().min(1).max(80),
+      analysis_job_id: jobIdSchema.optional(),
+      profile: z.record(z.string(), z.any()).optional(),
+      examples: z.array(z.string().max(2048)).max(40).optional(),
+      engine: z.string().min(1).max(40).default('v1'),
+      notes: z.string().max(1000).optional(),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.saveTemplate({
+    name: args.name,
+    analysis_job_id: args.analysis_job_id || null,
+    profile: args.profile || null,
+    examples: args.examples || [],
+    engine: args.engine,
+    notes: args.notes || null,
+  })));
+
+  server.registerTool('editor_list_templates', {
+    title: 'List Style Templates',
+    description: 'Read the saved custom style templates (id, name, engine, measured cut median, palette). Use an id as template_id when starting an edit.',
+    inputSchema: z.object({ engine: z.string().min(1).max(40).optional() }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.listTemplates({ engine: args.engine || null })));
+
+  server.registerTool('editor_delete_template', {
+    title: 'Delete Style Template',
+    description: 'Delete one saved style template. Media the template measured is not touched; only the template record is removed.',
+    inputSchema: z.object({ id: z.string().min(1).max(80) }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.deleteTemplate(args.id)));
+
+  server.registerTool('editor_read_artifact', {
+    title: 'Read Edit Artifact',
+    description: 'Read one bounded JSON artifact of an Editor job: artifacts/plan.json (the edit plan: beats, devices, sources), artifacts/style-profile.json, artifacts/probe.json or artifacts/validate.json. Project-owned files only.',
+    inputSchema: z.object({
+      job_id: jobIdSchema,
+      artifact: z.string().min(1).max(300).describe('e.g. artifacts/plan.json'),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, call(args => service.readArtifact(args.job_id, args.artifact)));
+}
+
 export function registerTools(server, ctx = {}) {
   const secrets = ctx.secrets || (() => '');
   const imageConfig = ctx.imageConfig || (() => ({ imageSource: 'flow', imageModel: null }));
@@ -416,10 +570,12 @@ export function registerTools(server, ctx = {}) {
   const repurposeService = ctx.repurposeService || createRepurposeMcpService({ secrets });
   const cleanerService = ctx.cleanerService || createCleanerMcpService({ repurposeService });
   const translateService = ctx.translateService || createTranslateMcpService({});
+  const editorService = ctx.editorService || createEditorMcpService({});
 
   registerRepurposeTools(server, repurposeService);
   registerCleanerTools(server, cleanerService);
   registerTranslateTools(server, translateService);
+  registerEditorTools(server, editorService);
   registerVfxTools(server, ctx.vfxService);
 
   if (VIDEO_DELTA_ENABLED) {

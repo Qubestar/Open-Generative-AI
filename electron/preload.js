@@ -206,6 +206,32 @@ contextBridge.exposeInMainWorld('translate', {
     },
 });
 
+// ── Editor bridge (V1 documentary engine: folder of footage → edit, custom styles) ──
+// Every call resolves to { ok: true, ... } or { ok: false, error }.
+contextBridge.exposeInMainWorld('editor', {
+    isElectron: true,
+    capabilities: () => ipcRenderer.invoke('editor:capabilities'),
+    pickFolder: (kind) => ipcRenderer.invoke('editor:pick-folder', kind),
+    pickFile: (kind) => ipcRenderer.invoke('editor:pick-file', kind),
+    start: (payload) => ipcRenderer.invoke('editor:start', payload),
+    getJob: (jobId) => ipcRenderer.invoke('editor:get-job', jobId),
+    listJobs: (options) => ipcRenderer.invoke('editor:list-jobs', options),
+    cancelJob: (jobId) => ipcRenderer.invoke('editor:cancel-job', jobId),
+    retryJob: (jobId) => ipcRenderer.invoke('editor:retry-job', jobId),
+    templates: (options) => ipcRenderer.invoke('editor:templates', options),
+    saveTemplate: (payload) => ipcRenderer.invoke('editor:save-template', payload),
+    deleteTemplate: (id) => ipcRenderer.invoke('editor:delete-template', id),
+    analyzeExamples: (payload) => ipcRenderer.invoke('editor:analyze-examples', payload),
+    getAnalysis: (jobId) => ipcRenderer.invoke('editor:get-analysis', jobId),
+    readArtifact: (jobId, artifact) => ipcRenderer.invoke('editor:read-artifact', jobId, artifact),
+    reveal: (jobId, artifact) => ipcRenderer.invoke('editor:reveal', jobId, artifact),
+    onProgress: (callback) => {
+        const listener = (_, data) => callback(data);
+        ipcRenderer.on('editor:progress', listener);
+        return () => ipcRenderer.removeListener('editor:progress', listener);
+    },
+});
+
 // Cleaner intake bridge. It records the user's edit decisions without exposing
 // file-system or credential access to the renderer.
 contextBridge.exposeInMainWorld('cleaner', {
