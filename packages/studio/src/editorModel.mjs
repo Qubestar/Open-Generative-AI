@@ -156,12 +156,50 @@ export function defaultEditorForm(capabilities) {
   };
 }
 
-/** Local agents this machine can run as the Editor's brain (from capabilities). */
+/** Every agent this machine knows about, with the state the UI has to show. */
 export function editorAgentOptions(capabilities) {
   const agents = Array.isArray(capabilities?.agents) ? capabilities.agents : [];
   return agents
     .filter(agent => agent && agent.available)
     .map(agent => ({ value: String(agent.id), label: String(agent.label || agent.id), note: agent.note || '' }));
+}
+
+/**
+ * Turn the probed agent list into rows a person can read:
+ *   ready      → connected, one real turn answered
+ *   signed_in  → installed and logged in, but the CLI refused to answer (its own reason)
+ *   offline    → installed but not signed in
+ *   missing    → not installed
+ * `selectable` is true only for ready agents: nothing to configure, nothing to paste.
+ */
+export function editorAgentRows(agents = []) {
+  return (Array.isArray(agents) ? agents : [])
+    .filter(agent => agent && agent.id)
+    .map(agent => {
+      const ready = agent.ready === true;
+      const installed = agent.installed !== false && agent.available !== false;
+      // installed + logged in + refuses → its own reason; installed + not logged in →
+      // the user can fix it by signing in once; not installed → nothing to offer.
+      const status = ready
+        ? 'ready'
+        : (!installed ? 'missing' : (agent.signed_in === false ? 'offline' : 'error'));
+      return {
+        id: String(agent.id),
+        label: String(agent.label || agent.id),
+        status,
+        ready,
+        selectable: ready,
+        model: agent.model || null,
+        reason: ready ? null : String(agent.human_reason || agent.reason || '').trim() || null,
+        note: String(agent.note || '').trim() || null,
+      };
+    });
+}
+
+/** The agent the Editor should use when the user has not chosen one yet. */
+export function defaultBrainAgent(rows = []) {
+  const ready = (Array.isArray(rows) ? rows : []).find(row => row.ready);
+  return ready ? ready.id : '';
 }
 
 /** Example URLs + example files, de-duplicated, in the order the user added them. */

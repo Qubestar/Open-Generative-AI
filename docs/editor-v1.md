@@ -193,8 +193,14 @@ brain adds.
   and in the plan stage metrics (`brain_agent`, `brain_pictures`).
 - **The Editor never uses the Direct API keys** configured for image/video generation, and has no
   API-key mode on purpose: the agent runs as the user's own CLI with its own login.
-- MCP: `editor_start_edit { brain_agent: "opencode" }`; `editor_capabilities` lists the agents
-  detection found on the machine.
+- **"Connected" is proven, never assumed**: `probeEditorAgent` runs one real one-line turn
+  ("Compute 6 + 7 …"), cached 10 minutes. The answer must contain the computed value, so a CLI that
+  merely echoes the prompt is not called connected. Installed-but-refusing agents are shown with the
+  sentence their own CLI produced (e.g. "This ChatGPT plan has no Codex model access", "Not signed in
+  on this machine", "Google no longer supports this Gemini CLI build for personal accounts").
+- The tab lists every agent it finds and only lets you select the connected ones, defaulting to the
+  first: there is nothing to configure and no key field anywhere in the Editor.
+- MCP: `editor_agents { probe }`, `editor_start_edit { brain_agent: "opencode" }`.
 
 ## 7. MCP tools (names are part of the contract)
 

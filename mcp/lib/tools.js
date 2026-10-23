@@ -426,6 +426,16 @@ export function registerEditorTools(server, service) {
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, call(() => service.capabilities()));
 
+  server.registerTool('editor_agents', {
+    title: 'Local Agents For The Editor',
+    description: 'List the coding agents installed on this machine and, with probe=true, which of them actually answer right now (one real one-line turn each, cached 10 minutes). Vidmyo never asks for keys or extra authorisation here: an agent is usable because it is already signed in on this computer. Use the id as brain_agent in editor_start_edit.',
+    inputSchema: z.object({
+      probe: z.boolean().default(true).describe('Run one real turn per agent to prove it is connected'),
+      force: z.boolean().default(false).describe('Ignore the 10-minute probe cache'),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, call(args => service.agents({ probe: args.probe, force: args.force })));
+
   server.registerTool('editor_start_edit', {
     title: 'Edit Footage',
     description: 'Turn a folder of footage into an edited video with the chosen engine. Returns a job_id immediately; a real edit takes minutes, so poll editor_get_job and do NOT submit the same folder twice. mode "original" uses the bundled V1 documentary style; mode "custom" uses either a saved template_id or the example videos/URLs you pass, whose style is measured before the edit. Heavy work runs one job at a time. Everything renders locally; nothing is uploaded or published.',

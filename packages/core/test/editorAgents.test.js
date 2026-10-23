@@ -153,3 +153,35 @@ test('brain options default to off and reject an unknown agent', () => {
   assert.throws(() => normalizeEditorOptions({ brain_agent: 'nope' }), /Unknown editor agent/);
   assert.throws(() => normalizeEditorOptions({ brain: { mode: 'api' } }), /"none" or "local"/);
 });
+
+test('a probe only counts an agent that really answered the question', async () => {
+  const { probeEditorAgent, clearEditorAgentProbeCache, BRAIN_PING_PROMPT } = await import('../src/editorAgents.js');
+  clearEditorAgentProbeCache();
+  const seen = [];
+  const ready = await probeEditorAgent('opencode', {
+    run: async ctx => { seen.push(ctx.prompt); return '{"sum":13}'; },
+  });
+  assert.equal(ready.ready, true);
+  assert.equal(ready.model, 'default');
+  assert.match(seen[0], /Compute 6 \+ 7/);
+  assert.equal(BRAIN_PING_PROMPT.includes('13'), false, 'the answer must not appear in the prompt');
+});
+
+test('an agent that echoes its prompt is not called connected', async () => {
+  const { probeEditorAgent, clearEditorAgentProbeCache, BRAIN_PING_PROMPT } = await import('../src/editorAgents.js');
+  clearEditorAgentProbeCache();
+  const echoed = await probeEditorAgent('codex', {
+    run: async () => `${BRAIN_PING_PROMPT}\nERROR: {"type":"error"}`,
+  });
+  assert.equal(echoed.ready, false);
+  assert.ok(echoed.human_reason);
+});
+
+test('CLI errors become one readable sentence', async () => {
+  const { humanizeAgentReason } = await import('../src/editorAgents.js');
+  assert.match(humanizeAgentReason('claude_code', 'Failed to authenticate: OAuth session expired'), /Not signed in/);
+  assert.match(humanizeAgentReason('codex', "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."), /no Codex model access/);
+  assert.match(humanizeAgentReason('gemini', 'IneligibleTierError: Gemini Code Assist for individuals'), /no longer supports/);
+  assert.match(humanizeAgentReason('opencode', 'X did not answer within 120s.'), /did not answer in time/);
+  assert.equal(humanizeAgentReason('opencode', null), null);
+});

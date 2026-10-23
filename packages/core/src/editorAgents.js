@@ -47,9 +47,14 @@ export const EDITOR_AGENT_ADAPTERS = [
     id: 'codex',
     label: 'Codex',
     cli: 'codex',
-    args: prompt => ['exec', '--skip-git-repo-check', prompt],
+    // The account decides which models exist: try the ChatGPT-account ids in order and
+    // keep the first that answers. A workspace model in config.toml must not break this.
+    args: (prompt, { model = null } = {}) => ['exec', '--skip-git-repo-check', ...(model ? ['-m', model] : []), prompt],
     env: {},
-    note: 'Requires a Codex login whose configured model your account supports.',
+    models: ['gpt-5.1-codex', 'gpt-5-codex', 'o4-mini'],
+    statusArgs: ['login', 'status'],
+    statusParse: stdout => /logged in/i.test(stdout) ? true : (/not logged in|logged out/i.test(stdout) ? false : null),
+    note: 'Uses the ChatGPT/Codex login already on this machine.',
   },
   {
     id: 'gemini',
@@ -57,6 +62,7 @@ export const EDITOR_AGENT_ADAPTERS = [
     cli: 'gemini',
     args: prompt => ['-p', prompt],
     env: { GEMINI_CLI_TRUST_WORKSPACE: 'true' },
+    statusParse: null,
     note: 'Headless Gemini CLI, trusted workspace set for this run only.',
   },
   {
@@ -65,6 +71,10 @@ export const EDITOR_AGENT_ADAPTERS = [
     cli: 'claude',
     args: prompt => ['-p', prompt, '--output-format', 'text'],
     env: {},
+    statusArgs: ['auth', 'status'],
+    statusParse: stdout => {
+      try { const value = JSON.parse(stdout); return Boolean(value?.loggedIn); } catch { return null; }
+    },
     note: 'Uses the Claude Code subscription already signed in on this machine.',
   },
 ];
@@ -297,6 +307,31 @@ export function applyBrainPicks(plan, { picks = [], face = [], keywords = [] } =
   return applied;
 }
 
+
+/**
+ * Turn a CLI's own error into one sentence a person can act on. Vidmyo never asks for
+ * configuration; it only says what the agent itself reports.
+ */
+export function humanizeAgentReason(id, reason) {
+  const text = String(reason || '');
+  if (!text) return null;
+  if (/OAuth session expired|Failed to authenticate|not logged in|logged out/i.test(text)) {
+    return 'Not signed in on this machine. Open the app once and sign in; Vidmyo then picks it up automatically.';
+  }
+  if (/not supported when using Codex with a ChatGPT account/i.test(text)) {
+    return 'This ChatGPT plan has no Codex model access, so the CLI refuses every model.';
+  }
+  if (/IneligibleTierError|Gemini Code Assist for individuals|migrate to the Antigravity/i.test(text)) {
+    return 'Google no longer supports this Gemini CLI build for personal accounts.';
+  }
+  if (/did not answer within/i.test(text)) {
+    return 'It did not answer in time — the agent may be busy or offline.';
+  }
+  if (/not installed/i.test(text)) return 'Not installed on this machine.';
+  if (/exceeded skills context budget/i.test(text)) return 'Its own skill folder is too large for this model.';
+  return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+}
+
 // ── The call ────────────────────────────────────────────────────────────────
 
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
@@ -316,6 +351,7 @@ export async function askEditorAgent({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   signal = null,
   run = null,
+  model = null,
 } = {}) {
   const adapter = editorAgentAdapter(agentId);
   const binary = resolveAgentBinary(adapter.cli);
@@ -324,11 +360,11 @@ export async function askEditorAgent({
   fs.mkdirSync(dir, { recursive: true });
 
   if (typeof run === 'function') {
-    const output = await run({ adapter, binary, prompt, workDir: dir, timeoutMs, signal });
+    const output = await run({ adapter, binary, prompt, workDir: dir, timeoutMs, signal, model });
     return { text: cleanAgentOutput(output), adapter, workDir: dir };
   }
 
-  const args = adapter.args(prompt);
+  const args = adapter.args(prompt, { model });
   const env = { ...process.env, ...adapter.env, NO_COLOR: '1', TERM: 'dumb' };
   const text = await new Promise((resolve, reject) => {
     const child = spawnSync(binary, args, {
@@ -341,7 +377,9 @@ export async function askEditorAgent({
     }
     const output = `${child.stdout || ''}${child.stderr ? `\n${child.stderr}` : ''}`;
     if (child.status !== 0 && !extractJsonBlock(output)) {
-      reject(new Error(`${adapter.label} exited with ${child.status}: ${cleanAgentOutput(output).trim().slice(-300)}`));
+      // Keep the head of the message: CLIs put the reason (e.g. IneligibleTierError)
+      // before the stack trace, and the humaniser needs to see it.
+      reject(new Error(`${adapter.label} exited with ${child.status}: ${cleanAgentOutput(output).trim().slice(0, 600)}`));
       return;
     }
     resolve(output);
@@ -366,4 +404,124 @@ export async function runBrainPass({ agentId, plan, assets, options = {}, style 
     rejected: picks.rejected.slice(0, 20),
     preview: text.trim().slice(0, 1200),
   };
+}
+
+// ── Connection status ───────────────────────────────────────────────────────
+// "Connected" must mean proven, not assumed: a cheap status command first, then one
+// real one-line turn. The answer is cached so opening the tab is instant.
+//
+// Vidmyo never asks the user to paste a key or authorise anything in this tab: an
+// agent that works is one this machine is already signed in to.
+
+const PROBE_TTL_MS = 10 * 60 * 1000;
+const STATUS_TIMEOUT_MS = 20 * 1000;
+const PING_TIMEOUT_MS = 120 * 1000;
+const probeCache = new Map();
+
+// The expected value must NOT appear in the prompt: some CLIs echo the prompt, and a
+// probe that matches its own question would call a broken agent "connected".
+export const BRAIN_PING_PROMPT = 'Compute 6 + 7. Reply with exactly {"sum": <the number>} and nothing else.';
+export const BRAIN_PING_EXPECTED = 13;
+
+export function clearEditorAgentProbeCache() {
+  probeCache.clear();
+}
+
+function statusOutput(binary, args, env = {}) {
+  const child = spawnSync(binary, args, {
+    encoding: 'utf8', timeout: STATUS_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, ...env, NO_COLOR: '1', TERM: 'dumb' },
+  });
+  return `${child.stdout || ''}\n${child.stderr || ''}`;
+}
+
+/** Cheap, offline check: is this CLI installed, and does it say it is signed in? */
+export function editorAgentStatus(id, { binary = null, exec = statusOutput } = {}) {
+  const adapter = editorAgentAdapter(id);
+  const cliPath = binary || resolveAgentBinary(adapter.cli);
+  if (!cliPath) {
+    return { id, installed: false, signed_in: null, ready: false, reason: 'not installed on this machine', checked_at: new Date().toISOString() };
+  }
+  if (!adapter.statusArgs) {
+    return { id, installed: true, signed_in: null, ready: null, reason: null, checked_at: new Date().toISOString() };
+  }
+  try {
+    const output = exec(cliPath, adapter.statusArgs, adapter.env || {});
+    const signedIn = adapter.statusParse ? adapter.statusParse(output) : null;
+    return {
+      id,
+      installed: true,
+      signed_in: signedIn,
+      ready: signedIn === false ? false : null,
+      reason: signedIn === false ? 'not signed in on this machine' : null,
+      checked_at: new Date().toISOString(),
+    };
+  } catch (error) {
+    return { id, installed: true, signed_in: null, ready: null, reason: `status check failed: ${String(error.message || error).slice(0, 120)}`, checked_at: new Date().toISOString() };
+  }
+}
+
+/**
+ * One real turn: the only honest way to claim an agent is connected. When an adapter
+ * declares candidate models (Codex), each is tried until one answers, because a stale
+ * model in the user's config.toml must not look like "not connected".
+ */
+export async function probeEditorAgent(id, { run = null, timeoutMs = PING_TIMEOUT_MS, force = false } = {}) {
+  const cached = probeCache.get(id);
+  if (!force && cached && Date.now() - cached.at < PROBE_TTL_MS) return cached.value;
+
+  const adapter = editorAgentAdapter(id);
+  const binary = resolveAgentBinary(adapter.cli);
+  let value;
+  if (!binary) {
+    value = { id, label: adapter.label, installed: false, ready: false, reason: 'not installed on this machine', human_reason: 'Not installed on this machine.', model: null };
+  } else {
+    const models = Array.isArray(adapter.models) && adapter.models.length ? [null, ...adapter.models] : [null];
+    let lastReason = null;
+    let answered = null;
+    for (const model of models) {
+      try {
+        const { text } = await askEditorAgent({
+          agentId: id, prompt: BRAIN_PING_PROMPT, timeoutMs, run, model,
+        });
+        const parsed = extractJsonBlock(text);
+        if (parsed && Number(parsed.sum) === BRAIN_PING_EXPECTED) { answered = model || 'default'; break; }
+        // A CLI that exits 0 but prints an API error (Codex does this) must not look
+        // connected: keep the tail of what it actually said.
+        lastReason = parsed
+          ? `the agent answered, but not as asked: ${JSON.stringify(parsed).slice(0, 220)}`
+          : `the agent answered without JSON: ${String(text || '').trim().slice(-200) || '(empty output)'}`;
+      } catch (error) {
+        lastReason = String(error.message || error);
+      }
+    }
+    value = answered
+      ? { id, label: adapter.label, installed: true, ready: true, reason: null, human_reason: null, model: answered }
+      : {
+        id,
+        label: adapter.label,
+        installed: true,
+        ready: false,
+        reason: String(lastReason || 'no answer').slice(0, 300),
+        human_reason: humanizeAgentReason(id, lastReason || 'no answer'),
+        model: null,
+      };
+  }
+  probeCache.set(id, { at: Date.now(), value });
+  return value;
+}
+
+/** Probe several agents with a small concurrency cap (each one spawns a CLI). */
+export async function probeEditorAgents({ ids = null, concurrency = 1, run = null, force = false } = {}) {
+  const wanted = ids || EDITOR_AGENT_ADAPTERS.map(adapter => adapter.id);
+  const queue = [...wanted];
+  const results = [];
+  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, queue.length)) }, async () => {
+    while (queue.length) {
+      const id = queue.shift();
+      results.push(await probeEditorAgent(id, { run, force }));
+    }
+  });
+  await Promise.all(workers);
+  return results.sort((a, b) => wanted.indexOf(a.id) - wanted.indexOf(b.id));
 }

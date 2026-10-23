@@ -318,3 +318,18 @@ test('durations read well and stay empty when unknown', () => {
   assert.equal(formatDurationMs(125000), '2m 5s');
   assert.equal(formatDurationMs(3725000), '1h 2m');
 });
+
+test('agent rows separate connected, signed-in, offline and missing agents', async () => {
+  const { editorAgentRows, defaultBrainAgent } = await import('../../studio/src/editorModel.mjs');
+  const rows = editorAgentRows([
+    { id: 'opencode', label: 'OpenCode', installed: true, ready: true },
+    { id: 'codex', label: 'Codex', installed: true, ready: false, signed_in: true, human_reason: 'This ChatGPT plan has no Codex model access.' },
+    { id: 'claude_code', label: 'Claude Code', installed: true, ready: false, signed_in: false, human_reason: 'Not signed in on this machine.' },
+    { id: 'x', label: 'Missing', installed: false },
+  ]);
+  assert.deepEqual(rows.map(row => row.status), ['ready', 'error', 'offline', 'missing']);
+  assert.deepEqual(rows.map(row => row.selectable), [true, false, false, false]);
+  assert.equal(rows[1].reason, 'This ChatGPT plan has no Codex model access.');
+  assert.equal(defaultBrainAgent(rows), 'opencode');
+  assert.equal(defaultBrainAgent([]), '');
+});

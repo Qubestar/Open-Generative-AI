@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DEFAULT_OUTPUT_HINT, EDITOR_FINAL_FILENAME, FACE_SHARE_SLIDER_MAX, LOCAL_ONLY_NOTICE,
   MAX_FACE_SHARE, NO_BRIDGE_NOTICE, PACING_CHOICES, QUALITY_CHOICES, defaultEditorForm,
-  describeAnalysisJob, describeEditorJob, editorAgentOptions, editorEngineOptions, editorModeOptions,
+  defaultBrainAgent, describeAnalysisJob, describeEditorJob, editorAgentRows, editorEngineOptions, editorModeOptions,
   editorPayloadFromForm, exampleList, exampleProfileSummary, formatDurationMs,
   normalizeExampleUrl, stageChecklist, templateRows, validateEditorForm,
 } from '../editorModel.mjs';
@@ -108,6 +108,8 @@ export default function EditorStudio() {
   const [deleteArmed, setDeleteArmed] = useState(null);
 
   const update = useCallback(patch => setForm(current => ({ ...current, ...patch })), []);
+  const [agentRows, setAgentRows] = useState([]);
+  const [agentProbe, setAgentProbe] = useState('idle');
 
   // ── Bridge + capabilities + saved templates + recent edits ────────────────
   useEffect(() => {
@@ -343,7 +345,25 @@ export default function EditorStudio() {
   const templateList = useMemo(() => templateRows(templates), [templates]);
   const engines = useMemo(() => editorEngineOptions(capabilities), [capabilities]);
   const modes = useMemo(() => editorModeOptions(capabilities, form.engine), [capabilities, form.engine]);
-  const agentOptions = useMemo(() => editorAgentOptions(capabilities), [capabilities]);
+  // Which agents answer is a fact about the machine, not a setting: ask them once.
+  const loadAgents = useCallback(async (force = false) => {
+    const api = typeof window !== 'undefined' ? (window.editor || null) : null;
+    if (!api?.agents) return;
+    setAgentProbe('loading');
+    try {
+      const result = unwrap(await api.agents({ force }));
+      const rows = editorAgentRows(result.agents || []);
+      setAgentRows(rows);
+      setAgentProbe('ready');
+      const preferred = defaultBrainAgent(rows);
+      if (preferred) setForm(current => (current.brain_agent ? current : { ...current, brain_agent: preferred }));
+    } catch (error) {
+      setAgentProbe('error');
+      setNotice({ kind: 'error', text: message(error) });
+    }
+  }, []);
+
+  useEffect(() => { void loadAgents(); }, [loadAgents]);
 
   const start = useCallback(async () => {
     if (!bridge) return;
@@ -464,14 +484,7 @@ export default function EditorStudio() {
             <div role="group" aria-label="Brain" style={{ display: 'inline-flex', padding: 3, borderRadius: 9, border: `1px solid ${C.line}`, background: C.input }}>
               {[{ value: 'none', label: 'On its own' }, { value: 'local', label: 'Local agent' }].map(option => (
                 <button key={option.value} type="button" disabled={disabled} aria-pressed={form.brain_mode === option.value}
-                  onClick={() => update({
-                    brain_mode: option.value,
-                    // Default to the first agent this machine can actually run, so the
-                    // switch to "Local agent" is one click and not a hunt.
-                    ...(option.value === 'local' && !form.brain_agent && agentOptions[0]
-                      ? { brain_agent: agentOptions[0].value }
-                      : {}),
-                  })}
+                  onClick={() => update({ brain_mode: option.value })}
                   style={{
                     padding: '8px 16px', borderRadius: 7, border: 'none',
                     background: form.brain_mode === option.value ? C.selected : 'transparent',
@@ -482,28 +495,74 @@ export default function EditorStudio() {
                 </button>
               ))}
             </div>
-            {form.brain_mode === 'local' && (
+
+            {form.brain_mode === 'none' ? (
+              <p style={{ margin: '12px 0 0', fontSize: 11.5, color: C.dim, lineHeight: 1.6 }}>
+                Good when your footage already shows what you are talking about — a talking head plus your own
+                B-roll folder, a product demo, a tutorial, a vlog. The engine picks the pictures in order and
+                needs no agent, no network and no key.
+              </p>
+            ) : (
               <div style={{ marginTop: 14 }}>
-                <Label hint="already installed and logged in on this machine">Agent</Label>
-                {agentOptions.length ? (
-                  <select value={form.brain_agent} disabled={disabled}
-                    onChange={event => update({ brain_agent: event.target.value })} style={selectStyle}>
-                    <option value="">Pick an agent…</option>
-                    {agentOptions.map(agent => <option key={agent.value} value={agent.value}>{agent.label}</option>)}
-                  </select>
-                ) : (
-                  <p style={{ margin: 0, fontSize: 12, color: C.danger }}>
-                    No agent CLI was found on this machine. Install one (OpenCode, Hermes, Codex, Gemini or Claude Code)
-                    and reopen Vidmyo, or leave the Editor on its own.
-                  </p>
+                <Label hint="found on this computer — nothing to configure">Agent</Label>
+                {agentProbe === 'loading' && agentRows.length === 0 && (
+                  <p style={{ margin: 0, fontSize: 11.5, color: C.dim }}>Checking which agents answer…</p>
                 )}
+                <div role="radiogroup" aria-label="Agent" style={{ display: 'grid', gap: 8 }}>
+                  {agentRows.map(row => {
+                    const dot = row.status === 'ready' ? C.good : (row.status === 'signed_in' ? C.warning : C.dim);
+                    const selected = form.brain_agent === row.id;
+                    return (
+                      <button key={row.id} type="button" role="radio" aria-checked={selected}
+                        disabled={disabled || !row.selectable}
+                        onClick={() => update({ brain_agent: row.id })}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+                          padding: '9px 12px', borderRadius: 9,
+                          border: `1px solid ${selected ? C.accent : C.line}`,
+                          background: selected ? C.selected : C.raised,
+                          color: row.selectable ? C.text : C.dim,
+                          cursor: row.selectable && !disabled ? 'pointer' : 'not-allowed',
+                          opacity: row.selectable ? 1 : 0.72, fontSize: 12.5,
+                        }}>
+                        <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 999, background: dot, flex: '0 0 auto' }} />
+                        <span style={{ fontWeight: 800, flex: '0 0 auto' }}>{row.label}</span>
+                        <span style={{
+                          flex: '0 0 auto', fontSize: 9.5, fontWeight: 800, letterSpacing: 1,
+                          textTransform: 'uppercase', color: row.ready ? C.good : C.dim,
+                        }}>
+                          {row.ready ? 'connected'
+                            : row.status === 'error' ? 'cannot run'
+                              : row.status === 'offline' ? 'not signed in'
+                                : 'not installed'}
+                        </span>
+                        <span style={{ color: C.dim, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                          {row.ready ? (row.model && row.model !== 'default' ? `model ${row.model}` : '') : (row.reason || '')}
+                        </span>
+                        {selected && <span aria-hidden="true" style={{ color: C.accent, fontWeight: 900, flex: '0 0 auto' }}>✓</span>}
+                      </button>
+                    );
+                  })}
+                  {agentProbe !== 'loading' && agentRows.length === 0 && (
+                    <p style={{ margin: 0, fontSize: 11.5, color: C.dim }}>
+                      No agent CLI was found on this machine. Leave the Editor on its own; it needs nothing else.
+                    </p>
+                  )}
+                </div>
                 {validation.errors.brain_agent && <span style={errorText}>{validation.errors.brain_agent}</span>}
-                {(() => {
-                  const chosen = agentOptions.find(agent => agent.value === form.brain_agent);
-                  return chosen?.note ? <p style={{ margin: '8px 0 0', fontSize: 11, color: C.dim, lineHeight: 1.5 }}>{chosen.note}</p> : null;
-                })()}
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
+                  <button type="button" disabled={disabled} onClick={() => { void loadAgents(true); }}
+                    style={buttonStyle('ghost', disabled)}>Check again</button>
+                  <span style={{ fontSize: 11, color: C.dim }}>One real one-line turn per agent, cached for 10 minutes.</span>
+                </div>
+                <p style={{ margin: '10px 0 0', fontSize: 11.5, color: C.dim, lineHeight: 1.6 }}>
+                  Use it when the picture has to be chosen for the words — a company story, a launch, an explainer,
+                  where every line names a different real thing. The agent reads the transcript, picks the file per
+                  line and marks the word that deserves the big keyword.
+                </p>
                 <p style={{ margin: '8px 0 0', fontSize: 11, color: C.dim, lineHeight: 1.5 }}>
-                  The agent runs as your own CLI with its own login. Your Direct API keys are never used here, and nothing is uploaded from Vidmyo.
+                  Agents come from this computer: Vidmyo detects them and uses their own sign-in. No keys are pasted
+                  here and your Direct API keys are never used.
                 </p>
               </div>
             )}

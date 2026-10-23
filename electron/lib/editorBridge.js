@@ -148,11 +148,11 @@ function createEditorBridge({
 
     // Which local agent CLIs this machine can actually run as the Editor's brain.
     // Detection only — nothing is launched and no credentials are read here.
-    ipcMain.handle('editor:agents', async () => {
+    ipcMain.handle('editor:agents', async (_event, options = {}) => {
       try {
         const svc = await service();
-        const capabilities = await svc.capabilities();
-        return { ok: true, agents: capabilities.agents || [], default_brain: capabilities.brain_default || 'none' };
+        const result = await svc.agents({ probe: true, force: Boolean(options?.force) });
+        return { ok: true, agents: result.agents || [], probed: result.probed, default_brain: 'none' };
       } catch (error) { return fail(error); }
     });
 

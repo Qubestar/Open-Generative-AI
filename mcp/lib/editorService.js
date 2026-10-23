@@ -16,6 +16,9 @@ import {
   EDITOR_ANALYSIS_JOB_TYPE,
   createEditorEngines,
   editorCapabilities,
+  detectEditorAgents,
+  probeEditorAgents,
+  clearEditorAgentProbeCache,
   editorJobSummary,
   summarizeTemplate,
   runEditorJob,
@@ -151,6 +154,24 @@ export function createEditorMcpService({
     templates: templateStore,
 
     capabilities: () => editor.capabilities(),
+
+    /**
+     * Which local agents are actually connected right now. `probe` runs one real
+     * one-line turn per agent (cached for 10 minutes); without it only installation
+     * is reported, which is instant.
+     */
+    async agents({ probe = false, force = false } = {}) {
+      const installed = detectEditorAgents();
+      if (!probe) return { contract_version: 1, probed: false, agents: installed };
+      if (force) clearEditorAgentProbeCache();
+      const results = await probeEditorAgents();
+      const byId = new Map(results.map(entry => [entry.id, entry]));
+      return {
+        contract_version: 1,
+        probed: true,
+        agents: installed.map(entry => ({ ...entry, ...(byId.get(entry.id) || {}) })),
+      };
+    },
 
     start({ input = null, input_dir = null, output_dir = null, template_id = null, options = {} } = {}) {
       const { job } = editor.create({
