@@ -17,6 +17,7 @@ import {
   createEditorEngines,
   editorCapabilities,
   detectEditorAgents,
+  editorAgentStatus,
   probeEditorAgents,
   clearEditorAgentProbeCache,
   editorJobSummary,
@@ -169,7 +170,12 @@ export function createEditorMcpService({
       return {
         contract_version: 1,
         probed: true,
-        agents: installed.map(entry => ({ ...entry, ...(byId.get(entry.id) || {}) })),
+        // installed + the CLI's own sign-in state + the proven probe result
+        agents: installed.map(entry => ({
+          ...entry,
+          ...editorAgentStatus(entry.id, { binary: entry.path }),
+          ...(byId.get(entry.id) || {}),
+        })),
       };
     },
 

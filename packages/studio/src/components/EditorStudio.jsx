@@ -365,6 +365,19 @@ export default function EditorStudio() {
 
   useEffect(() => { void loadAgents(); }, [loadAgents]);
 
+  // One click on the agent's own login flow (the CLI opens its own browser/TUI).
+  // Vidmyo never asks for credentials and never stores them.
+  const signIn = useCallback(async agentId => {
+    const api = typeof window !== 'undefined' ? window.agents : null;
+    if (!api?.login) return;
+    try {
+      unwrap(await api.login(agentId));
+      setNotice({ kind: 'info', text: `Finish the sign-in in the ${agentId} window, then press Check again.` });
+    } catch (error) {
+      setNotice({ kind: 'error', text: message(error) });
+    }
+  }, []);
+
   const start = useCallback(async () => {
     if (!bridge) return;
     const check = validateEditorForm(form);
@@ -512,17 +525,19 @@ export default function EditorStudio() {
                   {agentRows.map(row => {
                     const dot = row.status === 'ready' ? C.good : (row.status === 'signed_in' ? C.warning : C.dim);
                     const selected = form.brain_agent === row.id;
+                    const canSignIn = row.status === 'offline' && typeof window !== 'undefined'
+                      && typeof window.agents?.login === 'function';
                     return (
-                      <button key={row.id} type="button" role="radio" aria-checked={selected}
-                        disabled={disabled || !row.selectable}
-                        onClick={() => update({ brain_agent: row.id })}
+                      <div key={row.id} role="radio" aria-checked={selected} tabIndex={row.selectable ? 0 : -1}
+                        onClick={() => { if (row.selectable && !disabled) update({ brain_agent: row.id }); }}
+                        onKeyDown={event => { if (row.selectable && !disabled && (event.key === 'Enter' || event.key === ' ')) update({ brain_agent: row.id }); }}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
                           padding: '9px 12px', borderRadius: 9,
                           border: `1px solid ${selected ? C.accent : C.line}`,
                           background: selected ? C.selected : C.raised,
                           color: row.selectable ? C.text : C.dim,
-                          cursor: row.selectable && !disabled ? 'pointer' : 'not-allowed',
+                          cursor: row.selectable && !disabled ? 'pointer' : 'default',
                           opacity: row.selectable ? 1 : 0.72, fontSize: 12.5,
                         }}>
                         <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 999, background: dot, flex: '0 0 auto' }} />
@@ -539,8 +554,20 @@ export default function EditorStudio() {
                         <span style={{ color: C.dim, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
                           {row.ready ? (row.model && row.model !== 'default' ? `model ${row.model}` : '') : (row.reason || '')}
                         </span>
+                        {row.status === 'offline' && !canSignIn && (
+                          <span style={{ fontSize: 11, color: C.warning, flex: '0 0 auto' }}>sign in once in {row.label}</span>
+                        )}
+                        {canSignIn && (
+                          <span
+                            role="button" tabIndex={0}
+                            onClick={event => { event.stopPropagation(); void signIn(row.id); }}
+                            onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.stopPropagation(); void signIn(row.id); } }}
+                            style={{ ...buttonStyle('ghost', disabled), padding: '5px 10px', fontSize: 11 }}>
+                            Sign in…
+                          </span>
+                        )}
                         {selected && <span aria-hidden="true" style={{ color: C.accent, fontWeight: 900, flex: '0 0 auto' }}>✓</span>}
-                      </button>
+                      </div>
                     );
                   })}
                   {agentProbe !== 'loading' && agentRows.length === 0 && (
