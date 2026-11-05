@@ -12,7 +12,7 @@ export const CREATIVE_STATES = [
 ];
 
 const TRANSIENT_STATES = new Set(['writing', 'voiceover', 'planning', 'images', 'rendering']);
-const PROVIDER_IDS = new Set(['codex', 'claude_code', 'gemini', 'hermes', 'openrouter']);
+const PROVIDER_IDS = new Set(['codex', 'claude_code', 'gemini', 'hermes', 'openrouter', 'zenborg']);
 const ASPECTS = new Set(['16:9', '9:16']);
 const STYLE_IDS = new Set(ANIMATION_STYLES.map((style) => style.id));
 const SAFE_LAYER_KINDS = new Set(['hero', 'support', 'foreground']);
@@ -44,12 +44,15 @@ export function validateCreativeBrief(input = {}) {
   if (!topic) throw new Error('Add a topic (up to 300 characters).');
   if (!ASPECTS.has(input.aspect)) throw new Error('Choose landscape or portrait.');
   const durationSec = Number(input.durationSec);
-  if (!Number.isFinite(durationSec) || durationSec < 5 || durationSec > 900) {
-    throw new Error('Duration must be between 5 and 900 seconds.');
+  const maximumDuration = kind === 'animation' && animationStyle(style).engine === 'code' ? 3600 : 900;
+  if (!Number.isFinite(durationSec) || durationSec < 5 || durationSec > maximumDuration) {
+    throw new Error(`Duration must be between 5 and ${maximumDuration} seconds.`);
   }
   const provider = input.provider && typeof input.provider === 'object' ? input.provider : {};
   if (!PROVIDER_IDS.has(provider.id)) throw new Error('Choose a connected agent or API.');
-  const model = provider.id === 'openrouter' ? boundedText(provider.model, 256) : 'configured-default';
+  const model = ['openrouter', 'zenborg'].includes(provider.id) ? boundedText(provider.model, 256) : 'configured-default';
+  if (provider.id === 'zenborg' && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(model)) throw new Error('Choose a Zenborg browser agent.');
+  if (provider.id === 'zenborg' && (kind !== 'animation' || animationStyle(style).engine !== 'code')) throw new Error('Zenborg Browser currently requires a code animation style.');
   if (provider.id === 'openrouter' && !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model)) {
     throw new Error('Enter an OpenRouter model, such as provider/model.');
   }
@@ -80,7 +83,7 @@ export function validateCreativeBrief(input = {}) {
     narration, voiceProvider, voiceboxVoiceId, kokoroVoiceId, characterAnimation, characterDesign,
     reviewScript: input.reviewScript === true,
     reviewVoiceover: narration && input.reviewVoiceover === true,
-    imageSource: boundedText(input.imageSource, 80),
+    imageSource: kind === 'animation' && animationStyle(style).engine === 'code' ? 'not-needed' : boundedText(input.imageSource, 80),
     imageModel: boundedText(input.imageModel, 256),
     script: boundedText(input.script, 30000),
     ...(sourceSheet ? { sourceSheet } : {}),

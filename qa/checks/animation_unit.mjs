@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+const repo=fileURLToPath(new URL('../../',import.meta.url));
+const out=path.join(repo,'.tmp','animations-qa');fs.mkdirSync(out,{recursive:true});
+const home=path.join(out,'home');fs.mkdirSync(home,{recursive:true});
+const files=['codeAnimation','creativeBridge','creativeStudio','codexImages','creativeNarration','channel','channelsBridge'].map(name=>`packages/core/test/${name}.test.js`);
+const core=spawnSync(process.execPath,['--test',...files],{cwd:repo,encoding:'utf8',timeout:180000,env:{...process.env,VIDMYO_HOME:home,VIDMYO_TEST_RUN:'animation-qa'}});
+const mcp=spawnSync(process.execPath,['--test',...fs.readdirSync(path.join(repo,'mcp/test')).filter(name=>name.endsWith('.test.js')).map(name=>'mcp/test/'+name)],{cwd:repo,encoding:'utf8',timeout:180000,env:{...process.env,VIDMYO_HOME:home,VIDMYO_TEST_RUN:'animation-qa'}});
+const logs=[core,mcp].map(result=>result.stdout+result.stderr);fs.writeFileSync(path.join(out,'unit.log'),logs.join('\n'));
+const counts=logs.map(log=>({passed:Number(log.match(/(?:ℹ |# )pass (\d+)/)?.[1]||0),failed:Number(log.match(/(?:ℹ |# )fail (\d+)/)?.[1]||0),skipped:Number(log.match(/(?:ℹ |# )skipped (\d+)/)?.[1]||0)}));
+const result={exitCode:core.status||mcp.status||0,suites:[{name:'core-regressions',exitCode:core.status,...counts[0]},{name:'mcp',exitCode:mcp.status,...counts[1]}]};
+if(counts.some(count=>!count.passed||count.failed||count.skipped))result.exitCode=1;
+fs.writeFileSync(path.join(out,'unit.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));process.exitCode=result.exitCode;

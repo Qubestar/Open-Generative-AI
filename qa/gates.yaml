@@ -1,0 +1,21 @@
+# qa/gates.yaml — deklaracja zakresu weryfikacji (generowane przez qa_init.py)
+# Typy są SKŁADANE: aplikacja może być np. [desktop, pipeline].
+policy_version: "qa-gate/1.0"
+app_types: ['desktop', 'web', 'pipeline']
+capabilities: ['agent-tools', 'human-ui', 'untrusted-input', 'persistent-state', 'external-effects', 'filesystem-media']
+
+# Krok K2: E2E. Wymagany, gdy profil deklaruje human-ui.
+# Dla web: [playwright, test] · dla CLI: black-box smoke.
+e2e:
+  command: "node qa/checks/animation_ui.mjs"        # np. "npx playwright test" albo "python qa/checks/smoke.py"
+
+# Krok W1: ścieżki atakowane przez breakera.
+breaker:
+  paths:
+    - /studio/animations
+
+# Krok K3: rollback musi być PRZEĆWICZONY, nie opisany.
+rollback:
+  plan: "Discard isolated code-pipeline changes; original styles require no migration."
+  rehearsed: false
+  trigger: "Any P0 regression or sandbox/duplicate-submit failure."

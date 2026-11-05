@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  distDir: process.env.VIDMYO_NEXT_DIST_DIR || '.next',
   output: 'standalone',
   // The dev-only Next.js route indicator overlaps the Settings entry; errors
   // are still surfaced with it disabled.

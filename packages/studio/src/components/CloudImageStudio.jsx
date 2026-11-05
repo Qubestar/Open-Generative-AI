@@ -24,7 +24,7 @@ const muted = { color: 'var(--vm-muted)', fontSize: 13, lineHeight: 1.45 };
 const label = { display: 'block', color: 'var(--vm-muted)', fontSize: 12, fontWeight: 700, marginBottom: 6 };
 
 const IMAGE_MODELS = [
-  ...GENERATION_SOURCES.flatMap(source => source.models.image.map(item => ({
+  ...GENERATION_SOURCES.filter(source => source.id !== 'agnes').flatMap(source => source.models.image.map(item => ({
     ...item, provider: source.name, providerId: source.provider,
     note: 'Available in Vidmyo’s shared provider catalog. Compatibility can still vary when a provider changes its API.',
   }))),

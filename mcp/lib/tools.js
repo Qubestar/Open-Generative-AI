@@ -27,6 +27,8 @@ import { createRepurposeMcpService } from './repurposeService.js';
 import { createCleanerMcpService } from './cleanerService.js';
 import { createTranslateMcpService } from './translateService.js';
 import { createEditorMcpService } from './editorService.js';
+import { createAnimationMcpService } from './animationService.js';
+import { registerAnimationTools } from './animationTools.js';
 import { createGenerationConsent } from './generationConsent.js';
 
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
@@ -576,6 +578,7 @@ export function registerEditorTools(server, service) {
 }
 
 export function registerTools(server, ctx = {}) {
+  registerAnimationTools(server, ctx.animationService || createAnimationMcpService());
   const secrets = ctx.secrets || (() => '');
   const imageConfig = ctx.imageConfig || (() => ({ imageSource: 'flow', imageModel: null }));
   const approveGeneration = createGenerationConsent(ctx.confirmGeneration);

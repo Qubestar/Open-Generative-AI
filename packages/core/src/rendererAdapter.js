@@ -397,6 +397,7 @@ export function rasterizeCaptionPng({
     `</style></head><body><div class="cap">${safeText}</div></body></html>`,
   ].join('\n');
   fs.writeFileSync(htmlPath, html, 'utf8');
+  const profileDir = fs.mkdtempSync(path.join(path.dirname(outputPath), '.vidmyo-caption-chrome-'));
 
   try {
     const result = spawnSync(chrome, [
@@ -404,6 +405,9 @@ export function rasterizeCaptionPng({
       '--no-sandbox',
       '--disable-gpu',
       '--disable-software-rasterizer',
+      `--user-data-dir=${profileDir}`,
+      '--no-first-run',
+      '--no-default-browser-check',
       '--default-background-color=00000000',
       `--window-size=${canvasWidth},${canvasHeight}`,
       `--screenshot=${outputPath}`,
@@ -421,6 +425,7 @@ export function rasterizeCaptionPng({
     return { ok: false, outputPath, error: `Chrome screenshot error: ${err.message}` };
   } finally {
     try { fs.unlinkSync(htmlPath); } catch { /* ignore */ }
+    try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch { /* Chrome may still be releasing a profile handle. */ }
   }
 }
 

@@ -2,7 +2,7 @@ import { DEFAULT_KOKORO_VOICE } from '../../core/src/kokoroVoices.js';
 import { CREATIVE_IMAGE_SOURCES as IMAGE_SOURCES } from '../../core/src/creativeImages.js';
 
 export const AUTOMATIC_IMAGE_SOURCES = IMAGE_SOURCES.filter(source => !source.manual);
-export const STORY_IMAGE_SOURCES = IMAGE_SOURCES;
+export const STORY_IMAGE_SOURCES = IMAGE_SOURCES.filter(source => source.id !== 'not-needed');
 
 const DEFAULT_IMAGE_SOURCE = AUTOMATIC_IMAGE_SOURCES.find(source => source.id === 'fal')
   || AUTOMATIC_IMAGE_SOURCES[0];
