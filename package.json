@@ -38,6 +38,7 @@
       "packages/core/index.js",
       "packages/core/package.json",
       "packages/core/src/**/*",
+      "packages/core/assets/**/*",
       "packages/core/pipelines/**/*"
     ],
     "extraResources": [
@@ -87,6 +88,7 @@
           "index.js",
           "package.json",
           "src/**/*",
+          "assets/**/*",
           "pipelines/**/*"
         ]
       },
@@ -191,7 +193,7 @@
     "axios": "^1.7.0",
     "hyperframes": "0.8.72",
     "next": "^16.3.2",
-    "npm": "10.9.2",
+    "npm": "10.9.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.4.1",

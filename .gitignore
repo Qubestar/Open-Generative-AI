@@ -63,3 +63,4 @@ electron/bin/vidmyo-capture
 My Stuff and Tests/
 output/
 .playwright-cli/
+qa/runs/

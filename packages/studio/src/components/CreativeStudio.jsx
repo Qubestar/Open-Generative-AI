@@ -1,6 +1,8 @@
 import { StudioCharacter } from '../../../animation-engine/renderer/StudioCharacter.jsx';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ANIMATION_STYLES } from '../../../core/src/animationCatalog.js';
+import { CREATIVE_IMAGE_SOURCES } from '../../../core/src/creativeImages.js';
+import AnimationGallery from './AnimationGallery';
 import {
   AUTOMATIC_IMAGE_SOURCES,
   STORY_IMAGE_SOURCES,
@@ -408,14 +410,30 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
   const [logs, setLogs] = useState([]);
   const [scriptDraft, setScriptDraft] = useState('');
   const [voicebox, setVoicebox] = useState(null);
+  const [zenborg, setZenborg] = useState(null);
+  const [zenborgBusy, setZenborgBusy] = useState(false);
   const [channelSource, setChannelSource] = useState(null);
   const activeDir = useRef(null);
   const inFlight = useRef(false);
   const progressRefresh = useRef(null);
   const consumedHandoff = useRef(null);
 
+  const refreshZenborg = useCallback(async (locate = false) => {
+    setZenborgBusy(true);
+    try {
+      if (!creative?.zenborgStatus) { setZenborg({ connected: false, message: 'Open Vidmyo desktop to connect Zenborg Browser.', agents: [] }); return; }
+      const result = await (locate ? creative.zenborgLocate() : creative.zenborgStatus());
+      if (!result?.canceled) setZenborg(result);
+    } catch { setZenborg({ connected: false, agents: [], message: 'Cannot connect to Zenborg. Start it and reconnect Vidmyo in Zenborg Settings.' }); }
+    finally { setZenborgBusy(false); }
+  }, [creative]);
+
+  useEffect(() => {
+    if (!isStory && creative?.zenborgStatus) refreshZenborg();
+  }, [creative, isStory, refreshZenborg]);
+
   const imageSources = useMemo(() => isStory ? STORY_IMAGE_SOURCES : AUTOMATIC_IMAGE_SOURCES, [isStory]);
-  const imageSource = imageSources.find(source => source.id === brief.imageSource) || imageSources[0];
+  const imageSource = imageSources.find(source => source.id === brief.imageSource) || (!brief.imageSource ? imageSources[0] : null);
 
   useEffect(() => {
     if (!initialHandoff?.brief || initialHandoff.section !== kind || consumedHandoff.current === initialHandoff) return;
@@ -531,18 +549,21 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
   const setField = (field, value) => setBrief(current => ({ ...current, [field]: value }));
   const setProvider = id => setBrief(current => ({ ...current, provider: { ...current.provider, id } }));
   const selectedAgent = agents.find(agent => agent.id === brief.provider.id);
-  const selectedAgentReady = brief.provider.id === 'openrouter' || !!(selectedAgent?.installed && selectedAgent?.authed && selectedAgent?.subscriptionReady !== false);
+  const selectedAgentReady = brief.provider.id === 'zenborg' ? !!(zenborg?.connected && zenborg.agents?.some(agent => agent.id === brief.provider.model)) : brief.provider.id === 'openrouter' || !!(selectedAgent?.installed && selectedAgent?.authed && selectedAgent?.subscriptionReady !== false);
+
 
   const validate = () => {
     if (sourceMode === 'sheet' && !brief.sourceSheet) return 'Choose a Google Sheets row, or switch to My idea.';
     if (!brief.topic.trim()) return 'Add a topic or title.';
+    if (brief.provider.id === 'zenborg' && !ANIMATION_STYLES.some(style => style.id === brief.style && style.engine === 'code')) return 'Choose a code animation style to use Zenborg Browser.';
     const duration = Number(brief.durationSec);
-    if (!Number.isFinite(duration) || duration < 5 || duration > 900) return 'Duration must be between 5 seconds and 15 minutes.';
+    const maxDuration = ANIMATION_STYLES.some(style => style.id === brief.style && style.engine === 'code') ? 3600 : 900;
+    if (!Number.isFinite(duration) || duration < 5 || duration > maxDuration) return `Duration must be between 5 seconds and ${maxDuration / 60} minutes.`;
     if (!selectedAgentReady) return 'Choose a connected agent, or use OpenRouter.';
     if (brief.provider.id === 'openrouter' && !brief.provider.model.trim().includes('/')) return 'Enter an OpenRouter model in provider/model format.';
     if (brief.narration && brief.voiceProvider === 'kokoro' && !/^(english|en)(?:\b|[-_])/i.test(brief.language.trim())) return `${brief.language || 'This language'} narration is not available in Kokoro. Choose ElevenLabs, Voicebox, choose English, or turn narration off.`;
     if (brief.narration && brief.voiceProvider === 'voicebox' && (!voicebox?.available || !voicebox.voices?.some(voice => voice.id === brief.voiceboxVoiceId))) return voicebox?.error || 'Choose an available Voicebox voice, or select another voice engine.';
-    if (brief.style !== 'documentary-map' && !imageSource) return 'Choose an image provider.';
+    if (brief.style !== 'documentary-map' && !ANIMATION_STYLES.some(style => style.id === brief.style && style.engine === 'code') && (!imageSource || imageSource.id === 'not-needed')) return 'Choose an image provider.';
     return '';
   };
 
@@ -664,6 +685,7 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
   const atScriptReview = state === 'review-script';
   const atVoiceReview = state === 'review-voiceover';
   const style = ANIMATION_STYLES.find(item => item.id === brief.style) || ANIMATION_STYLES[0];
+  const isCodeAnimation = !isStory && style.engine === 'code';
   const sectionNumbers = creativeSectionNumbers(kind, brief.style);
 
   return (
@@ -713,18 +735,11 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
 
             {!isStory && (
               <section className="creative-card">
-                <SectionHeading number={sectionNumbers.style} title="Choose a visual treatment" copy="Each card previews the motion language. Your brief and generated assets determine the final scenes." />
-                <div className="creative-style-grid">
-                  {ANIMATION_STYLES.map(item => (
-                    <button key={item.id} type="button" className="creative-style-card" style={{ '--style-accent': item.accent }} aria-pressed={brief.style === item.id} onClick={() => {
-                      setField('style', item.id);
-                      if (item.id === 'paper-stop-motion' && !snapshot) setField('narration', false);
-                    }}>
-                      <StyleArt id={item.id} />
-                      <span className="creative-style-copy"><span className="creative-style-name">{item.name}</span><span className="creative-style-description">{item.description}</span></span>
-                    </button>
-                  ))}
-                </div>
+                <SectionHeading number={sectionNumbers.style} title="Choose your animation style" copy="Browse numbered styles, compare real reference clips, then create a film from your idea or content plan." />
+                <AnimationGallery value={brief.style} renderClassic={id => <StyleArt id={id} />} onChange={item => {
+                  setBrief(current => ({ ...current, style: item.id, imageSource: item.engine === 'code' ? 'not-needed' : current.imageSource === 'not-needed' ? AUTOMATIC_IMAGE_SOURCES[0]?.id || 'fal' : current.imageSource,
+                    narration: item.engine === 'code' ? true : item.id === 'paper-stop-motion' && !snapshot ? false : current.narration }));
+                }} />
               </section>
             )}
 
@@ -759,7 +774,7 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
                 </div>
                 <label className="creative-field">
                   <span className="creative-label">Duration <span className="creative-hint">seconds</span></span>
-                  <input className="creative-input" type="number" min="5" max="900" step="1" value={brief.durationSec} onChange={e => setField('durationSec', e.target.value)} />
+                  <input className="creative-input" type="number" min="5" max={isCodeAnimation ? 3600 : 900} step="1" value={brief.durationSec} onChange={e => setField('durationSec', e.target.value)} />
                 </label>
               </div>
               {!isStory && (
@@ -857,7 +872,7 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
             </section>
 
             <section className="creative-card">
-              <SectionHeading number={sectionNumbers.director} title="Choose your director" copy="Use a connected local agent, or an OpenRouter model configured in Settings." />
+                <SectionHeading number={sectionNumbers.director} title="Choose your director" copy="Use a connected local agent, Zenborg Browser, or an OpenRouter model configured in Settings." />
               <div className="creative-provider-list">
                 {LOCAL_PROVIDERS.map(provider => {
                   const found = agents.find(agent => agent.id === provider.id);
@@ -872,29 +887,51 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
                 <button type="button" className="creative-provider" aria-pressed={brief.provider.id === 'openrouter'} onClick={() => setProvider('openrouter')}>
                   <span className="creative-provider-mark">OR</span><span><span className="creative-provider-name">OpenRouter</span><span className="creative-provider-state">Uses your API key</span></span>
                 </button>
+                {!isStory && zenborg?.connected && (zenborg.agents || []).map(agent => (
+                  <button key={agent.id} type="button" className="creative-provider" aria-pressed={brief.provider.id === 'zenborg' && brief.provider.model === agent.id} onClick={() => setBrief(current => ({ ...current, provider: { id: 'zenborg', model: agent.id } }))}>
+                    <span className="creative-provider-mark">ZB</span><span><span className="creative-provider-name">{agent.name}</span><span className="creative-provider-state">Zenborg Browser{agent.model ? ` · ${agent.model}` : ''}</span></span>
+                  </button>
+                ))}
               </div>
+              {!isStory && <div style={{ marginTop: 13 }}>
+                <button type="button" className="creative-button creative-button-small" disabled={zenborgBusy} onClick={() => refreshZenborg()}>{zenborgBusy ? 'Checking Zenborg…' : zenborg?.connected ? 'Refresh Zenborg' : 'Connect Zenborg'}</button>
+                {zenborg && <p role="status">{zenborg.message || (zenborg.connected ? 'Connected browser agents are available above.' : 'Zenborg is disconnected.')}</p>}
+                {!zenborg?.connected && creative?.zenborgLocate && <button type="button" className="creative-button creative-button-small creative-button-quiet" disabled={zenborgBusy} onClick={() => refreshZenborg(true)}>Locate Zenborg</button>}
+              </div>}
+              {brief.provider.id === 'zenborg' && <div className="creative-callout" style={{ marginTop: 13 }}>
+                <p>Zenborg sends your brief to the browser agent. Vidmyo creates the narration, requests animation code timed to it, then renders the MP4 locally. No prompt copying or image API is needed. Browser plan limits still apply.</p>
+                {!isCodeAnimation && <p>Choose a code animation style above to use this director.</p>}
+                {!selectedAgentReady && <p role="alert">The selected browser director is unavailable. Connect Zenborg and choose an available agent above.</p>}
+                <p>Sign-in or human verification happens in Zenborg. After signing in, choose Resume browser task to start the new attempt allowed by Zenborg. Only confirmed unsent requests or sign-in failures can create another attempt. Stopping Vidmyo stops local work; an already submitted Zenborg task may continue.</p>
+                {snapshot && <button type="button" className="creative-button creative-button-small" disabled={zenborgBusy || snapshot.busy} onClick={async () => {
+                  setZenborgBusy(true);
+                  try { const result = await creative.zenborgRetry(snapshot.dir); if (!result?.ok) setError(result?.error || 'Could not resume the browser task.'); else await startProduction(false); }
+                  catch { setError('Could not reset the failed browser task.'); }
+                  finally { setZenborgBusy(false); }
+                }}>Resume browser task</button>}
+              </div>}
               {brief.provider.id === 'openrouter' && (
                 <label className="creative-field" style={{ marginTop: 13 }}><span className="creative-label">OpenRouter model</span><input className="creative-input" value={brief.provider.model} onChange={e => setBrief(current => ({ ...current, provider: { ...current.provider, model: e.target.value } }))} placeholder="openai/gpt-5.1" /></label>
               )}
-              {!selectedAgentReady && brief.provider.id !== 'openrouter' && <div className="creative-callout" style={{ marginTop: 12 }}>Connect this agent in Agents, or choose another director. {onNavigateAgents && <button type="button" className="creative-button creative-button-small" style={{ marginLeft: 8 }} onClick={onNavigateAgents}>Open Agents</button>}</div>}
+              {!selectedAgentReady && !['openrouter','zenborg'].includes(brief.provider.id) && <div className="creative-callout" style={{ marginTop: 12 }}>Connect this agent in Agents, or choose another director. {onNavigateAgents && <button type="button" className="creative-button creative-button-small" style={{ marginLeft: 8 }} onClick={onNavigateAgents}>Open Agents</button>}</div>}
             </section>
 
             {brief.style !== 'documentary-map' && (
               <section className="creative-card">
-                <SectionHeading number={sectionNumbers.imageCreation} title="Choose image creation" copy={isStory ? 'Use a connected image API, or prepare a free Google Flow queue for the Curio Chrome Extension.' : 'Scene images use a separate provider and its saved key.'} />
+                <SectionHeading number={sectionNumbers.imageCreation} title="Choose image creation" copy={isCodeAnimation ? 'This style draws its visuals in code. No image service or image credits are needed.' : isStory ? 'Use a connected image API, or prepare a free Google Flow queue for the Curio Chrome Extension.' : 'Scene images use a separate provider and its saved key.'} />
                 <div className="creative-field-grid">
                   <label className="creative-field">
                     <span className="creative-label">Image provider</span>
-                    <select className="creative-select" value={imageSource?.id || ''} onChange={e => {
+                    <select className="creative-select" disabled={isCodeAnimation} value={isCodeAnimation ? 'not-needed' : imageSource?.id || ''} onChange={e => {
                       const next = imageSources.find(source => source.id === e.target.value); setBrief(current => ({ ...current, imageSource: e.target.value, imageModel: next?.models?.[0]?.id || '' }));
-                    }}>{imageSources.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
+                    }}>{!isCodeAnimation && !imageSource && <option value="">Choose a provider</option>}{(isCodeAnimation ? CREATIVE_IMAGE_SOURCES.filter(source => source.id === 'not-needed') : imageSources.filter(source => source.id !== 'not-needed')).map(source => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
                   </label>
-                  {!imageSource?.manual && <label className="creative-field">
+                  {!isCodeAnimation && !imageSource?.manual && <label className="creative-field">
                     <span className="creative-label">Image model</span>
                     <select className="creative-select" value={brief.imageModel || imageSource?.models?.[0]?.id || ''} onChange={e => setField('imageModel', e.target.value)}>{(imageSource?.models || []).map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select>
                   </label>}
                 </div>
-                <div className="creative-callout" style={{ marginTop: 12 }}>{imageSource?.manual ? <>Vidmyo will write a queue JSON after the script, voice and scene plan are ready. Open Curio Flow Queue in Chrome and import that file; then bring the downloaded sNNN images back to this project.</> : <>{imageSource?.note || 'This provider uses the key stored in Settings.'} {onOpenSettings && !imageSource?.subscription && <button type="button" className="creative-button creative-button-small" style={{ marginLeft: 8 }} onClick={onOpenSettings}>Open Settings</button>}</>}</div>
+                <div className="creative-callout" style={{ marginTop: 12 }}>{isCodeAnimation ? 'Not needed · selected automatically for code animation. Voiceover is created first; the animation is timed to the audio.' : imageSource?.manual ? <>Vidmyo will write a queue JSON after the script, voice and scene plan are ready. Open Curio Flow Queue in Chrome and import that file; then bring the downloaded sNNN images back to this project.</> : <>{imageSource?.note || 'This provider uses the key stored in Settings.'} {onOpenSettings && !imageSource?.subscription && <button type="button" className="creative-button creative-button-small" style={{ marginLeft: 8 }} onClick={onOpenSettings}>Open Settings</button>}</>}</div>
               </section>
             )}
 

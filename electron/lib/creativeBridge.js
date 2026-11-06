@@ -14,6 +14,7 @@ const {makePipeline,readConfig:storyConfig}=require('./storyBridge');
 const {createElevenLabsNarration}=require('./creativeNarration');
 const {generateCodexImage}=require('./codexImages');
 const {voiceboxStatus,createVoiceboxNarration}=require('./voicebox');
+const {createZenborgBrowser}=require('./zenborgBrowser');
 
 const MAX_JSON_BYTES=5*1024*1024;
 const readJson=(file)=>{if(fs.statSync(file).size>MAX_JSON_BYTES)throw new Error('Project data is too large.');return JSON.parse(fs.readFileSync(file,'utf8'));};
@@ -32,6 +33,7 @@ function createCreativeBridge(deps={}){
   const secret=deps.getSecret||getSecret;
   const runtime=deps.runtime||resolveRuntimePaths({isPackaged:application.isPackaged,resourcesPath:process.resourcesPath,...(deps.repoRoot?{repoRoot:deps.repoRoot}:{})});
   const pkgRoot=runtime.packaged?process.resourcesPath:runtime.repoRoot;
+  const zenborg=deps.zenborg||createZenborgBrowser({repoRoot:runtime.repoRoot||pkgRoot,mcpDir:runtime.mcpDir,configFile:path.join(application.getPath('userData'),'zenborg-browser.json')});
   const engine=path.join(pkgRoot,'packages','animation-engine');
   const trackerTemplate=path.join(pkgRoot,'assets','templates','vidmyo-video-tracker-v1.csv');
   const core=deps.core||(()=>import(pathToFileURL(path.join(runtime.coreDir,'index.js')).href));
@@ -91,13 +93,15 @@ function createCreativeBridge(deps={}){
       throw new Error('This folder is not a Stickman or Animation project. Choose the folder containing project.json.');
     }
     const mod=await core();const contract=await model();const project=mod.Project.load(resolved);const before=JSON.stringify(project.manifest);
+    const foreignBusy=mod.ANIMATION_STYLES.some(style=>style.id===raw.style&&style.engine==='code')&&!active.has(resolved)&&mod.isAnimationLocked(resolved);
     contract.normalizeCreativeManifest(project.manifest);
-    if(interrupt&&!active.has(resolved))contract.markInterruptedProduction(project.manifest);
-    if(before!==JSON.stringify(project.manifest))project.save();
+    if(interrupt&&!active.has(resolved)&&!foreignBusy)contract.markInterruptedProduction(project.manifest);
+    if(before!==JSON.stringify(project.manifest)&&!foreignBusy)project.save();
+    project._externalBusy=foreignBusy;
     return project;
   }
   async function snapshot(dir){
-    const project=await loadProject(dir);const manifest=project.manifest;const result={ok:true,dir:project.dir,manifest,busy:active.has(path.resolve(project.dir))};
+    const project=await loadProject(dir);const manifest=project.manifest;const result={ok:true,dir:project.dir,manifest,busy:active.has(path.resolve(project.dir))||project._externalBusy};
     const legacy=!manifest.production||manifest.production.state==='done';
     const output=manifest.production?.output||(legacy?(manifest.renders?.at(-1)?.finalPath||manifest.renders?.at(-1)?.path):null);
     if(output)try{result.previewUrl=await media.grant(fileIn(project.dir,output));}catch{}
@@ -105,6 +109,7 @@ function createCreativeBridge(deps={}){
     return result;
   }
   async function providerEnv(brief){
+    if(brief.provider.id==='zenborg')return {};
     if(brief.provider.id==='openrouter'){
       const key=secret('openrouter');if(!key)throw new Error('Add your OpenRouter key in Settings.');return {OPENROUTER_API_KEY:key};
     }
@@ -114,19 +119,27 @@ function createCreativeBridge(deps={}){
   }
   async function direct(project,phase,extra,env){
     if(deps.director)return deps.director({project,phase,brief:project.manifest.brief,...extra});
+    const brief=project.manifest.brief;
+    const mod=await core();const codeScript=phase==='script'&&brief.kind==='animation'&&mod.animationStyle(brief.style).engine==='code';
+    const scriptTask={style:codeScript?mod.codeAnimationTask(brief,{durationSec:brief.durationSec}).style:undefined,output:'script',durationSec:brief.durationSec,contract:'Return JSON {"script":"clean spoken narration"}. No headings or stage directions. Write in the requested language, with a hook, development and payoff. Maximum 30,000 characters.',topic:brief.topic,details:brief.details,language:brief.language,targetWords:Math.min(5000,Math.round(brief.durationSec*2.4))};
+    if(project.manifest.brief.provider.id==='zenborg'){
+      if(phase!=='script')throw new Error('Zenborg Browser requires a code animation style.');
+      return zenborg.generate({project,phase,signal:ensureRunning(project.dir).controller.signal,onProgress:message=>emit(project.dir,message),
+        task:scriptTask});
+    }
     const request=path.join(project.dir,'artifacts',`director-${phase}-request.json`);const output=path.join(project.dir,'artifacts',`director-${phase}.json`);
     const job=active.get(path.resolve(project.dir));
     const source=project.manifest.brief||{};
     const publicBrief={kind:source.kind,style:source.style,aspect:source.aspect,characterAnimation:source.characterAnimation,topic:source.topic,details:source.details,durationSec:source.durationSec,language:source.language,provider:{id:source.provider?.id,model:source.provider?.model}};
     const task={phase,brief:publicBrief};
     if(phase==='plan'){task.script=extra.script;task.beats=extra.beats;}
-    atomicJson(request,task);
-    await run(project.dir,process.env.VIDMYO_REPURPOSE_PYTHON||'python3',['-m','vidmyo_repurpose.creative','--request',request,'--output',output,'--cancel-file',job.cancelFile],{env:{...env,PYTHONPATH:path.join(runtime.repurposeEngineDir,'src')}});
+    atomicJson(request,codeScript?{provider:brief.provider,task:scriptTask}:task);
+    await run(project.dir,process.env.VIDMYO_REPURPOSE_PYTHON||'python3',['-m',codeScript?'vidmyo_repurpose.code_animation':'vidmyo_repurpose.creative','--request',request,'--output',output,'--cancel-file',job.cancelFile],{env:{...env,PYTHONPATH:path.join(runtime.repurposeEngineDir,'src')}});
     return readJson(output);
   }
   async function consent(project,mod,{needsImages=false,needsDirector=false,needsVoice=false}={}){
     const brief=project.manifest.brief;const production=project.manifest.production||{};
-    const usesImages=brief.style!=='documentary-map';const source=usesImages?mod.getCreativeImageSource(brief.imageSource):null;
+    const usesImages=brief.style!=='documentary-map'&&!mod.ANIMATION_STYLES.some(style=>style.id===brief.style&&style.engine==='code');const source=usesImages?mod.getCreativeImageSource(brief.imageSource):null;
     const usesPaidDirector=brief.provider.id==='openrouter';const usesPaidVoice=brief.narration&&brief.voiceProvider==='elevenlabs';const usesVoicebox=brief.narration&&brief.voiceProvider==='voicebox';
     const maximumImages=usesImages?Math.ceil(brief.durationSec/3)*(brief.style==='editorial-collage'||brief.style==='paper-stop-motion'?4:1):0;
     const authorization=(await model()).creativeFingerprint({
@@ -285,7 +298,8 @@ function createCreativeBridge(deps={}){
     if(manifest.production.state==='done'&&manifest.production.output&&fs.existsSync(path.resolve(project.dir,manifest.production.output)))return;
     const planFile=path.join(project.dir,'artifacts','animation-plan.json');
     const needsDirector=!manifest.script||!manifest.production.planFingerprint||!fs.existsSync(planFile);
-    let needsImages=brief.style!=='documentary-map';
+    const codeStyle=brief.kind==='animation'&&contract.animationStyle(brief.style).engine==='code';
+    let needsImages=brief.style!=='documentary-map'&&!codeStyle;
     if(needsImages&&fs.existsSync(planFile)){
       try{
         const cached=contract.validateAnimationPlan(readJson(planFile),{style:brief.style,characterAnimation:brief.characterAnimation});
@@ -329,6 +343,22 @@ function createCreativeBridge(deps={}){
       intervals=contract.sceneIntervalsFromBeats(readJson(beatFile).beats||[],audioDuration);
     }
     ensureRunning(dir);
+    if(codeStyle){
+      await mod.produceCodeAnimation({project,durationSec:totalDuration,beats:intervals.map(({id,text,durationSec})=>({id,text,durationSec})),
+        signal:ensureRunning(dir).controller.signal,setState:(state,message)=>setState(project,state,message),renderer:deps.codeRenderer,
+        direct:async(task)=>{
+          if(deps.codeDirector)return deps.codeDirector(task);
+          if(brief.provider.id==='zenborg')return zenborg.generate({project,phase:'code',task,signal:ensureRunning(dir).controller.signal,onProgress:message=>emit(dir,message)});
+          const request=path.join(project.dir,'artifacts','code-director-request.json');const output=path.join(project.dir,'artifacts','code-director-response.json');
+          atomicJson(request,{provider:brief.provider,task});
+          await run(project.dir,process.env.VIDMYO_REPURPOSE_PYTHON||'python3',['-m','vidmyo_repurpose.code_animation','--request',request,'--output',output,'--cancel-file',ensureRunning(dir).cancelFile],{env:{...await directorEnv(),PYTHONPATH:path.join(runtime.repurposeEngineDir,'src')}});
+          return readJson(output);
+        },run:async(command,args)=>{
+          return mod.runGovernedProcess({jobId:`code_${crypto.randomUUID()}`,resourceClass:'heavy',governor:new mod.JobStore().governor,cmd:command,args,cwd:project.dir,signal:ensureRunning(dir).controller.signal,timeoutMs:3600000,
+            env:{...process.env,ELECTRON_RUN_AS_NODE:'1',PATH:[renderer.status()?.binDir,process.env.PATH,'/opt/homebrew/bin','/usr/local/bin'].filter(Boolean).join(path.delimiter)}});
+        }});
+      return;
+    }
     const planFingerprint=contract.creativeFingerprint({spec:contract.creativeSpecFingerprint(brief,manifest.script),intervals:intervals.map(({id,text,durationSec})=>({id,text,durationSec})),totalDuration});let plan=null;
     if(fs.existsSync(planFile)){try{plan=contract.validateAnimationPlan(readJson(planFile),{expectedSceneCount:intervals.length||null,style:brief.style,characterAnimation:brief.characterAnimation});}catch{plan=null;}}
     if(!plan||manifest.production.planFingerprint!==planFingerprint){setState(project,'planning','Designing scenes and motion');const raw=await direct(project,'plan',{script:manifest.script,beats:intervals.map(({id,text,durationSec})=>({id,text,durationSec}))},await directorEnv());plan=contract.validateAnimationPlan(raw,{expectedSceneCount:intervals.length||null,style:brief.style,characterAnimation:brief.characterAnimation});if(intervals.length)plan.scenes=plan.scenes.map((scene,index)=>({...scene,durationSec:intervals[index].durationSec}));else{const sum=plan.scenes.reduce((value,scene)=>value+scene.durationSec,0);plan.scenes=plan.scenes.map((scene)=>({...scene,durationSec:scene.durationSec/sum*brief.durationSec}));}plan=contract.validateAnimationPlan(plan,{expectedDurationSec:totalDuration,expectedSceneCount:intervals.length||null,style:brief.style,characterAnimation:brief.characterAnimation});if(plan.scenes.length>Math.ceil(totalDuration/3))throw new Error('Scene count exceeds the image budget. Reduce scene density and try again.');atomicJson(planFile,plan);manifest.production.planFingerprint=planFingerprint;manifest.production.assetsDone=false;project.save();}
@@ -357,7 +387,16 @@ function createCreativeBridge(deps={}){
 
   function register(){
     if(registered)return false;registered=true;
-    const handle=(name,fn)=>ipc.handle(`creative:${name}`,async(_event,...args)=>{try{return await fn(...args);}catch(error){return {ok:false,error:String(error?.message||error)};}});
+    const handle=(name,fn)=>ipc.handle(`creative:${name}`,async(_event,...args)=>{let release;try{
+      if(['save','start','zenborg-retry'].includes(name)){
+        const dir=check(args[0]);const mod=await core();const manifest=readJson(path.join(dir,'project.json'));
+        if(mod.ANIMATION_STYLES.some(style=>style.engine==='code'&&[manifest.style,args[1]?.style].includes(style.id)))release=mod.acquireAnimationLock(dir);
+      }
+      return await fn(...args);
+    }catch(error){return {ok:false,error:String(error?.message||error)};}finally{release?.();}});
+    handle('zenborg-status',()=>zenborg.status());
+    handle('zenborg-retry',async(dir)=>{dir=check(dir);if(active.has(dir))throw new Error('Stop current production before retrying a browser task.');return zenborg.retryFailed(await loadProject(dir));});
+    handle('zenborg-locate',async()=>{const choice=await dialogs.showOpenDialog({title:'Locate the Zenborg MCP connector',properties:['openFile'],filters:[{name:'Zenborg connector',extensions:['js']}]});if(choice.canceled)return {ok:false,canceled:true};zenborg.configure(choice.filePaths[0]);return zenborg.status();});
     handle('pick-root',async()=>{const choice=await dialogs.showOpenDialog({title:'Where should Vidmyo save your videos?',properties:['openDirectory','createDirectory']});if(choice.canceled)return {ok:false,canceled:true};const dir=fs.realpathSync(choice.filePaths[0]);roots.add(dir);return {ok:true,dir};});
     handle('create',async({root,brief}={})=>{const mod=await core();const contract=await model();const normalized=contract.validateCreativeBrief(brief);const resolved=fs.realpathSync(root);if(!roots.has(resolved))throw new Error('Choose your output folder first.');const dir=path.join(resolved,`${mod.slugify(normalized.topic)}-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`);const project=mod.Project.create(dir,{brief:normalized,style:normalized.style,aspect:normalized.aspect});project.manifest.script=normalized.script||null;project.manifest.production={state:'draft',message:'Ready to create',scriptOrigin:normalized.script?'supplied':null,scriptApproved:false,voiceApproved:false};project.save();opened.add(path.resolve(dir));remember(project);return snapshot(dir);});
     handle('open',async(dir)=>{if(!dir){const choice=await dialogs.showOpenDialog({title:'Open a Story or Animation project folder',properties:['openDirectory']});if(choice.canceled)return {ok:false,canceled:true};dir=choice.filePaths[0];}const project=await loadProject(dir,{interrupt:true});opened.add(path.resolve(project.dir));remember(project);return snapshot(project.dir);});

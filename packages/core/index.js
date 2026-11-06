@@ -22,6 +22,8 @@ export { agnesAdapter } from './src/adapters/agnes.js';
 export * from './src/vfx.js';
 
 export * from './src/animation.js';
+export * from './src/codeAnimation.js';
+export * from './src/animationLock.js';
 export * from './src/channel.js';
 export * from './src/channelStore.js';
 export * from './src/channelAnalysis.js';

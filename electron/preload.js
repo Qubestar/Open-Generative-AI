@@ -96,6 +96,9 @@ contextBridge.exposeInMainWorld('story', {
 
 // Story and Animations share one durable, project-scoped production surface.
 contextBridge.exposeInMainWorld('creative', {
+    zenborgStatus: () => ipcRenderer.invoke('creative:zenborg-status'),
+    zenborgRetry: (dir) => ipcRenderer.invoke('creative:zenborg-retry', dir),
+    zenborgLocate: () => ipcRenderer.invoke('creative:zenborg-locate'),
     isElectron: true,
     pickRoot: () => ipcRenderer.invoke('creative:pick-root'),
     create: (opts) => ipcRenderer.invoke('creative:create', opts),

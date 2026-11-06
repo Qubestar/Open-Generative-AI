@@ -1,5 +1,6 @@
 // Browser-safe catalog shared by the Studio UI and the Node production engine.
 // Keep this module data-only: client components import it directly.
+import { CODE_ANIMATION_STYLES } from './codeAnimationCatalog.js';
 export const ANIMATION_STYLES = Object.freeze([
   Object.freeze({
     id: 'editorial-collage',
@@ -25,10 +26,11 @@ export const ANIMATION_STYLES = Object.freeze([
     accent: '#d5a45e',
     motion: 'Locked camera. Thick layered cardstock with visible edges and shadow gaps. One hero and at most three supporting objects assemble back-to-front, followed by a subtle living-poster hold.',
   }),
-]);
+  ...CODE_ANIMATION_STYLES,
+].map((style, index) => Object.freeze({ number: index + 1, engine: 'classic', ...style })));
 
 export function animationStyle(id) {
-  const style = ANIMATION_STYLES.find((candidate) => candidate.id === id);
+  const style = ANIMATION_STYLES.find((candidate) => candidate.id === id || candidate.number === Number(id));
   if (!style) throw new Error('Choose an animation style.');
   return style;
 }
