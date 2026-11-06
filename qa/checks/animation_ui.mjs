@@ -47,12 +47,20 @@ try{
     await page.getByLabel('Find a style').fill('7');
     await page.getByRole('button',{name:/Whiteboard Explainer reference frame/}).click();
     if(await browserDirector.getAttribute('aria-pressed')!=='true')throw Error('Code animation lost its selected director');
+    await page.setViewportSize({width:1280,height:900});
+    await page.getByLabel('Find a style').fill('171');
+    await page.getByRole('button',{name:/Ink World Stories.*reference frame/}).click();
+    if(await provider.inputValue()!=='not-needed'||!await provider.isDisabled())throw Error('New3D style requires an image provider');
+    await page.getByRole('button',{name:'▶ Watch example',exact:true}).click();
+    await page.waitForFunction(()=>{const v=document.querySelector('.animation-reference video');return v?.getAttribute('src')?.includes('ink-world-story')&&v.readyState>=2},null,{timeout:20000});
+    await page.getByText('Original Vidmyo demonstration, authored locally from this style guide.',{exact:false}).waitFor();
+    await page.screenshot({path:"/Volumes/My Lexar/AI Projects/Vidmyo/output/playwright/animation-qa/style-171.png"});
     if(errors.length)throw Error(errors.join('; '));
-    return {ok:true,checks:['style-number','not-needed','reference-playback','preview-visible','zenborg-disconnected','zenborg-auto-discovery','zenborg-one-click','code-keeps-director','agnes-removed','mobile-overflow'],pageErrors:errors};
+    return {ok:true,checks:['style-number','not-needed','reference-playback','preview-visible','zenborg-disconnected','zenborg-auto-discovery','zenborg-one-click','code-keeps-director','new-style171','new-style-no-images','local-preview-playback','agnes-removed','mobile-overflow'],pageErrors:errors};
   }`;
   const text=cli('run-code',code);
   if(!text.includes('"ok": true')&&!text.includes('"ok":true'))throw Error('UI test did not return success.');
-  result={exitCode:0,ok:true,url,artifacts:['style-07.png','mobile-390.png'],checks:10};
+  result={exitCode:0,ok:true,url,artifacts:['style-07.png','mobile-390.png','style-171.png'],checks:13};
 }catch(error){result={exitCode:1,ok:false,error:error.message};}
 finally{try{cli('close')}catch{}fs.writeFileSync(path.join(dir,'cli.log'),logs.join('\n'));}
 fs.writeFileSync(path.join(dir,'verification.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));process.exitCode=result.exitCode;

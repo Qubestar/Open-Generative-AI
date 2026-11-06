@@ -1,0 +1,65 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;overflow:hidden;background:#efe2c9}canvas{display:block}</style></head><body><canvas id="film"></canvas><script>
+// Original Vidmyo style demonstration. A perspective scene, projected from
+// procedural 3D meshes; the character is a camera-facing flat drawing.
+const canvas=document.getElementById('film'),ctx=canvas.getContext('2d');
+const ink='#351f22',duration=5.48;
+const sub=(a,b)=>a.map((v,i)=>v-b[i]),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0);
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const unit=a=>{const l=Math.hypot(...a);return a.map(v=>v/l)};
+const ease=x=>{x=Math.max(0,Math.min(1,x));return x*x*(3-2*x)};
+let camera,right,up,forward,W,H,focal,faces;
+function project(p){const q=sub(p,camera),z=dot(q,forward);return [W/2+dot(q,right)*focal/z,H*.51-dot(q,up)*focal/z,z]}
+function face(points,color,stroke=true){faces.push({points,color,stroke,depth:points.reduce((n,p)=>n+dot(sub(p,camera),forward),0)/points.length})}
+function box(x,y,z,sx,sy,sz,color,rotate=0){
+ const p=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]].map(v=>{const a=v[0]*sx/2,b=v[1]*sy/2;return [x+a*Math.cos(rotate)-b*Math.sin(rotate),y+a*Math.sin(rotate)+b*Math.cos(rotate),z+v[2]*sz/2]});
+ const shades=[.82,1,.9,.72,.95,1.04];
+ [[0,1,2,3],[4,7,6,5],[0,4,5,1],[3,2,6,7],[0,3,7,4],[1,5,6,2]].forEach((ids,i)=>face(ids.map(j=>p[j]),shade(color,shades[i])));
+}
+function shade(hex,f){const n=parseInt(hex.slice(1),16);return '#'+[n>>16,(n>>8)&255,n&255].map(v=>Math.min(255,Math.round(v*f)).toString(16).padStart(2,'0')).join('')}
+function cylinder(x,y,z,r,h,color,n=10){const base=[],top=[];for(let i=0;i<n;i++){const a=i*2*Math.PI/n;base.push([x+r*Math.cos(a),y,z+r*Math.sin(a)]);top.push([x+r*Math.cos(a),y+h,z+r*Math.sin(a)])}for(let i=0;i<n;i++)face([base[i],base[(i+1)%n],top[(i+1)%n],top[i]],shade(color,.8+.2*Math.sin(i)));face(top,color)}
+function house(x,z,color){
+ box(x,1.3,z,3,2.6,2.9,color);box(x,2.65,z,3.3,.17,3.2,'#c9a884');
+ const a=[x-1.8,2.7,z-1.7],b=[x+1.8,2.7,z-1.7],c=[x,4.05,z-1.7],d=[x-1.8,2.7,z+1.7],e=[x+1.8,2.7,z+1.7],f=[x,4.05,z+1.7];
+ face([a,b,c],'#86594c');face([d,f,e],'#a06d56');face([a,c,f,d],'#b38366');face([b,e,f,c],'#875d51');
+ box(x+.7,3.8,z+.6,.42,1,.42,'#b89479');
+ for(const dx of [-.92,.92]){box(x+dx,1.55,z+1.47,.62,.85,.12,'#edd2a0');box(x+dx,1.55,z+1.55,.05,.85,.07,'#674b42');box(x+dx,1.55,z+1.55,.62,.04,.07,'#674b42');box(x+dx,1.1,z+1.57,.85,.12,.28,'#c39873')}
+ box(x,.72,z+1.48,.68,1.45,.15,'#765747');box(x,.1,z+1.78,1,.2,.6,'#bcb097');
+}
+function tree(x,z){cylinder(x,0,z,.15,1.9,'#8b6950');for(let j=0;j<3;j++)cylinder(x+(j-1)*.24,1.5+j*.27,z,.75-j*.14,.6,'#84916d')}
+function drawFaces(){faces.sort((a,b)=>b.depth-a.depth);for(const f of faces){if(f.draw){f.draw();continue;}const p=f.points.map(project);if(p.some(v=>v[2]<.1))continue;ctx.beginPath();ctx.moveTo(p[0][0],p[0][1]);for(let i=1;i<p.length;i++)ctx.lineTo(p[i][0],p[i][1]);ctx.closePath();ctx.fillStyle=f.color;ctx.fill();if(f.stroke){ctx.strokeStyle=ink;ctx.lineWidth=Math.max(.8,W/520);ctx.lineJoin='round';ctx.stroke()}}}
+function line3(a,b,color,width){a=project(a);b=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}
+function person(x,z,t){
+ const ground=Math.abs(x)<2.4?.26:.09,p=project([x,ground,z]),head=project([x,1.85+ground,z]),scale=(p[1]-head[1])/1.85;
+ ctx.save();ctx.translate(p[0],p[1]);ctx.scale(scale,scale);ctx.strokeStyle=ink;ctx.lineWidth=.045;ctx.lineCap='round';ctx.lineJoin='round';
+ ctx.fillStyle='rgba(53,31,34,.18)';ctx.beginPath();ctx.ellipse(0,.01,.32,.08,0,0,Math.PI*2);ctx.fill();
+ const walking=t>2.7&&t<4.8,step=walking?Math.sin(t*12)*.16:0,bob=walking?Math.abs(Math.sin(t*12))*.035:Math.sin(t*3)*.015;
+ const stroke=(a,b)=>{ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke()};
+ stroke([-.14,-.55],[-.22+step,-.08]);stroke([.13,-.55],[.2-step,-.08]);
+ ctx.fillStyle='#7193a1';ctx.beginPath();ctx.moveTo(-.22,-1.15-bob);ctx.quadraticCurveTo(0,-1.29-bob,.23,-1.15-bob);ctx.lineTo(.3,-.56-bob);ctx.lineTo(-.29,-.56-bob);ctx.closePath();ctx.fill();ctx.stroke();
+ ctx.fillStyle='#f4ead7';ctx.beginPath();ctx.moveTo(-.13,-1.2-bob);ctx.lineTo(0,-.98-bob);ctx.lineTo(.14,-1.2-bob);ctx.fill();
+ ctx.fillStyle='#94584c';ctx.fillRect(-.035,-1.12-bob,.07,.28);
+ stroke([-.23,-1.08-bob],[-.37-step,-.7]);stroke([.24,-1.08-bob],[.42+step,-.77]);
+ ctx.fillStyle='#f2d6ba';ctx.beginPath();ctx.ellipse(0,-1.55-bob,.36,.37,0,0,Math.PI*2);ctx.fill();ctx.stroke();
+ ctx.fillStyle='#654a3b';ctx.beginPath();ctx.moveTo(-.35,-1.59-bob);ctx.quadraticCurveTo(-.42,-2.03-bob,.06,-1.94-bob);ctx.quadraticCurveTo(.41,-1.95-bob,.35,-1.59-bob);ctx.lineTo(.15,-1.74-bob);ctx.lineTo(-.05,-1.69-bob);ctx.lineTo(-.2,-1.79-bob);ctx.closePath();ctx.fill();ctx.stroke();
+ const blink=Math.cos(t*2.8)>.985;ctx.lineWidth=.025;stroke([-.17,-1.54-bob],[-.08,-1.54-bob]);stroke([.1,-1.54-bob],[.19,-1.54-bob]);if(!blink){ctx.fillStyle=ink;ctx.fillRect(-.13,-1.54-bob,.025,.05);ctx.fillRect(.14,-1.54-bob,.025,.05)}
+ ctx.beginPath();ctx.arc(.02,-1.41-bob,.095,.2,Math.PI-.2);ctx.stroke();ctx.restore();
+}
+window.renderFrame=function(t){
+ W=innerWidth;H=innerHeight;canvas.width=W;canvas.height=H;const u=Math.max(0,Math.min(1,t/duration));
+ const walkX=-2.6+6.1*ease((t-2.1)/2.7);camera=[walkX-7+2.8*ease(u),6-2.8*ease(u),11-4.3*ease(u)];forward=unit(sub([walkX+1.1,.8+.2*ease(u),0],camera));right=unit(cross(forward,[0,1,0]));up=cross(right,forward);focal=H*.93;faces=[];
+ const sky=ctx.createLinearGradient(0,0,0,H);sky.addColorStop(0,'#e6d9c3');sky.addColorStop(1,'#f5e9d0');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+ box(-5,-.4,0,7,.8,18,'#a3ad87');box(5,-.4,0,7,.8,18,'#b4b68d');box(0,-.45,0,3.1,.35,18,'#7da7ad');
+ for(let i=0;i<14;i++){const z=-8+i*1.25+(t*.45)%1.25;face([[-.9,-.25,z],[.6,-.25,z+.2],[.95,-.25,z+.32],[-.5,-.25,z+.17]],'#a0c0bc',false)}
+ drawFaces();faces=[];
+ for(const x of [-3.6,3.8])for(let z=-6;z<=6;z+=1)box(x,.035,z,1.8,.08,.82,'#c9b58d');
+ house(5.1,2.2,'#d5a079');house(5.9,-3.2,'#c2aa81');for(const [x,z]of[[-5,-4],[-6,6],[7,-6],[7,6],[-3,-7]])tree(x,z);
+ const a=(1-ease((t-1)/1.8))*1.12,c=Math.cos(a),sn=Math.sin(a);
+ for(let i=0;i<13;i++){const len=(i+.5)*4.6/13;box(2.25-len*c,.17+len*sn,0,4.6/13-.02,.13,1.55,'#b88d63',-a)}
+ for(const z of [-.83,.83]){box(2.25-2.3*c,.19+2.3*sn,z,4.75,.13,.12,'#80634c',-a);cylinder(2.2,0,z,.09,2.7,'#8b6950')}
+ for(let j=0;j<3;j++)cylinder(4.2+j*.36,0,4.5,.18,.75,'#a27a56');
+ const x=walkX;faces.push({depth:dot(sub([x,.9,0],camera),forward),draw:()=>person(x,0,t)});
+ drawFaces();line3([2.2,2.6,.83],[2.25-4.4*c,.17+4.4*sn,.83],'#8c7357',W/470);
+
+ const vignette=ctx.createRadialGradient(W*.5,H*.47,H*.15,W*.5,H*.47,H*.74);vignette.addColorStop(0,'rgba(53,31,34,0)');vignette.addColorStop(1,'rgba(53,31,34,.14)');ctx.fillStyle=vignette;ctx.fillRect(0,0,W,H);
+};
+</script></body></html>

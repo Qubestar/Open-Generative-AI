@@ -1,3 +1,5 @@
+> Update2026-11-06: Zenborg1.0.11 is installed; HARNESS_DISABLED is resolved. Latest real browser send failure and separate gallery demo: [live test](animations-live-test-2026-11-06.md). Historical findings below describe1.0.10.
+
 # Vidmyo / Zenborg — wynik sprawdzenia 2026-11-05
 
 ## Zmiany w UI

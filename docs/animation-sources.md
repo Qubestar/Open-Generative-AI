@@ -27,3 +27,6 @@ Official voice references:
 - [Clipchamp free AI voiceovers](https://clipchamp.com/en/features/ai-voice-over-generator/)
 - [Clipchamp ten-minute audio](https://clipchamp.com/en/blog/text-to-speech-update/)
 - [OpenAI separate ChatGPT/API billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform)
+
+## #171 — Ink World Stories (3D + 2D)
+User-supplied Drive folder: https://drive.google.com/drive/folders/11AuNQZIFQaw7pM0qjlv0-KUFQV0AgXQy . Inputs: animated-story-video.skill.zip (animated-3d-story-video/SKILL.md) and Claude 3D Animation Master Prompts.pdf. The packaged guide adapts the visual/story rulebook to Vidmyo’s offline deterministic HTML renderer; no reference-video frames or third-party code/assets are redistributed. The gallery poster is a frame of the original procedural demonstration; the local video preview is labelled as a Vidmyo-generated demonstration. The preview code is in packages/core/assets/animation-demos/ink-world-story.html, authored locally after the live ChatGPT code phase failed; it is not evidence of successful browser code generation. Original Windows handover and interactive approval flow are replaced by the user-requested automated local pipeline.

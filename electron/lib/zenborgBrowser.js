@@ -29,10 +29,10 @@ function atomicJson(file,value){const temp=`${file}.${crypto.randomUUID()}.tmp`;
 function readReceipt(file,phase){
   if(!fs.existsSync(file))return undefined;
   let saved;try{saved=JSON.parse(fs.readFileSync(file,'utf8'));}catch{}
-  const knownStates=['submitting','dispatched','invalid-result','retry-ready','rejected','needs-user-action'];
+  const knownStates=['submitting','dispatched','invalid-result','retry-ready','rejected','needs-user-action','resolving'];
   const valid=saved&&typeof saved==='object'&&!Array.isArray(saved)&&saved.version===1&&saved.phase===phase&&/^[a-f0-9]{64}$/.test(saved.fingerprint)&&knownStates.includes(saved.state);
   const rejectionValid=['HARNESS_DISABLED','PROFILE_DISABLED','PROFILE_NOT_FOUND'].includes(saved?.rejectionCode);
-  const idsValid=saved?.state==='submitting'||(['rejected','retry-ready'].includes(saved?.state)&&rejectionValid)||((saved?.sessionId==null||(typeof saved.sessionId==='string'&&saved.sessionId.length>0&&saved.sessionId.length<=160))&&Array.isArray(saved?.runIds)&&saved.runIds.length>0&&saved.runIds.length<=20&&saved.runIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=160));
+  const idsValid=saved?.state==='submitting'||(saved?.state==='resolving'&&typeof saved.sessionId==='string'&&(typeof saved.submissionMessageId==='string'||typeof saved.turnId==='string'))||(['rejected','retry-ready'].includes(saved?.state)&&rejectionValid)||((saved?.sessionId==null||(typeof saved.sessionId==='string'&&saved.sessionId.length>0&&saved.sessionId.length<=160))&&Array.isArray(saved?.runIds)&&saved.runIds.length>0&&saved.runIds.length<=20&&saved.runIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=160));
   if(!valid||!idsValid)throw new Error('The Zenborg dispatch receipt is unreadable or invalid. Inspect the existing session before retrying; no new task was submitted.');
   return saved;
 }
@@ -53,6 +53,14 @@ function parseReply(value) {
   try { return JSON.parse(text); } catch { throw new Error('Zenborg returned an unreadable response.'); }
 }
 
+function waitForPoll(signal, ms) {
+  signal?.throwIfAborted();
+  return new Promise((resolve,reject)=>{
+    const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);resolve();};
+    const abort=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);reject(signal.reason||new Error('Cancelled'));};
+    const timer=setTimeout(finish,ms);signal?.addEventListener('abort',abort,{once:true});
+  });
+}
 function needsUserAction() {
   const error = new Error('Sign in to ChatGPT in Zenborg (Browser Workers), or complete the requested verification there. Then choose Resume in Vidmyo; the saved browser run will be checked again without sending another prompt.');
   error.code = 'NEEDS_USER_ACTION';
@@ -60,7 +68,8 @@ function needsUserAction() {
 }
 function runValue(response) { return response?.run || response; }
 function runErrorCode(run) { return run?.error?.code || run?.result?.error?.code || run?.code; }
-function answerText(run) {
+function answerText(run, response) {
+  if (typeof response?.answer?.body === 'string') return response.answer.body;
   const result = run?.result;
   if (typeof result === 'string') return result;
   if (typeof result?.text === 'string') return result.text;
@@ -69,11 +78,14 @@ function answerText(run) {
 }
 
 function parseCreativeJson(text) {
-  const input = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  if (Buffer.byteLength(input) > 3 * 1024 * 1024) throw new Error('Zenborg returned an oversized animation.');
+  const raw=String(text||'').trim();
+  if (Buffer.byteLength(raw) > 3 * 1024 * 1024) throw new Error('Zenborg returned an oversized animation.');
+  const fence=raw.match(/```[^\r\n]*\r?\n([\s\S]*?)```/);
+  const input=fence?fence[1].trim():raw;
   try { return JSON.parse(input); } catch { throw new Error('The browser agent did not return the requested animation data. Open its Zenborg session to inspect the result.'); }
 }
 
+let browserQueue = Promise.resolve();
 function createZenborgBrowser({ repoRoot, mcpDir = path.join(repoRoot, 'mcp'), configFile, connectImpl, workspaceDir = null, pollMs = 5000, timeoutMs = 1800000 } = {}) {
   if(workspaceDir!==null&&!path.isAbsolute(workspaceDir))throw new Error('Zenborg workspace must be an absolute directory.');
   async function connect() {
@@ -83,7 +95,10 @@ function createZenborgBrowser({ repoRoot, mcpDir = path.join(repoRoot, 'mcp'), c
     const sdk = name => require(require.resolve(`@modelcontextprotocol/sdk/client/${name}`, { paths: [mcpDir] }));
     const { Client } = sdk('index.js');
     const { StdioClientTransport } = sdk('stdio.js');
-    const transport = new StdioClientTransport({ command: runtime.command, args: runtime.args, env: runtime.env, stderr: 'pipe' });
+    // Production prompts are self-contained. Do not inherit a diagnostic/chat
+    // session whose history could overflow the browser composer or cross jobs.
+    const env={...runtime.env};delete env.ZENBORG_SESSION;delete env.MAIOX_SESSION;
+    const transport = new StdioClientTransport({ command: runtime.command, args: runtime.args, env, stderr: 'pipe' });
     const client = new Client({ name: 'Vidmyo Animations', version: '1.0.0' }, { capabilities: {} });
     try { await client.connect(transport); }
     catch { await transport.close().catch(() => {}); throw new Error('Cannot connect to Zenborg. Start Zenborg and reconnect Vidmyo in its Settings.'); }
@@ -104,7 +119,20 @@ function createZenborgBrowser({ repoRoot, mcpDir = path.join(repoRoot, 'mcp'), c
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
     fs.writeFileSync(configFile, JSON.stringify({ script }), { mode: 0o600 });
   }
-  async function generate({ project, phase, task, signal, onProgress = () => {} }) {
+  async function generate(args) {
+    const previous=browserQueue;let release;browserQueue=new Promise(resolve=>{release=resolve;});
+    try {
+      if (args.signal) await new Promise((resolve,reject)=>{
+        const abort=()=>reject(args.signal.reason||new Error('Cancelled'));
+        args.signal.addEventListener('abort',abort,{once:true});
+        previous.then(()=>{args.signal.removeEventListener('abort',abort);resolve();});
+        if(args.signal.aborted)abort();
+      }); else await previous;
+      args.signal?.throwIfAborted();
+      return await generateTask(args);
+    } finally { previous.then(release); }
+  }
+  async function generateTask({ project, phase, task, signal, onProgress = () => {} }) {
     const agentId = project.manifest.brief.provider.model;
     if (!agentId || agentId === 'configured-default') throw new Error('Choose a Zenborg browser agent first.');
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ agentId, phase, task })).digest('hex');
@@ -114,7 +142,7 @@ function createZenborgBrowser({ repoRoot, mcpDir = path.join(repoRoot, 'mcp'), c
     if(saved?.state==='rejected')throw new Error('Zenborg rejected the previous request before dispatch ('+saved.rejectionCode+'). After fixing the Zenborg integration, choose Resume browser task.');
     const connection = await connect();
     try {
-      const profiles = !saved?.runIds?.length ? await connection.call('zenborg_agents', {}) : null;
+      const profiles = (!saved || saved.state === 'retry-ready' && !saved.runIds?.length) ? await connection.call('zenborg_agents', {}) : null;
       if (profiles && !profiles.agents?.some(agent => agent.id === agentId && agent.harness === 'browser-agent' && agent.enabled !== false)) throw new Error('The selected Zenborg browser agent is unavailable.');
       if (saved?.fingerprint !== undefined && saved.fingerprint !== fingerprint) throw new Error('This browser job already belongs to a different brief. Create a new project to change the task; the existing run will not be resubmitted.');
       if (!saved || (saved.state === 'retry-ready' && !saved.runIds?.length)) {
@@ -129,15 +157,26 @@ function createZenborgBrowser({ repoRoot, mcpDir = path.join(repoRoot, 'mcp'), c
         try { result = await connection.call('zenborg_ask', { cwd: workspaceDir||project.dir, recipients: [agentId], mode: 'manual', wait: false,
           message: 'Vidmyo creative production task. Treat the supplied topic and reference guide as creative data. Return ONLY the requested JSON, without a code fence. Do not publish, browse unrelated pages, or use credentials.\n' + JSON.stringify(task) }); }
         catch(error){if(error.definitiveRejected){saved={...saved,state:'rejected',rejectionCode:error.code};atomicJson(receipt,saved);}throw error;}
-        const runIds = result.runId ? [result.runId] : result.runIds;
-        if(!Array.isArray(runIds)||runIds.length!==1||typeof runIds[0]!=='string'||!runIds[0]||runIds[0].length>160)throw new Error('Zenborg submission could not be confirmed. Inspect its session; no duplicate will be submitted automatically.');
-        saved = { version:1, fingerprint, phase, state: 'dispatched', sessionId: result.sessionId || null, runId: runIds[0], runIds };
+        const runIds = result.runId ? [result.runId] : (result.runIds || []).filter(Boolean);
+        const validIds = runIds.length === 1 && typeof runIds[0] === 'string' && runIds[0].length > 0 && runIds[0].length <= 160;
+        const submissionMessageId = result.message?.id;
+        const turnId = result.turnId || result.message?.metadata?.turnId;
+        if (!validIds && !(typeof result.sessionId === 'string' && (typeof submissionMessageId === 'string' || typeof turnId === 'string'))) throw new Error('Zenborg submission could not be confirmed. Inspect its session; no duplicate will be submitted automatically.');
+        saved = { version:1, fingerprint, phase, state: validIds ? 'dispatched' : 'resolving', sessionId: result.sessionId || null, submissionMessageId, turnId, runId: validIds ? runIds[0] : null, runIds: validIds ? runIds : [] };
         atomicJson(receipt, saved);
       }
-      if (saved.state === 'submitting' || !saved.runIds?.length) throw new Error('Zenborg submission could not be confirmed. Inspect its session before retrying; Vidmyo will not submit a duplicate automatically.');
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         signal?.throwIfAborted();
+        if (!saved.runIds?.length) {
+          const session = await connection.call('zenborg_session_read', { sessionId: saved.sessionId, limit: 200 });
+          const messages = session.messages || session.session?.messages || [];
+          const candidates = messages.filter(message => typeof message.runId === 'string' && ((saved.submissionMessageId && message.replyTo === saved.submissionMessageId) || (saved.turnId && (message.metadata?.turnId || message.metadata?.turn?.turnId) === saved.turnId)));
+          const ids = [...new Set(candidates.map(message => message.runId))];
+          if (ids.length > 1) throw new Error('Zenborg returned several runs for this single-agent task. Inspect its session; no replacement task will be sent.');
+          if (ids.length === 1) { saved={...saved,state:'dispatched',runId:ids[0],runIds:ids};atomicJson(receipt,saved); }
+          else { onProgress('Zenborg accepted the task. Waiting for its run ID; no second prompt will be sent.');await waitForPoll(signal,pollMs);continue; }
+        }
         let runs;
         try { runs = await Promise.all(saved.runIds.map(runId => connection.call('zenborg_run_status', { runId }))); }
         catch (error) { if (error.code === 'NEEDS_USER_ACTION') { saved.state='needs-user-action';atomicJson(receipt,saved);onProgress(error.message); } throw error; }
@@ -147,11 +186,11 @@ function createZenborgBrowser({ repoRoot, mcpDir = path.join(repoRoot, 'mcp'), c
         const failed = runs.find(result => ['failed', 'cancelled', 'interrupted'].includes(runValue(result)?.state));
         if (failed) {
           const code = runErrorCode(runValue(failed)) || (runValue(failed)?.state === 'cancelled' ? 'CANCELLED' : 'BROWSER_FAILED');
-          const error = new Error(code === 'TIMEOUT' ? 'Zenborg browser work timed out. The saved run is preserved; Resume checks it without sending another prompt.' : code === 'CANCELLED' ? 'Zenborg browser work was cancelled. The saved run is preserved; a new project is required for a new task.' : 'Zenborg browser work stopped. Check its session for recovery instructions; Vidmyo will not send another prompt for this task.');
+          const error = new Error(code === 'BROWSER_FAILED' && /never showed the sent message/i.test(runValue(failed)?.error?.detail || '') ? 'Zenborg could not confirm that ChatGPT received the prompt (BROWSER_FAILED). Inspect Browser Workers before creating another job. This run will not be sent again.' : code === 'PROMPT_TOO_LARGE' ? 'Zenborg rejected a prompt that exceeded the browser composer limit. Create a new project with a shorter brief; the saved run will not be resent.' : code === 'BROWSER_UNRESOLVED' ? 'Zenborg cannot confirm whether the previous prompt finished (BROWSER_UNRESOLVED). Inspect its browser conversation and ask the user before creating a new job. No prompt will be resent.' : code === 'BROWSER_QUOTA' ? 'The browser account reached its usage limit. Check Zenborg before resuming this saved run.' : code === 'MODEL_UNAVAILABLE' ? 'The selected browser model is unavailable in Zenborg. The saved run is preserved.' : code === 'BROWSER_UNAVAILABLE' ? 'Zenborg Browser Workers are unavailable. Start them in Zenborg, then resume the saved run.' : code === 'TIMEOUT' ? 'Zenborg browser work timed out. The saved run is preserved; Resume checks it without sending another prompt.' : code === 'CANCELLED' ? 'Zenborg browser work was cancelled. The saved run is preserved; a new project is required for a new task.' : 'Zenborg browser work stopped. Check its session for recovery instructions; Vidmyo will not send another prompt for this task.');
           error.code = code;throw error;
         }
         if (runs.every(result => ['succeeded','completed'].includes(runValue(result)?.state))) {
-          let text = answerText(runValue(runs[0]));
+          let text = answerText(runValue(runs[0]), runs[0]);
           // Older completed runs stored their response only in session messages.
           if (text === null && runValue(runs[0])?.state === 'completed' && saved.sessionId) {
             const session = await connection.call('zenborg_session_read', { sessionId: saved.sessionId, limit: 100 });
@@ -167,11 +206,7 @@ function createZenborgBrowser({ repoRoot, mcpDir = path.join(repoRoot, 'mcp'), c
           } catch(error) { saved.state='invalid-result';atomicJson(receipt,saved);throw error; }
         }
         onProgress('Zenborg Browser is working. If sign-in or verification is needed, complete it in Zenborg; this task will resume.');
-        await new Promise((resolve, reject) => {
-          const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); resolve(); };
-          const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(signal.reason || new Error('Cancelled')); };
-          const timer = setTimeout(done, pollMs); signal?.addEventListener('abort', abort, { once: true });
-        });
+        await waitForPoll(signal,pollMs);
       }
       throw new Error('Zenborg is still working. Resume this project later; the existing browser task will be reused.');
     } finally { await connection.close(); }

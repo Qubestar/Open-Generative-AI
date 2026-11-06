@@ -2590,5 +2590,21 @@ export const CODE_ANIMATION_STYLES = Object.freeze([
     "number": 170,
     "engine": "code",
     "accent": "#e9ab73"
-  }
+  },
+{
+  "id": "ink-world-story",
+  "previewKind": "generated-demo",
+  "name": "Ink World Stories (3D + 2D)",
+  "eyebrow": "Animated stories",
+  "source": "User-provided · Animated 3D Story Video",
+  "sourceUrl": "https://drive.google.com/drive/folders/11AuNQZIFQaw7pM0qjlv0-KUFQV0AgXQy",
+  "preview": "/animation-previews/ink-world-story.mp4",
+  "poster": "/animation-previews/ink-world-story.jpg",
+  "motion": "A real procedural 3D world, painted flat colours and dark ink edges, with flat cartoon characters and continuous moving perspective camera. Warm key light, depth layers, grounded figures, in-world labels and narration-timed physical actions.",
+  "description": "Story-driven 3D rooms and landscapes with 2D ink characters, warm cel shading and a travelling camera. Generated in code; no image provider required.",
+  "license": "User-supplied style specification; original demonstration and generated scenes.",
+  "number": 171,
+  "engine": "code",
+  "accent": "#b87551"
+}
 ]);

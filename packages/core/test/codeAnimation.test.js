@@ -20,9 +20,9 @@ const create = () => { const dir=temp(); const b=brief(); const p=Project.create
 const evidence = settings => { fs.writeFileSync(settings.output,Buffer.alloc(200));fs.writeFileSync(path.join(path.dirname(settings.codeFile),'code-render-evidence.json'),JSON.stringify({ok:true,exitCode:0,renderToken:settings.renderToken,durationSec:settings.durationSec,audio:!!settings.voice})); };
 
 test('catalog preserves originals and provides unique stable numbers and actual source previews',()=>{
-  assert.equal(ANIMATION_STYLES.length,170);assert.equal(new Set(ANIMATION_STYLES.map(s=>s.id)).size,170);
+  assert.equal(ANIMATION_STYLES.length,171);assert.equal(new Set(ANIMATION_STYLES.map(s=>s.id)).size,171);
   assert.deepEqual(ANIMATION_STYLES.slice(0,3).map(s=>s.id),['editorial-collage','documentary-map','paper-stop-motion']);
-  for(const [i,s] of ANIMATION_STYLES.entries()){assert.equal(s.number,i+1);assert.equal(animationStyle(s.number).id,s.id);if(s.engine==='code'){assert.match(s.preview,/^https:\/\//);assert(fs.existsSync(path.join(root,'packages/core/assets/animation-guides',s.id+'.md')));}}
+  for(const [i,s] of ANIMATION_STYLES.entries()){assert.equal(s.number,i+1);assert.equal(animationStyle(s.number).id,s.id);if(s.engine==='code'){if(s.id==='ink-world-story'){assert.equal(s.number,171);assert.match(s.preview,/^\/animation-previews\//);assert(fs.existsSync(path.join(root,'public',s.preview)));assert(fs.existsSync(path.join(root,'public',s.poster)));}else assert.match(s.preview,/^https:\/\//);assert(fs.existsSync(path.join(root,'packages/core/assets/animation-guides',s.id+'.md')));}}
 });
 
 test('Zenborg discovery uses the installed runner and matching app data before a source checkout',()=>{
@@ -184,4 +184,36 @@ test('Zenborg NEEDS_USER_ACTION preserves run across restart and resumes polling
   assert.equal(JSON.parse(fs.readFileSync(path.join(p.dir,'artifacts/zenborg-script.json'))).state,'needs-user-action');
   const restarted=createZenborgBrowser({repoRoot:root,connectImpl});await restarted.retryFailed(p);needsLogin=false;
   assert.equal((await restarted.generate(args)).script,'Narration after sign-in.');assert.equal(submits,1);
+});
+
+test('pending Zenborg receipt resolves only its own turn, survives restart and reads answer.body',async()=>{
+ const p=create();p.manifest.brief.provider={id:'zenborg',model:'browser-profile'};let asks=0,ready=false;
+ const connectImpl=async()=>({close:async()=>{},call:async(name)=>{
+  if(name==='zenborg_agents')return {agents:[{id:'browser-profile',harness:'browser-agent'}]};
+  if(name==='zenborg_ask'){asks++;return {sessionId:'s-pending',runId:null,runIds:[],turnId:'turn-one',message:{id:'message-one'}};}
+  if(name==='zenborg_session_read')return {messages:ready?[{runId:'unrelated-run',replyTo:'other-message',metadata:{turnId:'turn-other'}},{runId:'own-run',replyTo:'message-one',metadata:{turnId:'turn-one'}}]:[]};
+  if(name==='zenborg_run_status')return {run:{state:'completed'},answer:{body:'Here is the result:\n'+String.fromCharCode(96).repeat(3)+'javascript\n'+JSON.stringify({html})+'\n'+String.fromCharCode(96).repeat(3)}};
+  throw Error(name);
+ }});
+ const args={project:p,phase:'code',task:{durationSec:5}};
+ await assert.rejects(createZenborgBrowser({repoRoot:root,connectImpl,pollMs:1,timeoutMs:5}).generate(args),/still working/);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(p.dir,'artifacts/zenborg-code.json'))).state,'resolving');ready=true;
+ assert.equal((await createZenborgBrowser({repoRoot:root,connectImpl}).generate(args)).html,html);assert.equal(asks,1);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(p.dir,'artifacts/zenborg-code.json'))).runId,'own-run');
+});
+
+test('browser queue serializes different connector instances and cancellation does not block successors',async()=>{
+ let releaseFirst,started;const gate=new Promise(r=>releaseFirst=r),entered=new Promise(r=>started=r);let asks=0;
+ const connectImpl=async()=>({close:async()=>{},call:async(name,args)=>{
+  if(name==='zenborg_agents')return {agents:[{id:'browser-profile',harness:'browser-agent'}]};
+  if(name==='zenborg_ask'){asks++;return {runId:'queued-'+asks};}
+  if(name==='zenborg_run_status'){if(args.runId==='queued-1'){started();await gate;}return {run:{state:'completed'},answer:{body:JSON.stringify({html})}};}
+  throw Error(name);
+ }});
+ const args=()=>{const project=create();project.manifest.brief.provider={id:'zenborg',model:'browser-profile'};return {project,phase:'code',task:{durationSec:5}};};
+ const a=createZenborgBrowser({repoRoot:root,connectImpl}),b=createZenborgBrowser({repoRoot:root,connectImpl});
+ const first=a.generate(args());await entered;const controller=new AbortController();
+ const cancelled=b.generate({...args(),signal:controller.signal});const third=b.generate(args());
+ controller.abort(new Error('queued cancellation'));await assert.rejects(cancelled,/queued cancellation/);
+ assert.equal(asks,1);releaseFirst();await first;await third;assert.equal(asks,2);
 });

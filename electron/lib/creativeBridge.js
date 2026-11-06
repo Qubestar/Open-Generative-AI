@@ -121,7 +121,7 @@ function createCreativeBridge(deps={}){
     if(deps.director)return deps.director({project,phase,brief:project.manifest.brief,...extra});
     const brief=project.manifest.brief;
     const mod=await core();const codeScript=phase==='script'&&brief.kind==='animation'&&mod.animationStyle(brief.style).engine==='code';
-    const scriptTask={output:'script',durationSec:brief.durationSec,contract:'Return JSON {"script":"clean spoken narration"}. No headings or stage directions. Write in the requested language, with a hook, development and payoff. Maximum 30,000 characters.',topic:brief.topic,details:brief.details,language:brief.language,targetWords:Math.min(5000,Math.round(brief.durationSec*2.4))};
+    const scriptTask={style:codeScript?mod.codeAnimationTask(brief,{durationSec:brief.durationSec}).style:undefined,output:'script',durationSec:brief.durationSec,contract:'Return JSON {"script":"clean spoken narration"}. No headings or stage directions. Write in the requested language, with a hook, development and payoff. Maximum 30,000 characters.',topic:brief.topic,details:brief.details,language:brief.language,targetWords:Math.min(5000,Math.round(brief.durationSec*2.4))};
     if(project.manifest.brief.provider.id==='zenborg'){
       if(phase!=='script')throw new Error('Zenborg Browser requires a code animation style.');
       return zenborg.generate({project,phase,signal:ensureRunning(project.dir).controller.signal,onProgress:message=>emit(project.dir,message),
