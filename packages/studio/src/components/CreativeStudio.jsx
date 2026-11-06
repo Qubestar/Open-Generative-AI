@@ -902,7 +902,7 @@ export default function CreativeStudio({ kind = 'story', onOpenSettings, onNavig
                 <p>Zenborg sends your brief to the browser agent. Vidmyo creates the narration, requests animation code timed to it, then renders the MP4 locally. No prompt copying or image API is needed. Browser plan limits still apply.</p>
                 {!isCodeAnimation && <p>Choose a code animation style above to use this director.</p>}
                 {!selectedAgentReady && <p role="alert">The selected browser director is unavailable. Connect Zenborg and choose an available agent above.</p>}
-                <p>Sign-in or human verification happens in Zenborg. After signing in, choose Resume to check the same browser task. Stopping Vidmyo stops local work; an already submitted Zenborg task may continue.</p>
+                <p>Sign-in or human verification happens in Zenborg. After signing in, choose Resume browser task to start the new attempt allowed by Zenborg. Only confirmed unsent requests or sign-in failures can create another attempt. Stopping Vidmyo stops local work; an already submitted Zenborg task may continue.</p>
                 {snapshot && <button type="button" className="creative-button creative-button-small" disabled={zenborgBusy || snapshot.busy} onClick={async () => {
                   setZenborgBusy(true);
                   try { const result = await creative.zenborgRetry(snapshot.dir); if (!result?.ok) setError(result?.error || 'Could not resume the browser task.'); else await startProduction(false); }

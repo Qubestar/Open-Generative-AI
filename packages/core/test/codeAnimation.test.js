@@ -171,7 +171,7 @@ for (const shape of ['string','text']) test('Zenborg new succeeded contract retu
   await assert.rejects(zenborg.generate({...args,task:{durationSec:6}}),/different brief/);assert.equal(submits,1);
 });
 
-test('Zenborg NEEDS_USER_ACTION preserves run across restart and resumes polling without dispatch',async()=>{
+test('Zenborg NEEDS_USER_ACTION requires explicit recovery before a new ask after sign-in',async()=>{
   const p=create();p.manifest.brief.provider={id:'zenborg',model:'browser-profile'};let submits=0,needsLogin=true;
   const connectImpl=async()=>({close:async()=>{},call:async(name)=>{
     if(name==='zenborg_agents')return {agents:[{id:'browser-profile',harness:'browser-agent'}]};
@@ -183,7 +183,7 @@ test('Zenborg NEEDS_USER_ACTION preserves run across restart and resumes polling
   await assert.rejects(first.generate(args),e=>e.code==='NEEDS_USER_ACTION'&&/Browser Workers/.test(e.message));
   assert.equal(JSON.parse(fs.readFileSync(path.join(p.dir,'artifacts/zenborg-script.json'))).state,'needs-user-action');
   const restarted=createZenborgBrowser({repoRoot:root,connectImpl});await restarted.retryFailed(p);needsLogin=false;
-  assert.equal((await restarted.generate(args)).script,'Narration after sign-in.');assert.equal(submits,1);
+  assert.equal((await restarted.generate(args)).script,'Narration after sign-in.');assert.equal(submits,2);
 });
 
 test('pending Zenborg receipt resolves only its own turn, survives restart and reads answer.body',async()=>{
@@ -216,4 +216,25 @@ test('browser queue serializes different connector instances and cancellation do
  const cancelled=b.generate({...args(),signal:controller.signal});const third=b.generate(args());
  controller.abort(new Error('queued cancellation'));await assert.rejects(cancelled,/queued cancellation/);
  assert.equal(asks,1);releaseFirst();await first;await third;assert.equal(asks,2);
+});
+
+for(const [code,detail,safe] of [['BROWSER_NOT_SENT','',true],['BROWSER_FAILED','ChatGPT never showed the sent message in the conversation within 3 min — the prompt was not submitted (attachment upload or send failed)',true],['BROWSER_FAILED','Cannot confirm whether the prompt was not submitted',false],['BROWSER_FAILED','Unknown send state',false],['BROWSER_UNRESOLVED','Unknown send state',false]])test('browser explicit recovery for '+code+' / '+safe,async()=>{
+ const p=create();p.manifest.brief.provider={id:'zenborg',model:'browser-profile'};let asks=0,failed=true;
+ const z=createZenborgBrowser({repoRoot:root,connectImpl:async()=>({close:async()=>{},call:async(name)=>{
+  if(name==='zenborg_agents')return {agents:[{id:'browser-profile',harness:'browser-agent'}]};
+  if(name==='zenborg_ask'){asks++;return {runId:'run-'+asks};}
+  if(name==='zenborg_run_status')return {run:failed?{state:'failed',error:{code,detail}}:{state:'completed'},answer:failed?null:{body:JSON.stringify({html})}};
+  throw Error(name);
+ }})});
+ const args={project:p,phase:'code',task:{durationSec:5}};await assert.rejects(z.generate(args));assert.equal(asks,1);
+ if(code==='BROWSER_UNRESOLVED')await assert.rejects(z.retryFailed(p),/Ask the user/);else await z.retryFailed(p);
+ failed=false;assert.equal((await z.generate(args)).html,html);assert.equal(asks,safe?2:1);
+ const archived=fs.readdirSync(path.join(p.dir,'artifacts')).filter(x=>x.includes('attempt-'));assert.equal(archived.length>0,safe);
+});
+
+test('browser code prompt stays compact and rejects over-limit script prompts',async()=>{
+ const {browserPrompt}=require('../../../electron/lib/zenborgBrowser.js');
+ const task=codeAnimationTask(validateCreativeBrief({...brief(),style:171}),{durationSec:5,script:'Cross the bridge.',beats:[]});
+ assert.ok(browserPrompt(task).length<3000);
+ assert.throws(()=>browserPrompt({script:'x'.repeat(20001)}),/20,000/);
 });
